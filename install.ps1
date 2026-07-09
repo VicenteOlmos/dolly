@@ -52,7 +52,7 @@ if (Test-Path function:\Invoke-MockDownload) { Remove-Item function:\Invoke-Mock
 if ($env:DOLLY_MOCK_DOWNLOAD_DIR) {
     function Invoke-MockDownload {
         param($Url, $Output)
-        $fname = Split-Path $Url -Leaf
+        $fname = ($Url -split '/')[-1]
         $src   = Join-Path $env:DOLLY_MOCK_DOWNLOAD_DIR $fname
         if (Test-Path $src) {
             Copy-Item $src $Output
