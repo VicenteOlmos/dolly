@@ -33,7 +33,8 @@ func pingDSN(ctx context.Context, dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
-// Open returns a database connection or skips the test when DOLLY_TEST_PG_DSN is unset or unreachable.
+// Open returns a database connection, skips when DOLLY_TEST_PG_DSN is unset,
+// and fails when the configured DSN is unreachable.
 func Open(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv(EnvDSN)
@@ -46,7 +47,7 @@ func Open(t *testing.T) *sql.DB {
 
 	db, err := pingDSN(ctx, dsn)
 	if err != nil {
-		t.Skipf("%s: database unreachable: %v", EnvDSN, err)
+		t.Fatalf("%s: database unreachable: %v", EnvDSN, err)
 	}
 
 	t.Cleanup(func() {
@@ -56,7 +57,8 @@ func Open(t *testing.T) *sql.DB {
 	return db
 }
 
-// SetupMainDB opens and bootstraps fixtures for TestMain. It returns nil when DSN is unset or unreachable.
+// SetupMainDB opens and bootstraps fixtures for TestMain. It returns nil when
+// DSN is unset and returns an error when the configured DSN is unreachable.
 func SetupMainDB() (*sql.DB, error) {
 	dsn := os.Getenv(EnvDSN)
 	if dsn == "" {
@@ -68,7 +70,7 @@ func SetupMainDB() (*sql.DB, error) {
 
 	db, err := pingDSN(ctx, dsn)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	if err := Bootstrap(ctx, db); err != nil {

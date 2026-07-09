@@ -22,7 +22,7 @@ Integration test sources MUST use the `integration` build tag so they are exclud
 
 ### Requirement: DSN Environment Gate
 
-Integration tests MUST read a canonical DSN from `DOLLY_TEST_PG_DSN` and MUST skip (not fail) when the variable is unset or the database is unreachable.
+Integration tests MUST read a canonical DSN from `DOLLY_TEST_PG_DSN`. They MUST skip when the variable is unset and MUST fail when the variable is set but the database is unreachable.
 
 #### Scenario: Unset DSN skips with reason
 
@@ -31,12 +31,12 @@ Integration tests MUST read a canonical DSN from `DOLLY_TEST_PG_DSN` and MUST sk
 - THEN the test calls `t.Skip` with a message naming the required variable
 - AND no fatal error is returned to the default test runner
 
-#### Scenario: Unreachable database skips with reason
+#### Scenario: Unreachable configured database fails with reason
 
 - GIVEN `DOLLY_TEST_PG_DSN` is set to a value that cannot be opened or pinged
 - WHEN the shared helper opens the connection
-- THEN the test skips with a message indicating the database is unreachable
-- AND other packages' default tests remain unaffected
+- THEN the test fails with a message indicating the database is unreachable
+- AND release/CI jobs fail closed instead of publishing with skipped integration coverage
 
 ### Requirement: Shared Integration Helper
 
@@ -95,4 +95,3 @@ The integration harness MUST NOT add production code paths, MUST NOT replace sql
 - WHEN default unit tests run
 - THEN existing sqlmock-based tests in `internal/db` and `internal/dump` behave as before
 - AND no new runtime dependency is required for non-integration builds
-

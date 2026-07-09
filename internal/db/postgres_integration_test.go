@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"testing"
 
@@ -16,6 +17,7 @@ var integrationDB *sql.DB
 func TestMain(m *testing.M) {
 	db, err := pgintegration.SetupMainDB()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "postgres integration setup: %v\n", err)
 		os.Exit(1)
 	}
 	integrationDB = db

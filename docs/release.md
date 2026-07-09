@@ -55,7 +55,23 @@ The repo is `VicenteOlmos/dolly`; all decisions below are finalized.
 
 1. Push `main` to the public remote.
 2. Tag the first release only after CI passes on the public remote.
-3. Publish binaries or package metadata if the project chooses a distribution channel.
+3. Push an annotated tag `vX.Y.Z` (for example `v0.1.0`). The `Release` workflow runs vet, race tests, installer behavior tests, and Postgres integration before publishing assets to GitHub Releases.
+4. Optional local rebuild: `scripts/build-release-assets.sh dist` (override metadata with `VERSION`, `COMMIT`, `DATE` env vars).
+
+The release workflow is tag-only on purpose. If a release job needs a rebuild,
+delete the broken release/tag and push a new patch tag instead of overwriting
+assets under the same version.
+
+### Release assets
+
+`scripts/build-release-assets.sh` writes these files under `dist/`:
+
+- `dolly_linux_x86_64.tar.gz`, `dolly_linux_arm64.tar.gz`
+- `dolly_darwin_x86_64.tar.gz`, `dolly_darwin_arm64.tar.gz`
+- `dolly_windows_x86_64.zip`, `dolly_windows_arm64.zip`
+- `checksums.txt` — SHA-256 lines for every archive above
+
+Each `.tar.gz` contains a `dolly` binary; each `.zip` contains `dolly.exe`.
 
 ## Curl installer release checklist
 
@@ -106,7 +122,5 @@ If a release is broken after publishing:
 
 1. Fix the issue on a branch off `main`.
 2. Tag a new patch version (e.g. `v0.1.1`).
-3. Push the tag and manually build and upload release assets
-   (a release workflow will automate this in the future; CI currently
-   only runs tests and builds).
+3. Push the tag; the `Release` workflow builds and uploads release assets.
 4. The installer picks up the new latest automatically.

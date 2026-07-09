@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ var integrationDB *sql.DB
 func TestMain(m *testing.M) {
 	db, err := pgintegration.SetupMainDB()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "postgres integration setup: %v\n", err)
 		os.Exit(1)
 	}
 	integrationDB = db
