@@ -56,6 +56,7 @@ if ($env:DOLLY_MOCK_DOWNLOAD_DIR) {
         $src   = Join-Path $env:DOLLY_MOCK_DOWNLOAD_DIR $fname
         if (Test-Path $src) {
             Copy-Item $src $Output
+            return $true
         } else {
             return $false
         }
