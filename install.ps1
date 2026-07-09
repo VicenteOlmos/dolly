@@ -7,8 +7,8 @@ $DOLLY_VERSION  = if ($env:DOLLY_VERSION)  { $env:DOLLY_VERSION }  else { "lates
 $DOLLY_REPO     = if ($env:DOLLY_REPO)     { $env:DOLLY_REPO }     else { "VicenteOlmos/dolly" }
 $DOLLY_INSTALL_DIR = if ($env:DOLLY_INSTALL_DIR) { $env:DOLLY_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\dolly\bin" }
 
-function die { Write-Error "error: $args"; exit 1 }
-function warn { Write-Warning $args }
+function die { Write-Error "error: $($args -join ' ')"; exit 1 }
+function warn { Write-Warning ($args -join ' ') }
 
 function Path-ContainsDir {
     param($PathValue, $Dir)
