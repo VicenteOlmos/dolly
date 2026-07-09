@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Connection                                │
+│       UooU\.'@@@@@@`.      ││ 1-5 menu · ? info · F1 keys               │
+│       \__/(@@@@@@@@@@)     ││                                           │
+│          (@@@@@@@@)        ││ Editing profile: staging                  │
+│          `YY~~~~YY'        ││                                           │
+│           ||    ||         ││ Host: ▌db.example.com                     │
+│                            ││ Port: 5432                                │
+│            dolly           ││ Database: app                             │
+│                            ││ User: deploy                              │
+│ > 1 connect                ││ Password: ********                        │
+│   2 schema                 ││ SSLMODE:                                  │
+│   3 dump                   ││ Schemas: app, billing                     │
+│   4 clone                  ││                                           │
+│   5 config                 ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+↑↓ section · Enter open · e/s/r/d/t · ?/F1                                      

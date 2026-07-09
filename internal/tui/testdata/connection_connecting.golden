@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Connection                                │
+│       UooU\.'@@@@@@`.      ││ 1-5 menu · ? info · F1 keys               │
+│       \__/(@@@@@@@@@@)     ││                                           │
+│          (@@@@@@@@)        ││ Host: ▌db.example.com                     │
+│          `YY~~~~YY'        ││ Port:                                     │
+│           ||    ||         ││ Database:                                 │
+│                            ││ User:                                     │
+│            dolly           ││ Password:                                 │
+│                            ││ SSLMODE:                                  │
+│ > 1 connect                ││                                           │
+│   2 schema                 ││        __                                 │
+│   3 dump                   ││       UooU\.'@@@@@@`.                     │
+│   4 clone                  ││       \__/(@@@@@@@@@@)                    │
+│   5 config                 ││            (@@@@@@@@)                     │
+│                            ││            `YY~~~~YY'                     │
+│                            ││             ||    ||                      │
+│                            ││                                           │
+│                            ││ Connecting…                               │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+Enter connect · Esc back · Tab field · ?/F1                                     

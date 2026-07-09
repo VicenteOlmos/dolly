@@ -1,0 +1,23 @@
+╭────────────────────────────╮╭───────────────────────╮
+│              __            ││ Clone                 │
+│       UooU\.'@@@@@@`.      ││                       │
+│       \__/(@@@@@@@@@@)     ││ Target & strategy:    │
+│          (@@@@@@@@)        ││ ↑/↓/Tab field · ←/→   │
+│          `YY~~~~YY'        ││ edit · Space toggle   │
+│           ||    ||         ││ analyze · Esc back    │
+│                            ││ Clone name:           │
+│            dolly           ││ ▌db_stub_dolly_1      │
+│                            ││ Target DSN: [Current  │
+│   1 connect                ││ DSN]                  │
+│   2 schema                 ││ postgres://u:%2A%2A%2 │
+│   3 dump                   ││ A@h-                  │
+│ > 4 clone                  ││ x:5432/db_stub?channe │
+│   5 config                 ││ l_binding=%2A%2A%2A&s │
+╰────────────────────────────╯│ slmode=verify-full    │
+                              │ Strategy: schema-     │
+                              │ replay                │
+                              │ Analyze: [✓] U@U~     │
+                              │ analyzing…            │
+                              ╰───────────────────────╯
+U@U dump · restore · clone · tui · history restore          
+↑↓ section · Enter open · g/F5 clone · ?/F1                 

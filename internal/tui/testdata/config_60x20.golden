@@ -1,0 +1,20 @@
+╭────────────────────────────╮Config                                       
+│              __            │1-5 screen · ? info · F1 keys                
+│       UooU\.'@@@@@@`.      │                                             
+│       \__/(@@@@@@@@@@)     │[env]                                        
+│          (@@@@@@@@)        │> path                           .env        
+│          `YY~~~~YY'        │  url_var                      DB_URL        
+│           ||    ||         │  host_var                     DB_HOST       
+│                            │  port_var                     DB_PORT       
+│            dolly           │  name_var                     DB_NAME       
+│                            │  user_var                     DB_USER       
+│   1 connect                │  password_var                 DB_PASSWORD   
+│   2 schema                 │                                             
+│   3 dump                   │[clone]                                      
+│   4 clone                  │  name_template                {db}_dolly_{n}
+│ > 5 config                 │  target_url                   (empty)       
+╰────────────────────────────╯  dump_dir                     (empty)       
+                                restore_on_conflict          error         
+                                replace                      false         
+U@U dump · restore · clone · tui · history restore          
+↑↓/j/k scroll · Enter/Space edit · auto-save on leave       

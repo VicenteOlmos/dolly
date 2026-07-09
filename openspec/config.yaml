@@ -1,0 +1,53 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Tech stack: Go 1.26.3, PostgreSQL schema introspection via database/sql + information_schema (pgx/v5 stdlib driver). TUI: Bubble Tea v2 + Lip Gloss v2 (charm.land/bubbletea/v2, charm.land/lipgloss/v2).
+  Architecture: Single module (dolly), internal/ layout. internal/db/ introspection, internal/dump/ streaming NDJSON dumps, internal/restore/ metadata-driven NDJSON load, internal/clone/ clone strategies with preflight (reachability, permissions, versions) before side effects, internal/tui/ interactive terminal app (TUI may call internal/dump via dump_run.go only; no restore/subprocess dump). cmd/dolly CLI with dump, restore, clone, and tui subcommands.
+  Testing: Unit tests use go-sqlmock (go test ./...). TUI: Update unit tests + golden View tests in internal/tui/. Opt-in integration tests: DOLLY_TEST_PG_DSN + make test-integration (db, dump, restore; -p 1). Restore coverage: make test-cover-restore. Strict TDD disabled.
+  Style: Standard Go layout. No formatter/linter convention established.
+
+testing:
+  runner: go test ./...
+  framework: Go testing (go 1.26.3)
+  strict_tdd: false
+  layers:
+    unit: go-sqlmock
+    integration: build tag integration + DOLLY_TEST_PG_DSN
+    e2e: null
+  coverage:
+    available: true
+    command: go test -cover ./...
+    threshold: 0
+  quality:
+    linter: null
+    type_checker: go vet ./...
+    formatter: null
+  integration:
+    tag: integration
+    command: make test-integration
+    dsn_var: DOLLY_TEST_PG_DSN
+    short_guard: testing.Short()
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    tdd: false
+    test_command: "go test ./..."
+  verify:
+    test_command: "go test ./..."
+    # integration (optional): make test-integration  (runs -p 1 -tags=integration)
+    build_command: "go build -buildvcs=false ./..."
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas

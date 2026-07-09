@@ -1,0 +1,132 @@
+package restore
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/VicenteOlmos/dolly/internal/dump"
+)
+
+// quoteIdentifier returns a PostgreSQL double-quoted identifier,
+// escaping embedded double quotes by doubling them.
+func quoteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// quoteLiteral returns a PostgreSQL single-quoted string literal,
+// escaping embedded single quotes by doubling them.
+func quoteLiteral(s string) string {
+	return "'" + strings.ReplaceAll(s, `'`, `''`) + "'"
+}
+
+// quoteQualifiedTable returns a fully-quoted "schema"."name" string.
+func quoteQualifiedTable(schema, name string) string {
+	return quoteIdentifier(schema) + "." + quoteIdentifier(name)
+}
+
+func schemaSet(schemas []string) map[string]bool {
+	if len(schemas) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(schemas))
+	for _, s := range schemas {
+		set[s] = true
+	}
+	return set
+}
+
+// RestoreSequencesFromMetadata reads sequence state from dump metadata and
+// applies setval on the target database. This prevents serial/identity
+// collisions after a standalone restore. When schemas is non-empty, only
+// sequences in those schemas are restored.
+func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.Metadata, schemas []string) error {
+	if len(meta.Sequences) == 0 {
+		return nil
+	}
+
+	schemaFilter := schemaSet(schemas)
+	for _, seq := range meta.Sequences {
+		if schemaFilter != nil && !schemaFilter[seq.Schema] {
+			continue
+		}
+
+		value := seq.StartValue
+		isCalled := false
+		if seq.LastValue != nil {
+			value = *seq.LastValue
+			isCalled = seq.IsCalled
+		}
+
+		setSQL := fmt.Sprintf(
+			"SELECT setval(%s::regclass, %d, %t)",
+			quoteLiteral(quoteQualifiedTable(seq.Schema, seq.Name)),
+			value,
+			isCalled,
+		)
+		if _, err := q.ExecContext(ctx, setSQL); err != nil {
+			return fmt.Errorf("setval %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+	}
+	return nil
+}
+
+// SyncSequencesToData advances every serial/identity sequence on the target
+// database to the max value of its owning column. This is necessary when data
+// was loaded with explicit IDs (bypassing nextval), because pg_sequences
+// tracks nextval calls, not the actual max ID in the table.
+func SyncSequencesToData(ctx context.Context, q execQuerier, schemas []string) error {
+	if len(schemas) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(schemas))
+	args := make([]any, len(schemas))
+	for i, s := range schemas {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = s
+	}
+	query := fmt.Sprintf(`
+		SELECT table_schema, table_name, column_name
+		FROM information_schema.columns
+		WHERE table_schema IN (%s)
+		  AND (
+		    column_default LIKE 'nextval%%'
+		    OR identity_generation IS NOT NULL
+		  )
+		ORDER BY table_schema, table_name, ordinal_position`, strings.Join(placeholders, ", "))
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("list serial columns: %w", err)
+	}
+	defer rows.Close()
+
+	type serialCol struct {
+		schema, table, column string
+	}
+	var cols []serialCol
+	for rows.Next() {
+		var c serialCol
+		if err := rows.Scan(&c.schema, &c.table, &c.column); err != nil {
+			return fmt.Errorf("scan serial column: %w", err)
+		}
+		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list serial columns: %w", err)
+	}
+
+	for _, c := range cols {
+		qualifiedTable := quoteQualifiedTable(c.schema, c.table)
+		setvalSQL := fmt.Sprintf(
+			`SELECT setval(pg_get_serial_sequence(%s, %s), COALESCE((SELECT max(%s) FROM %s), 1), true)`,
+			quoteLiteral(c.schema+"."+c.table),
+			quoteLiteral(c.column),
+			quoteIdentifier(c.column),
+			qualifiedTable,
+		)
+		if _, err := q.ExecContext(ctx, setvalSQL); err != nil {
+			return fmt.Errorf("sync sequence for %s.%s: %w", c.schema, c.table, err)
+		}
+	}
+	return nil
+}

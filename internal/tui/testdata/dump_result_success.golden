@@ -1,0 +1,18 @@
+╭────────────────────────────╮╭───────────────────────╮
+│              __            ││ Dump                  │
+│       UooU\.'@@@@@@`.      ││                       │
+│       \__/(@@@@@@@@@@)     ││ ✓ Dump complete       │
+│          (@@@@@@@@)        ││ Output: /tmp/dolly-   │
+│          `YY~~~~YY'        ││ out                   │
+│           ||    ||         ││ Tables: 1 · Rows      │
+│                            ││ (est): 100            │
+│            dolly           ││ Files:                │
+│                            ││   metadata.json       │
+│   1 connect                ││   users.ndjson        │
+│   2 schema                 ││                       │
+│ > 3 dump                   ││                       │
+│   4 clone                  ││                       │
+│   5 config                 ││                       │
+╰────────────────────────────╯╰───────────────────────╯
+U@U dump · restore · clone · tui · history restore          
+o open · Enter again · Esc dismiss · Ctrl+C quit            

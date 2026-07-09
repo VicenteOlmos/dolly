@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Clone                                     │
+│       UooU\.'@@@@@@`.      ││                                           │
+│       \__/(@@@@@@@@@@)     ││ ✗ Clone failed                            │
+│          (@@@@@@@@)        ││ Error: permission denied                  │
+│          `YY~~~~YY'        ││                                           │
+│           ||    ||         ││ Enter run again · Esc dismiss             │
+│                            ││                                           │
+│            dolly           ││                                           │
+│                            ││                                           │
+│   1 connect                ││                                           │
+│   2 schema                 ││                                           │
+│   3 dump                   ││                                           │
+│ > 4 clone                  ││                                           │
+│   5 config                 ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+Clone failed: permission denied                                                 

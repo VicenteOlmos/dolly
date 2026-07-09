@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────╮
+│              __            ││ Dump                  │
+│       UooU\.'@@@@@@`.      ││                       │
+│       \__/(@@@@@@@@@@)     ││ ✓ Dump complete       │
+│          (@@@@@@@@)        ││ Output: /tmp/dolly-   │
+│          `YY~~~~YY'        ││ out                   │
+│           ||    ||         ││ Tables: 20 · Rows     │
+│                            ││ (est): 5,000          │
+│            dolly           ││ Files:                │
+│                            ││   … +10 above         │
+│   1 connect                ││   table_09.ndjson     │
+│   2 schema                 ││   table_10.ndjson     │
+│ > 3 dump                   ││   table_11.ndjson     │
+│   4 clone                  ││   table_12.ndjson     │
+│   5 config                 ││   table_13.ndjson     │
+╰────────────────────────────╯│   table_14.ndjson     │
+                              │   table_15.ndjson     │
+                              │   table_16.ndjson     │
+                              │   table_17.ndjson     │
+                              ╰───────────────────────╯
+U@U dump · restore · clone · tui · history restore          
+o open · Enter again · Esc dismiss · Ctrl+C quit            

@@ -1,0 +1,145 @@
+{
+  // ── Environment / .env file ──────────────────────────────────────────────
+  "env": {
+    // Path to the .env file loaded before reading environment variables.
+    "path": ".env",
+
+    // Environment variable names used to build the source DSN.
+    // Set url_var for a full connection URL, or the individual host/port/name/
+    // user/password vars for component-based resolution.
+    "url_var": "DB_URL",
+    "host_var": "DB_HOST",
+    "port_var": "DB_PORT",
+    "name_var": "DB_NAME",
+    "user_var": "DB_USER",
+    "password_var": "DB_PASSWORD"
+  },
+
+  // ── Clone behaviour ──────────────────────────────────────────────────────
+  "clone": {
+    // Template for the cloned database name. {db} expands to the source DB name.
+    "name_template": "{db}_dolly_{n}",
+
+    // Target PostgreSQL DSN. Required for fast-forward (-ff) mode.
+    "target_url": "",
+
+    // Directory used for intermediate dump/restore artefacts during clone.
+    // Empty means a temporary directory is created automatically.
+    "dump_dir": "",
+
+    // What to do when a row already exists during restore:
+    //   "error"  – abort (default)
+    //   "skip"   – leave existing row unchanged
+    //   "upsert" – overwrite with source value
+    "restore_on_conflict": "error",
+
+    // Truncate target tables before inserting (destructive).
+    "replace": false,
+
+    // Skip CREATE DATABASE; assume the target DB already exists.
+    "skip_create": false,
+
+    // Target data directory for physical-backup (pg_basebackup -D). Fast-forward only.
+    "target_dir": "",
+
+    // Clone strategy:
+    //   "schema-replay"     – recreate schema DDL, then restore data (default)
+    //   "template"          – PostgreSQL CREATE DATABASE … TEMPLATE
+    //   "logical-stream"    – database-to-database COPY streaming (aliases: copy-stream, streaming-copy)
+    //   "physical-backup"   – pg_basebackup physical replica (aliases: replication)
+    "strategy": "schema-replay",
+
+    // Source schemas to clone. Empty means all non-system schemas.
+    "schemas": [],
+
+    // ── Preflight permission cache ─────────────────────────────────────────
+    "preflight": {
+      // Enable caching of permission check results between runs.
+      "cache_permissions": false,
+
+      // File path for the permission cache.
+      "cache_permissions_path": ".dolly/permissions-cache.yaml",
+
+      // How long a cached permission result remains valid (Go duration string).
+      "cache_permissions_ttl": "24h"
+    }
+  },
+
+  // ── Sanitization ─────────────────────────────────────────────────────────
+  "sanitization": {
+    // When true, dump and schema-replay clone redact known sensitive text columns
+    // (email, password, ssn, phone, etc.) in NDJSON output. logical-stream is not affected.
+    "enabled": false
+  },
+
+  // ── Subset dump ──────────────────────────────────────────────────────────
+  "subset": {
+    // Percentage of root-table rows to sample (0 = all rows).
+    // FK closure may include additional related rows, so output can exceed this percentage.
+    "percent": 0,
+
+    // JSON seed file path for relationship-aware subset dumps.
+    "seed_file": ""
+  },
+
+  // ── Dump output ──────────────────────────────────────────────────────────
+  "dump": {
+    // Default base directory for `dolly dump`. Each run writes to {output_dir}/{n}/.
+    // Overridden by --output flag at runtime (still treated as base; numbered subdirs used).
+    "output_dir": "dolly_dump",
+    // Rows per keyset-pagination chunk in --slow-connection mode (default 1000).
+    "slow_chunk_size": 1000,
+    // Max query retries per chunk when --slow-connection is set (0 = disabled).
+    "slow_retry_max": 0,
+    // Base backoff between slow-connection query retries (default "500ms").
+    "slow_retry_base": "500ms"
+  },
+
+  // ── Database pool ────────────────────────────────────────────────────────
+  "db": {
+    // Maximum open connections in the sql.DB pool (default 5).
+    "max_open_conns": 5,
+
+    // Abort queries exceeding this duration (Go duration string, default "5min").
+    // Set to "" or "0" to disable.
+    "statement_timeout": "5min"
+  },
+
+  // ── TUI ──────────────────────────────────────────────────────────────────
+  "tui": {
+    // Section screens (connection, dump, clone) open in:
+    //   "overview" – list sections first; Enter drills in; Esc backs out
+    //   "inside"   – land directly in the first section (legacy default)
+    "section_entry": "inside",
+
+    // TUI color palette — match your Ghostty/terminal theme:
+    //   catppuccin-mocha, catppuccin-frappe, catppuccin-latte,
+    //   rose-pine, rose-pine-moon, rose-pine-dawn,
+    //   dracula, gruvbox-dark, gruvbox-light, tokyo-night,
+    //   nord, one-dark, everforest, github-dark
+    "theme": "catppuccin-mocha"
+  },
+
+  // ── Saved connections ────────────────────────────────────────────────────
+  // Enable persisting named connection profiles to disk.
+  "save_connections": false,
+
+  "connections": {
+    // Storage scope:
+    //   "project" – store in the project directory (default)
+    //   "xdg"     – store in $XDG_CONFIG_HOME/dolly/connections.yaml
+    "scope": "project",
+
+    // Optional override path for the connections store file.
+    "path": "",
+
+    // Encrypt the connections store with AES-256-GCM.
+    // Set DOLLY_CONNECTIONS_KEY env var to a 32-byte standard base64 key.
+    // Defaults to true when save_connections is enabled.
+    "encrypt": false,
+
+    // Name of the saved profile to pre-select on the TUI connect screen.
+    // Set with * in the saved profiles list, or edit here.
+    "default": ""
+  }
+}

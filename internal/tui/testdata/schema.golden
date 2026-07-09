@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Schema                                    │
+│       UooU\.'@@@@@@`.      ││                                           │
+│       \__/(@@@@@@@@@@)     ││ 3 tables · 8 columns · 1 foreign keys     │
+│          (@@@@@@@@)        ││ Browse only · select schemas on dump (3)  │
+│          `YY~~~~YY'        ││ or clone (4)                              │
+│           ||    ||         ││                                           │
+│                            ││ > orders                                  │
+│            dolly           ││ > products                                │
+│                            ││ > users                                   │
+│   1 connect                ││                                           │
+│ > 2 schema                 ││                                           │
+│   3 dump                   ││                                           │
+│   4 clone                  ││                                           │
+│   5 config                 ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+1-5 screen · ? info · F1 keys · Esc quit                                        

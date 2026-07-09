@@ -1,0 +1,14 @@
+##
+## The non-flaming sheep.
+## From cowsay-org/cowsay (sheep.cow)
+##
+$the_cow = <<EOC
+  $thoughts
+   $thoughts
+       __     
+      U${eyes}U\\.'\@\@\@\@\@\@`.
+      \\__/(\@\@\@\@\@\@\@\@\@\@)
+           (\@\@\@\@\@\@\@\@)
+           `YY~~~~YY'
+            ||    ||
+EOC

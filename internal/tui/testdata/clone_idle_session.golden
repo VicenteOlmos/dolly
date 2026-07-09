@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Clone                                     │
+│       UooU\.'@@@@@@`.      ││                                           │
+│       \__/(@@@@@@@@@@)     ││ > Target & strategy  staging-clone        │
+│          (@@@@@@@@)        ││   Schemas  Selected: app, public          │
+│          `YY~~~~YY'        ││   Log  (no messages yet)                  │
+│           ||    ||         ││                                           │
+│                            ││ ↑/↓ section · Enter open                  │
+│            dolly           ││                                           │
+│                            ││                                           │
+│   1 connect                ││                                           │
+│   2 schema                 ││                                           │
+│   3 dump                   ││                                           │
+│ > 4 clone                  ││                                           │
+│   5 config                 ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+↑↓ section · Enter open · g/F5 clone · ?/F1                                     

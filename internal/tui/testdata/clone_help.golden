@@ -1,0 +1,90 @@
+╭────────────────────────────╮╭────────────────╮╭────────────────╮╭────────────────╮
+│              __            ││ Clone          ││ Keyboard Help  ││ CLI catalog    │
+│       UooU\.'@@@@@@`.      ││                ││ ↑/↓ section ·  ││ n/p pages ·    │
+│       \__/(@@@@@@@@@@)     ││ Connect first  ││ Enter open ·   ││ dump · restore │
+│          (@@@@@@@@)        ││ (screen 1)     ││ Esc back · Tab ││ · clone · tui  │
+│          `YY~~~~YY'        ││                ││ within · g/F5  ││                │
+│           ||    ||         ││                ││ run            ││ F1/Esc close · │
+│                            ││                ││ (dump/clone)   ││ n/p pages ·    │
+│            dolly           ││                ││                ││ 1/5 Keys       │
+│                            ││                ││ 1-5  [global]  ││                │
+│   1 connect                ││                ││ jump to screen ││                │
+│   2 schema                 ││                ││ Ctrl+Tab       ││                │
+│   3 dump                   ││                ││ [global]  next ││                │
+│ > 4 clone                  ││                ││ screen         ││                │
+│   5 config                 ││                ││ Ctrl+Shift+Tab ││                │
+│                            ││                ││ [global]       ││                │
+│                            ││                ││ previous       ││                │
+│                            ││                ││ screen         ││                │
+│                            ││                ││ g / F5         ││                │
+╰────────────────────────────╯╰────────────────╯│ [dump/clone]   │╰────────────────╯
+                                                │ start run      │                  
+                                                │ Ctrl+Enter     │                  
+                                                │ [dump/clone]   │                  
+                                                │ start run      │                  
+                                                │ (terminal-     │                  
+                                                │ dependent)     │                  
+                                                │ ?  [global]    │                  
+                                                │ context help   │                  
+                                                │ (screen,       │                  
+                                                │ field,         │                  
+                                                │ strategies)    │                  
+                                                │ F1  [global]   │                  
+                                                │ keyboard       │                  
+                                                │ shortcuts and  │                  
+                                                │ CLI catalog    │                  
+                                                │ Esc  [global]  │                  
+                                                │ close help /   │                  
+                                                │ quit prompt    │                  
+                                                │ Ctrl+C         │                  
+                                                │ [global]  quit │                  
+                                                │ prompt         │                  
+                                                │ Y/N  [modal]   │                  
+                                                │ confirm or     │                  
+                                                │ cancel dialog  │                  
+                                                │ ↑/↓  [clone]   │                  
+                                                │ overview: next │                  
+                                                │ section ·      │                  
+                                                │ inside: move   │                  
+                                                │ in section     │                  
+                                                │ Tab  [clone]   │                  
+                                                │ inside fields: │                  
+                                                │ next field     │                  
+                                                │ Enter  [clone] │                  
+                                                │ overview: open │                  
+                                                │ section        │                  
+                                                │ Esc  [clone]   │                  
+                                                │ inside: back   │                  
+                                                │ to overview ·  │                  
+                                                │ cancel analyze │                  
+                                                │ ←/→  [clone]   │                  
+                                                │ cycle strategy │                  
+                                                │ (inside        │                  
+                                                │ fields,        │                  
+                                                │ strategy       │                  
+                                                │ field)         │                  
+                                                │ Space  [clone] │                  
+                                                │ toggle schema  │                  
+                                                │ (inside        │                  
+                                                │ schemas        │                  
+                                                │ section) ·     │                  
+                                                │ toggle analyze │                  
+                                                │ (inside        │                  
+                                                │ fields,        │                  
+                                                │ analyze field) │                  
+                                                │ a  [clone]     │                  
+                                                │ toggle analyze │                  
+                                                │ preflight      │                  
+                                                │ (inside        │                  
+                                                │ fields,        │                  
+                                                │ analyze field) │                  
+                                                │ t  [clone]     │                  
+                                                │ cycle target   │                  
+                                                │ source (inside │                  
+                                                │ fields)        │                  
+                                                │ g / F5         │                  
+                                                │ [clone]  start │                  
+                                                │ clone…         │                  
+                                                ╰────────────────╯                  
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+↑↓ section · Enter open · g/F5 clone · ?/F1                                     

@@ -1,0 +1,23 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Clone                                     │
+│       UooU\.'@@@@@@`.      ││                                           │
+│       \__/(@@@@@@@@@@)     ││ Target & strategy:  ↑/↓/Tab field · ←/→   │
+│          (@@@@@@@@)        ││ edit · Space toggle analyze · Esc back    │
+│          `YY~~~~YY'        ││ Clone name: ▌db_stub_dolly_1              │
+│ ╭──────────────────────────────────────────────────────────────────────────╮
+│ │ Analyze complete                                                         │
+│ │                                                                          │
+│ │ Database size: 128.0 MB · 42 objects · ~51,200 rows                      │
+│ │ Suggested clone name: db_stub_dolly_1                                    │
+│ │                                                                          │
+│ │   OBJECT                         KIND       ROWS       SIZE              │
+│ │   public.users                   table           1,200     1.0 MB        │
+│ │   app.orders                     table          50,000     8.0 MB        │
+│ │                                                                          │
+│ │ Enter continue clone  ·  q cancel                                        │
+│ ╰──────────────────────────────────────────────────────────────────────────╯
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit
+↑↓ section · Enter open · g/F5 clone · ?/F1
+

@@ -1,0 +1,23 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Connection                                │
+│       UooU\.'@@@@@@`.      ││ 1-5 menu · ? info · F1 keys               │
+│       \__/(@@@@@@@@@@)     ││                                           │
+│          (@@@@@@@@)        ││ Host: db.example.com                      │
+│          `YY~~~~YY'        ││ Port: 5432                                │
+│           ||    ||         ││ Database: app                             │
+│                            ││ User: app                                 │
+│           ╭──────────────────────────────────────────────────────╮      │
+│           │ Delete profile?                                      │      │
+│ > 1 connec│                                                      │      │
+│   2 schema│ Remove "staging" from saved connections. This cannot │      │
+│   3 dump  │ be undone.                                           │      │
+│   4 clone │                                                      │      │
+│   5 config│ Y confirm  ·  N / Esc cancel                         │      │
+│           ╰──────────────────────────────────────────────────────╯      │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit
+↑↓ section · Enter open · e/s/r/d/t · ?/F1
+

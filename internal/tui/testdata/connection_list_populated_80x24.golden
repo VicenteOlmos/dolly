@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Connection                                │
+│       UooU\.'@@@@@@`.      ││ 1-5 menu · ? info · F1 keys               │
+│       \__/(@@@@@@@@@@)     ││                                           │
+│          (@@@@@@@@)        ││ Host: prod.internal                       │
+│          `YY~~~~YY'        ││ Port: 5432                                │
+│           ||    ||         ││ Database: app                             │
+│                            ││ User: app                                 │
+│            dolly           ││ Password: ********                        │
+│                            ││ SSLMODE:                                  │
+│ > 1 connect                ││                                           │
+│   2 schema                 ││ Saved profiles                            │
+│   3 dump                   ││ >   prod  pr***l / a*** / a***            │
+│   4 clone                  ││     staging  db***m / de***y / a***       │
+│   5 config                 ││ * set default · Enter connect             │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+↑↓ section · Enter open · e/s/r/d/t · ?/F1                                      

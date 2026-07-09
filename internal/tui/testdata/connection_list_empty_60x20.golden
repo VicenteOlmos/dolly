@@ -1,0 +1,21 @@
+╭────────────────────────────╮╭───────────────────────╮
+│              __            ││ Connection            │
+│       UooU\.'@@@@@@`.      ││ 1-5 menu · ? info ·   │
+│       \__/(@@@@@@@@@@)     ││ F1 keys               │
+│          (@@@@@@@@)        ││                       │
+│          `YY~~~~YY'        ││ Host:                 │
+│           ||    ||         ││ Port:                 │
+│                            ││ Database:             │
+│            dolly           ││ User:                 │
+│                            ││ Password:             │
+│ > 1 connect                ││ SSLMODE:              │
+│   2 schema                 ││                       │
+│   3 dump                   ││ Saved profiles        │
+│   4 clone                  ││ No saved profiles yet │
+│   5 config                 ││ — enter credentials   │
+╰────────────────────────────╯│ in Connection fields  │
+                              │ and connect with      │
+                              │ Enter to auto-save    │
+                              ╰───────────────────────╯
+U@U dump · restore · clone · tui · history restore          
+↑↓ section · Enter open · e/s/r/d/t · ?/F1                  

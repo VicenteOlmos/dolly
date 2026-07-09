@@ -1,0 +1,55 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.crt
+
+# Dolly local state (may contain DSNs, passwords, caches, or generated dumps)
+.dolly/
+.dolly.connections.yaml
+*.connections.yaml
+config.local.jsonc
+*.local.jsonc
+dolly_dump/
+dumps/
+
+# Build outputs and local binaries
+/dolly
+/clone.test
+*.test
+bin/
+dist/
+build/
+
+# Coverage, profiling, and test artifacts
+coverage.out
+coverage.*
+*.coverprofile
+*.prof
+*.pprof
+
+# Agent/local workspace metadata
+.atl/
+.agents/
+.codex/
+.cursor/
+
+# Dolly local config (may contain DSNs, passwords, or user overrides)
+cmd/dolly/my_config_dump_dir/
+cmd/dolly/config.jsonc
+config.jsonc
+
+# Tool caches and temporary files
+.cache/
+.codegraph/
+tmp/
+temp/
+*.tmp
+*.log
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

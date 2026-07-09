@@ -1,0 +1,22 @@
+╭────────────────────────────╮╭───────────────────────────────────────────╮
+│              __            ││ Dump                                      │
+│       UooU\.'@@@@@@`.      ││                                           │
+│       \__/(@@@@@@@@@@)     ││ > Base directory  /tmp/dolly-dump         │
+│          (@@@@@@@@)        ││   Schemas  Selected: public               │
+│          `YY~~~~YY'        ││   History  (no dumps yet)                 │
+│           ||    ||         ││   Log  2 lines                            │
+│                            ││                                           │
+│            dolly           ││ ↑/↓ section · Enter open                  │
+│                            ││                                           │
+│   1 connect                ││        __                                 │
+│   2 schema                 ││       UooU\.'@@@@@@`.                     │
+│ > 3 dump                   ││       \__/(@@@@@@@@@@)                    │
+│   4 clone                  ││            (@@@@@@@@)                     │
+│   5 config                 ││            `YY~~~~YY'                     │
+│                            ││             ||    ||                      │
+│                            ││                                           │
+│                            ││ Dump in progress…                         │
+│                            ││                                           │
+╰────────────────────────────╯╰───────────────────────────────────────────╯
+U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
+Dumping…                                                                        
