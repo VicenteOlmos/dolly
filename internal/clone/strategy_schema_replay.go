@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
 // lookPath is overridable for testing precondition checks.
@@ -137,7 +139,15 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		Total:   totalSteps,
 		Elapsed: time.Since(startedAt),
 	})
-	if err := dumpFunc(ctx, srcDB, dumpDir, opts.DumpOpts...); err != nil {
+	dumpOpts := opts.DumpOpts
+	if dump.InspectSchemas(dumpOpts...) == nil {
+		schemaNames, err := listSchemaNamesFunc(ctx, srcDB)
+		if err != nil {
+			return fmt.Errorf("list schemas: %w", err)
+		}
+		dumpOpts = append(append([]dump.Option(nil), dumpOpts...), dump.WithSchemas(schemaNames))
+	}
+	if err := dumpFunc(ctx, srcDB, dumpDir, dumpOpts...); err != nil {
 		return fmt.Errorf("dump: %w", err)
 	}
 

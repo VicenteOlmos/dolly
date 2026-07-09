@@ -10,6 +10,26 @@ $DOLLY_INSTALL_DIR = if ($env:DOLLY_INSTALL_DIR) { $env:DOLLY_INSTALL_DIR } else
 function die { Write-Error "error: $args"; exit 1 }
 function warn { Write-Warning $args }
 
+function Path-ContainsDir {
+    param($PathValue, $Dir)
+    if (-not $PathValue) { return $false }
+    $target = [System.IO.Path]::GetFullPath($Dir).TrimEnd('\', '/')
+    foreach ($entry in ($PathValue -split [System.IO.Path]::PathSeparator)) {
+        if (-not $entry) { continue }
+        if ([System.IO.Path]::GetFullPath($entry).TrimEnd('\', '/') -ieq $target) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Add-DirToPathValue {
+    param($PathValue, $Dir)
+    if (Path-ContainsDir $PathValue $Dir) { return $PathValue }
+    if ($PathValue) { return "$PathValue$([System.IO.Path]::PathSeparator)$Dir" }
+    return $Dir
+}
+
 if ($DOLLY_REPO -notmatch '^.+/[^/]+$') {
     die "DOLLY_REPO must use GitHub owner/repo format, got: $DOLLY_REPO"
 }
@@ -131,5 +151,11 @@ Copy-Item $binary_path $target -Force
 
 Write-Host "Installed dolly to $target"
 
-# ponytail: no automatic PATH management — user adds it manually or re-runs
-# Add when users ask for it; PATH manipulation is a footgun in unattended scripts.
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not (Path-ContainsDir $userPath $DOLLY_INSTALL_DIR)) {
+    [Environment]::SetEnvironmentVariable("Path", (Add-DirToPathValue $userPath $DOLLY_INSTALL_DIR), "User")
+    Write-Host "Added $DOLLY_INSTALL_DIR to your user PATH. Open a new terminal if 'dolly' is not found."
+}
+if (-not (Path-ContainsDir $env:Path $DOLLY_INSTALL_DIR)) {
+    $env:Path = Add-DirToPathValue $env:Path $DOLLY_INSTALL_DIR
+}

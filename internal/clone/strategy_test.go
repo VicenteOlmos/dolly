@@ -290,6 +290,12 @@ func TestSchemaReplayStrategyExecutePassesSanitizationDumpOpts(t *testing.T) {
 	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
+	origListSchemas := listSchemaNamesFunc
+	listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error) {
+		return []string{"public", "app"}, nil
+	}
+	defer func() { listSchemaNamesFunc = origListSchemas }()
+
 	mockRunner := &mockCommandRunner{}
 	strat := &SchemaReplayStrategy{Runner: mockRunner}
 
@@ -308,6 +314,64 @@ func TestSchemaReplayStrategyExecutePassesSanitizationDumpOpts(t *testing.T) {
 	rt := dump.InspectRowTransform(capturedDumpOpts...)
 	if rt == nil {
 		t.Fatal("schema-replay dump should receive sanitization row transform")
+	}
+	if got := dump.InspectSchemas(capturedDumpOpts...); !sliceEqual(got, []string{"public", "app"}) {
+		t.Fatalf("schemas = %v, want public/app", got)
+	}
+}
+
+func TestSchemaReplayStrategyKeepsExplicitDumpSchemas(t *testing.T) {
+	origLookPath := lookPath
+	lookPath = func(file string) (string, error) { return "/usr/bin/" + file, nil }
+	defer func() { lookPath = origLookPath }()
+
+	mockDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	listCalled := false
+	origListSchemas := listSchemaNamesFunc
+	listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error) {
+		listCalled = true
+		return []string{"public", "app"}, nil
+	}
+	defer func() { listSchemaNamesFunc = origListSchemas }()
+
+	var capturedDumpOpts []dump.Option
+	origDump := dumpFunc
+	dumpFunc = func(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...dump.Option) error {
+		capturedDumpOpts = append([]dump.Option(nil), opts...)
+		return nil
+	}
+	defer func() { dumpFunc = origDump }()
+
+	origRestore := restoreFunc
+	restoreFunc = func(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...restore.Option) error { return nil }
+	defer func() { restoreFunc = origRestore }()
+
+	origRestoreSeq := restoreSequencesFunc
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+	defer func() { restoreSequencesFunc = origRestoreSeq }()
+
+	if err := (&SchemaReplayStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), Options{
+		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
+		CloneName:  "db_clone",
+		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"public"})},
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if listCalled {
+		t.Fatal("list schemas should not be called when schemas are explicit")
+	}
+	if got := dump.InspectSchemas(capturedDumpOpts...); !sliceEqual(got, []string{"public"}) {
+		t.Fatalf("schemas = %v, want public", got)
 	}
 }
 
@@ -930,6 +994,7 @@ func TestCopyStreamStrategySchemaReplayFailure(t *testing.T) {
 		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
 		CloneName:  "db_clone",
 		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"public"})},
 	})
 	if err == nil {
 		t.Fatal("expected error")
@@ -1537,6 +1602,7 @@ func TestSchemaReplayStrategyNoDropWhenSkipCreate(t *testing.T) {
 		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
 		CloneName:  "db_clone",
 		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"public"})},
 	})
 	if err == nil {
 		t.Fatal("expected error from source connection failure")
@@ -1591,6 +1657,7 @@ func TestSchemaReplayStrategyInvokesRestoreSequences(t *testing.T) {
 		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
 		CloneName:  "db_clone",
 		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"public"})},
 	})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/restore"
-	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestRewriteDSN(t *testing.T) {
@@ -487,6 +487,7 @@ func TestRunSkipsCreate(t *testing.T) {
 		SkipCreate:    true,
 		Strategy:      "schema-replay",
 		CommandRunner: mockRunner,
+		DumpOpts:      []dump.Option{dump.WithSchemas([]string{"public"})},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -548,6 +549,7 @@ func TestRunRewritesCustomTargetURLToCloneName(t *testing.T) {
 		SkipCreate:    true,
 		Strategy:      "schema-replay",
 		CommandRunner: mockRunner,
+		DumpOpts:      []dump.Option{dump.WithSchemas([]string{"public"})},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -661,6 +663,7 @@ func TestRunCreatesTempChildUnderDumpDir(t *testing.T) {
 		SkipCreate:    true,
 		Strategy:      "schema-replay",
 		CommandRunner: mockRunner,
+		DumpOpts:      []dump.Option{dump.WithSchemas([]string{"public"})},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

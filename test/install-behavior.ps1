@@ -6,6 +6,7 @@ $install_ps1 = Join-Path $script_dir "..\install.ps1" -Resolve
 
 $tmpdir = Join-Path ([System.IO.Path]::GetTempPath()) "dolly-ps-test-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force $tmpdir | Out-Null
+$original_user_path = [Environment]::GetEnvironmentVariable("Path", "User")
 
 # Create a fake dolly.exe binary zip
 $fake_exe = Join-Path $tmpdir "dolly.exe"
@@ -73,6 +74,23 @@ $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
 try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { $rc = 1 }
 if ($rc -ne 0) {
     Write-Host "FAIL latest: expected success with DOLLY_ALLOW_UNVERIFIED=1, but install failed" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+if (-not (Test-Path (Join-Path $Env:DOLLY_INSTALL_DIR "dolly.exe"))) {
+    Write-Host "FAIL latest: expected dolly.exe in install dir" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+if (($Env:Path -split [System.IO.Path]::PathSeparator) -notcontains $Env:DOLLY_INSTALL_DIR) {
+    Write-Host "FAIL latest: expected install dir in process PATH" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+$user_path_after_install = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($user_path_after_install -split [System.IO.Path]::PathSeparator) -notcontains $Env:DOLLY_INSTALL_DIR) {
+    Write-Host "FAIL latest: expected install dir in user PATH" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
     exit 1
 }
 Write-Host "PASS latest: succeeds with DOLLY_ALLOW_UNVERIFIED=1 (checksums skip)" -ForegroundColor Green
@@ -92,9 +110,11 @@ $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
 try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { $rc = 1 }
 if ($rc -eq 0) {
     Write-Host "FAIL checksum-mismatch: expected failure on corrupt checksum even with DOLLY_ALLOW_UNVERIFIED=1, but install succeeded" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
     exit 1
 }
 Write-Host "PASS checksum-mismatch: fails with DOLLY_ALLOW_UNVERIFIED=1 when checksums.txt is corrupt" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "All install.ps1 behavior tests passed." -ForegroundColor Green
+[Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")

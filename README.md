@@ -39,6 +39,9 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | sh
 ```
 
+Installer commands require published release assets and `checksums.txt`. From a
+source checkout, use `go install ./cmd/dolly` or `make build-cli`.
+
 Install a specific version by setting `DOLLY_VERSION` with or without a leading `v`:
 
 ```bash
@@ -64,7 +67,7 @@ Installer expectations:
 - Requires a public GitHub repo and release assets.
 - Downloads `dolly_<os>_<arch>.tar.gz` from GitHub Releases (Linux/macOS) or `dolly_windows_<arch>.zip` (Windows).
 - Supports Linux, macOS, and Windows on `x86_64` and `arm64`.
-- Linux/macOS installs to `/usr/local/bin` by default; Windows installs to `%LOCALAPPDATA%\Programs\dolly\bin`.
+- Linux/macOS installs to `/usr/local/bin` by default; Windows installs to `%LOCALAPPDATA%\Programs\dolly\bin` and adds that directory to your user `PATH`.
 - Override install directory with `DOLLY_INSTALL_DIR`.
 - Verifies `checksums.txt` when the release publishes a matching entry.
 - Checksum verification is required even for the `latest` release. Set `DOLLY_ALLOW_UNVERIFIED=1` to bypass it (use with care).
