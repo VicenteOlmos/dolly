@@ -25,9 +25,26 @@ jobs:
       - if: runner.os != 'Windows'
         run: go test -race -count=1 ./...
 
-      # Windows: compile all packages/tests with race instrumentation, but do
-      # not execute tests until Windows-specific test portability is fixed.
-      # Full runtime suites still run on Linux/macOS. See issue #1.
+      # Windows: run a portable runtime subset while keeping compile coverage
+      # for all packages/tests with race instrumentation.
+      - if: runner.os == 'Windows'
+        name: Run portable Go tests on Windows
+        run: >-
+          go test -race -count=1
+          ./internal/brand
+          ./internal/clone
+          ./internal/clonework
+          ./internal/config
+          ./internal/connections
+          ./internal/db
+          ./internal/dbanalyze
+          ./internal/dump
+          ./internal/dumphistory
+          ./internal/restore
+          ./internal/schemacapture
+          ./internal/schemasql
+          ./internal/testutil/pgintegration
+
       - if: runner.os == 'Windows'
         name: Compile tests on Windows
         run: go test -race -run '^$' ./...

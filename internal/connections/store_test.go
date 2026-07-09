@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -127,7 +128,7 @@ func TestFileStorePersistMode0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode = %o, want 0600", info.Mode().Perm())
 	}
 	data, err := os.ReadFile(store.path)
@@ -425,7 +426,7 @@ func TestFileStoreLoadFixesUnsafePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("mode after load = %o, want 0600", info.Mode().Perm())
 	}
 }
