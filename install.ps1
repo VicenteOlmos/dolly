@@ -13,10 +13,15 @@ function warn { Write-Warning $args }
 function Path-ContainsDir {
     param($PathValue, $Dir)
     if (-not $PathValue) { return $false }
-    $target = [System.IO.Path]::GetFullPath($Dir).TrimEnd('\', '/')
+    $target = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Dir)).TrimEnd('\', '/')
     foreach ($entry in ($PathValue -split [System.IO.Path]::PathSeparator)) {
         if (-not $entry) { continue }
-        if ([System.IO.Path]::GetFullPath($entry).TrimEnd('\', '/') -ieq $target) {
+        try {
+            $entryFull = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($entry.Trim('"'))).TrimEnd('\', '/')
+        } catch {
+            continue
+        }
+        if ($entryFull -ieq $target) {
             return $true
         }
     }

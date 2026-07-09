@@ -58,7 +58,7 @@ $Env:DOLLY_INSTALL_DIR       = Join-Path $tmpdir "install_dir_1"
 $Env:DOLLY_MOCK_DOWNLOAD_DIR = $mock_no
 $Env:DOLLY_VERSION           = "latest"
 Remove-Item Env:DOLLY_ALLOW_UNVERIFIED -ErrorAction SilentlyContinue
-try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { $rc = 1 }
+try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { Write-Host $_; $rc = 1 }
 if ($rc -eq 0) {
     Write-Host "FAIL latest: expected failure when checksums.txt is missing, but install succeeded" -ForegroundColor Red
     exit 1
@@ -71,7 +71,7 @@ $Env:DOLLY_INSTALL_DIR       = Join-Path $tmpdir "install_dir_2"
 $Env:DOLLY_MOCK_DOWNLOAD_DIR = $mock_no
 $Env:DOLLY_VERSION           = "latest"
 $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
-try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { $rc = 1 }
+try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { Write-Host $_; $rc = 1 }
 if ($rc -ne 0) {
     Write-Host "FAIL latest: expected success with DOLLY_ALLOW_UNVERIFIED=1, but install failed" -ForegroundColor Red
     [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
@@ -107,7 +107,7 @@ $Env:DOLLY_INSTALL_DIR       = Join-Path $tmpdir "install_dir_3"
 $Env:DOLLY_MOCK_DOWNLOAD_DIR = $mock_corrupt
 $Env:DOLLY_VERSION           = "latest"
 $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
-try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { $rc = 1 }
+try { & $install_ps1 2>&1 | Out-Null; $rc = $LASTEXITCODE } catch { Write-Host $_; $rc = 1 }
 if ($rc -eq 0) {
     Write-Host "FAIL checksum-mismatch: expected failure on corrupt checksum even with DOLLY_ALLOW_UNVERIFIED=1, but install succeeded" -ForegroundColor Red
     [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
