@@ -74,9 +74,12 @@
 
   // ── Subset dump ──────────────────────────────────────────────────────────
   "subset": {
-    // Percentage of root-table rows to sample (0 = all rows).
+    // Percentage of rows to include (0 = all rows). Selects root rows;
     // FK closure may include additional related rows, so output can exceed this percentage.
     "percent": 0,
+
+    // Hard cap on rows exported per table during subset planning (0 = unlimited).
+    "max_rows_per_table": 0,
 
     // JSON seed file path for relationship-aware subset dumps.
     "seed_file": ""

@@ -17,14 +17,14 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
-func skipIfPgDumpMajorMismatch(t *testing.T, db *sql.DB) {
+func requirePgDumpMajorMatch(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if _, err := lookPath("pg_dump"); err != nil {
-		t.Skip("pg_dump not on PATH")
+		t.Fatal("pg_dump not on PATH")
 	}
 	dumpOut, err := pgDumpVersion()
 	if err != nil {
-		t.Skipf("pg_dump --version: %v", err)
+		t.Fatalf("pg_dump --version: %v", err)
 	}
 	dumpMajor, err := parsePgDumpMajor(dumpOut)
 	if err != nil {
@@ -39,7 +39,7 @@ func skipIfPgDumpMajorMismatch(t *testing.T, db *sql.DB) {
 		t.Fatalf("parse server major: %v", err)
 	}
 	if dumpMajor != serverMajor {
-		t.Skipf("pg_dump major %d != server major %d", dumpMajor, serverMajor)
+		t.Fatalf("pg_dump major %d != server major %d", dumpMajor, serverMajor)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestCloneRoundTrip(t *testing.T) {
 	if _, err := srcDB.ExecContext(context.Background(), `INSERT INTO tbl (c) VALUES ('v1'), ('v2')`); err != nil {
 		t.Fatalf("insert data: %v", err)
 	}
-	skipIfPgDumpMajorMismatch(t, srcDB)
+	requirePgDumpMajorMatch(t, srcDB)
 
 	// Run clone.
 	if _, err := adminDB.ExecContext(context.Background(), fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, cloneName)); err != nil {
@@ -271,7 +271,7 @@ func TestCloneRoundTripSchemaReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen source: %v", err)
 	}
-	skipIfPgDumpMajorMismatch(t, srcDB)
+	requirePgDumpMajorMatch(t, srcDB)
 	_ = srcDB.Close()
 
 	if err := Run(ctx, Options{
@@ -427,7 +427,7 @@ func TestCloneRoundTripCopyStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen source: %v", err)
 	}
-	skipIfPgDumpMajorMismatch(t, srcDB)
+	requirePgDumpMajorMatch(t, srcDB)
 	_ = srcDB.Close()
 
 	if err := Run(ctx, Options{
@@ -509,7 +509,7 @@ func TestPreflightSchemaReplayLive(t *testing.T) {
 		t.Fatalf("create table: %v", err)
 	}
 
-	skipIfPgDumpMajorMismatch(t, srcDB)
+	requirePgDumpMajorMatch(t, srcDB)
 
 	if err := Preflight(ctx, Options{
 		SourceDSN:  srcDSN,
@@ -652,7 +652,7 @@ func TestRunCloneWithDotenvProfile(t *testing.T) {
 	if _, err := srcDB.ExecContext(ctx, `INSERT INTO t (val) VALUES ('hello')`); err != nil {
 		t.Fatalf("insert data: %v", err)
 	}
-	skipIfPgDumpMajorMismatch(t, srcDB)
+	requirePgDumpMajorMatch(t, srcDB)
 	_ = srcDB.Close()
 
 	if err := Run(ctx, Options{

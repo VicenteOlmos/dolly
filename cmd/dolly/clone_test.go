@@ -1385,7 +1385,9 @@ func TestRunCloneJSONErrorWrap(t *testing.T) {
 
 	origLoadConfig := cloneLoadConfig
 	cloneLoadConfig = func(path string) (*config.Config, error) {
-		return config.DefaultConfig(), nil
+		cfg := config.DefaultConfig()
+		cfg.Sanitization.Enabled = true // avoid unsanitized stderr guardrail mixing with JSON error line
+		return cfg, nil
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
@@ -1464,5 +1466,88 @@ func TestRunCloneJSONNilSchemas(t *testing.T) {
 	}
 	if result.Schemas == nil {
 		t.Fatal("schemas must be empty array [], not null")
+	}
+}
+
+func TestRunCloneExecuteStderrGuardrails(t *testing.T) {
+	origRun := cloneRun
+	cloneRun = func(context.Context, clone.Options) error { return nil }
+	t.Cleanup(func() { cloneRun = origRun })
+
+	tests := []struct {
+		name       string
+		cfg        func(*config.Config)
+		flags      cloneFlags
+		strategy   string
+		targetURL  string
+		wantSubstr []string
+		wantAbsent []string
+	}{
+		{
+			name: "unsanitized disabled sanitization",
+			cfg: func(c *config.Config) {
+				c.Sanitization.Enabled = false
+			},
+			wantSubstr: []string{"warning: clone will copy unsanitized"},
+		},
+		{
+			name: "unsanitized template strategy",
+			cfg: func(c *config.Config) {
+				c.Sanitization.Enabled = true
+			},
+			strategy:   "template",
+			wantSubstr: []string{"warning: clone will copy unsanitized"},
+		},
+		{
+			name: "skip_create warning",
+			cfg: func(c *config.Config) {
+				c.Clone.SkipCreate = true
+			},
+			wantSubstr: []string{"warning: skip_create"},
+		},
+		{
+			name: "replace yes target info",
+			cfg: func(c *config.Config) {
+				c.Clone.Replace = true
+			},
+			flags:      cloneFlags{Yes: true},
+			targetURL:  "postgres://u:p@h/target_db",
+			wantSubstr: []string{"info: target database: target_db"},
+		},
+		{
+			name: "sanitized schema-replay no unsanitized warning",
+			cfg: func(c *config.Config) {
+				c.Sanitization.Enabled = true
+			},
+			wantAbsent: []string{"warning: clone will copy unsanitized"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			if tt.cfg != nil {
+				tt.cfg(cfg)
+			}
+			strategy := tt.strategy
+			if strategy == "" {
+				strategy = "schema-replay"
+			}
+			stderr := captureStderr(func() {
+				if err := runCloneExecute(context.Background(), tt.flags, cfg, "postgres://u:p@h/src", "clone_x", tt.targetURL, nil, strategy); err != nil {
+					t.Fatalf("runCloneExecute: %v", err)
+				}
+			})
+			for _, sub := range tt.wantSubstr {
+				if !strings.Contains(stderr, sub) {
+					t.Fatalf("stderr = %q, want containing %q", stderr, sub)
+				}
+			}
+			for _, sub := range tt.wantAbsent {
+				if strings.Contains(stderr, sub) {
+					t.Fatalf("stderr = %q, want absent %q", stderr, sub)
+				}
+			}
+		})
 	}
 }

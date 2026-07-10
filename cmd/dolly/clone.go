@@ -364,6 +364,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		if !flags.Yes {
 			return errors.New("clone with config clone.replace=true truncates the target; pass --yes to confirm")
 		}
+		fmt.Fprintf(os.Stderr, "info: target database: %s\n", databaseFromDSN(targetURL))
 		restoreOpts = append(restoreOpts, restore.WithReplace())
 	}
 	if cfg.Clone.RestoreOnConflict != "" && cfg.Clone.RestoreOnConflict != "error" {
@@ -386,6 +387,13 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 	targetDir := cfg.Clone.TargetDir
 	if flags.TargetDir != "" {
 		targetDir = flags.TargetDir
+	}
+
+	if !cfg.Sanitization.Enabled || strategy == "template" || strategy == "logical-stream" || strategy == "physical-backup" {
+		fmt.Fprintf(os.Stderr, "warning: clone will copy unsanitized data (strategy=%s, sanitization=%v)\n", strategy, cfg.Sanitization.Enabled)
+	}
+	if cfg.Clone.SkipCreate {
+		fmt.Fprintf(os.Stderr, "warning: skip_create may leave partial state on the existing target database if the clone fails\n")
 	}
 
 	opts := clone.Options{

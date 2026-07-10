@@ -219,6 +219,37 @@ func TestIntegrationRestoreWithoutTransaction(t *testing.T) {
 	}
 }
 
+func TestIntegrationLoadTableCopy(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := integrationDump(t, conn)
+	ctx := context.Background()
+
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncateFixtureData(t, conn, ctx)
+
+	for _, table := range meta.Tables {
+		if table.Name != "departments" {
+			continue
+		}
+		if err := loadTableCopy(ctx, os.Getenv(pgintegration.EnvDSN), table, ndjsonPath(dir, table.Name)); err != nil {
+			t.Fatal(err)
+		}
+
+		var count int
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM departments`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 4 {
+			t.Fatalf("departments count = %d, want 4", count)
+		}
+		return
+	}
+	t.Fatal("departments missing from dump metadata")
+}
+
 func TestIntegrationRestoreExtraTargetColumn(t *testing.T) {
 	conn := openIntegrationDB(t)
 	dir := integrationDump(t, conn)

@@ -142,6 +142,9 @@ func runRestore(args []string) (err error) {
 	if err := restorePingContext(db, ctx); err != nil {
 		return fmt.Errorf("ping database: %w", err)
 	}
+	if flags.Replace && flags.Yes {
+		fmt.Fprintf(os.Stderr, "info: target database: %s\n", databaseFromDSN(dsn))
+	}
 
 	var opts []restore.Option
 	if flags.Replace {

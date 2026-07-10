@@ -39,6 +39,9 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install PostgreSQL 16 client tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+
       - name: Resolve release version
         id: version
         run: |

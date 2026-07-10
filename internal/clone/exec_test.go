@@ -273,8 +273,48 @@ func TestOSCommandRunnerPipeSourceStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "src-err") {
-		t.Fatalf("stderr = %q, want it to contain 'src-err'", buf.String())
+	if buf.String() != "" {
+		t.Fatalf("stderr = %q, want empty (captured, not streamed)", buf.String())
+	}
+}
+
+func TestOSCommandRunnerRunFailureIncludesRedactedStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows")
+	}
+	if testing.Short() {
+		t.Skip("skipping external command test in short mode")
+	}
+
+	runner := OSCommandRunner{}
+	err := runner.Run(context.Background(), "sh", "-c", "echo 'password=supersecret' >&2; exit 1")
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "password=***") {
+		t.Fatalf("error = %q, want redacted password", msg)
+	}
+	if strings.Contains(msg, "supersecret") {
+		t.Fatalf("error = %q, secret leaked", msg)
+	}
+}
+
+func TestOSCommandRunnerPipeFailureIncludesStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows")
+	}
+	if testing.Short() {
+		t.Skip("skipping external command test in short mode")
+	}
+
+	runner := OSCommandRunner{}
+	err := runner.Pipe(context.Background(), "sh", []string{"-c", "echo boom >&2; exit 1"}, "cat", nil)
+	if err == nil {
+		t.Fatal("expected source failure")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error = %q, want captured stderr", err.Error())
 	}
 }
 

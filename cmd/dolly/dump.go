@@ -96,6 +96,27 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 	return flags, nil
 }
 
+func applySubsetLimits(limits dump.SubsetLimits, flags dumpFlags, cfg *config.Config) dump.SubsetLimits {
+	if flags.MaxDepth > 0 {
+		limits.MaxDepth = flags.MaxDepth
+	}
+	if flags.MaxTables > 0 {
+		limits.MaxTables = flags.MaxTables
+	}
+	if flags.MaxRows > 0 {
+		limits.MaxRows = flags.MaxRows
+	}
+	if flags.MaxRowsPerTable > 0 {
+		limits.MaxRowsPerTable = flags.MaxRowsPerTable
+	} else if cfg.Subset.MaxRowsPerTable > 0 {
+		limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
+	}
+	if flags.MaxInListSize > 0 {
+		limits.MaxInListSize = flags.MaxInListSize
+	}
+	return limits
+}
+
 func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error) {
 	var opts []dump.Option
 	if flags.NoTransaction {
@@ -167,23 +188,7 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 			return nil, err
 		}
 		subCfg.Limits = dump.ApplySubsetLimitDefaults(subCfg.Limits)
-		if flags.MaxDepth > 0 {
-			subCfg.Limits.MaxDepth = flags.MaxDepth
-		}
-		if flags.MaxTables > 0 {
-			subCfg.Limits.MaxTables = flags.MaxTables
-		}
-		if flags.MaxRows > 0 {
-			subCfg.Limits.MaxRows = flags.MaxRows
-		}
-		if flags.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = flags.MaxRowsPerTable
-		} else if cfg.Subset.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
-		}
-		if flags.MaxInListSize > 0 {
-			subCfg.Limits.MaxInListSize = flags.MaxInListSize
-		}
+		subCfg.Limits = applySubsetLimits(subCfg.Limits, flags, cfg)
 		opts = append(opts, dump.WithSubset(subCfg))
 	}
 
@@ -195,23 +200,7 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 			Percent: effectivePercent,
 			Limits:  dump.DefaultSubsetLimits(),
 		}
-		if flags.MaxDepth > 0 {
-			subCfg.Limits.MaxDepth = flags.MaxDepth
-		}
-		if flags.MaxTables > 0 {
-			subCfg.Limits.MaxTables = flags.MaxTables
-		}
-		if flags.MaxRows > 0 {
-			subCfg.Limits.MaxRows = flags.MaxRows
-		}
-		if flags.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = flags.MaxRowsPerTable
-		} else if cfg.Subset.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
-		}
-		if flags.MaxInListSize > 0 {
-			subCfg.Limits.MaxInListSize = flags.MaxInListSize
-		}
+		subCfg.Limits = applySubsetLimits(subCfg.Limits, flags, cfg)
 		opts = append(opts, dump.WithSubset(subCfg))
 	}
 
