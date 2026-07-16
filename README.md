@@ -4,6 +4,10 @@
 
 Local-first PostgreSQL CLI and TUI for dumping, restoring, and cloning databases.
 
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="Dolly workflow: dump PostgreSQL to ./dolly_dump/1, restore it, or clone between databases.">
+</p>
+
 Choose your path:
 
 | If you want to… | Start here |

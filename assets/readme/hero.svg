@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Dolly — local PostgreSQL dump, restore, and clone</title>
+  <desc id="desc">Dolly dumps PostgreSQL data to the local ./dolly_dump/1 artifact, restores that artifact into PostgreSQL, and can clone from a PostgreSQL source to a target. U@U identifies Dolly.</desc>
+  <rect x="0" y="0" width="1200" height="720" fill="#101820"/>
+
+  <g id="identity">
+    <text x="72" y="138" fill="#F4F1DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="112" font-weight="700">Dolly</text>
+    <text x="72" y="222" fill="#D8DEE9" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="64" font-weight="600">Local-first PostgreSQL.</text>
+    <text x="1128" y="138" text-anchor="end" fill="#74C0FC" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="64" font-weight="700">U@U</text>
+  </g>
+
+  <line x1="72" y1="252" x2="1128" y2="252" stroke="#8892A6" stroke-width="2"/>
+
+  <g id="dump">
+    <rect x="72" y="284" width="1056" height="144" rx="24" fill="#101820" stroke="#8892A6" stroke-width="3"/>
+    <text x="120" y="378" fill="#F4F1DE" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="72" font-weight="600">dolly dump</text>
+  </g>
+
+  <g id="artifact-motif">
+    <line x1="600" y1="428" x2="600" y2="430" stroke="#74C0FC" stroke-width="3"/>
+    <rect x="532" y="430" width="72" height="20" rx="8" fill="#74C0FC"/>
+    <rect x="514" y="444" width="172" height="64" rx="12" fill="#101820" stroke="#74C0FC" stroke-width="3"/>
+    <line x1="600" y1="508" x2="600" y2="526" stroke="#74C0FC" stroke-width="3"/>
+    <polyline points="592,518 600,526 608,518" fill="none" stroke="#74C0FC" stroke-width="3"/>
+  </g>
+
+  <g id="restore">
+    <rect x="72" y="526" width="1056" height="144" rx="24" fill="#101820" stroke="#8892A6" stroke-width="3"/>
+    <text x="120" y="620" fill="#F4F1DE" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="72" font-weight="600">dolly restore</text>
+  </g>
+</svg>
