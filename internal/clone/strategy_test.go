@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
@@ -23,6 +24,8 @@ type mockCommandRunner struct {
 	pipeCalls   []pipeCall
 	runErr      error
 	pipeErr     error
+	runFn       func()
+	pipeFn      func()
 	writeOutput bool
 }
 
@@ -50,6 +53,9 @@ func (m *mockCommandRunner) RunWithEnv(ctx context.Context, env map[string]strin
 		fmt.Print("run stdout")
 		fmt.Fprint(testStderr{}, "run stderr")
 	}
+	if m.runFn != nil {
+		m.runFn()
+	}
 	return m.runErr
 }
 
@@ -60,6 +66,9 @@ func (m *mockCommandRunner) Pipe(ctx context.Context, srcName string, srcArgs []
 func (m *mockCommandRunner) PipeWithEnv(ctx context.Context, env map[string]string, srcName string, srcArgs []string, dstName string, dstArgs []string) error {
 	_ = ctx
 	m.pipeCalls = append(m.pipeCalls, pipeCall{srcName: srcName, srcArgs: srcArgs, dstName: dstName, dstArgs: dstArgs})
+	if m.pipeFn != nil {
+		m.pipeFn()
+	}
 	if m.writeOutput {
 		fmt.Print("pipe stdout")
 		fmt.Fprint(testStderr{}, "pipe stderr")
@@ -626,9 +635,6 @@ func TestReplicationStrategyExecute(t *testing.T) {
 	targetDir := t.TempDir()
 	// Use a fresh empty subdir as pg_basebackup target.
 	dataDir := filepath.Join(targetDir, "data")
-	if err := os.Mkdir(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	mockRunner := &mockCommandRunner{}
 	var progress []string
@@ -692,9 +698,6 @@ func TestReplicationStrategyExecute(t *testing.T) {
 func TestReplicationStrategyProgressEvent(t *testing.T) {
 	targetDir := t.TempDir()
 	dataDir := filepath.Join(targetDir, "data")
-	if err := os.Mkdir(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	mockRunner := &mockCommandRunner{}
 	var events []ProgressEvent
@@ -733,9 +736,6 @@ func TestReplicationStrategyProgressEvent(t *testing.T) {
 func TestReplicationStrategyProgressEventPrecedesDeprecated(t *testing.T) {
 	targetDir := t.TempDir()
 	dataDir := filepath.Join(targetDir, "data")
-	if err := os.Mkdir(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	mockRunner := &mockCommandRunner{}
 	var typedEvents []ProgressEvent
@@ -767,12 +767,9 @@ func TestReplicationStrategyProgressEventPrecedesDeprecated(t *testing.T) {
 	}
 }
 
-func TestReplicationStrategyExecuteCleansUpOnFailure(t *testing.T) {
+func TestReplicationStrategyRetainsPartialTargetOnFailure(t *testing.T) {
 	targetDir := t.TempDir()
 	dataDir := filepath.Join(targetDir, "data")
-	if err := os.Mkdir(dataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	mockRunner := &mockCommandRunner{runErr: errors.New("disk full")}
 	err := (&ReplicationStrategy{Runner: mockRunner}).Execute(context.Background(), Options{
@@ -782,33 +779,56 @@ func TestReplicationStrategyExecuteCleansUpOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "pg_basebackup") {
+	if !errors.Is(err, mockRunner.runErr) || !contains(err.Error(), dataDir) || !contains(err.Error(), "remove it explicitly") {
 		t.Fatalf("error = %v", err)
 	}
-	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
-		t.Fatalf("expected target dir removed on failure, stat err = %v", err)
+	if _, err := os.Stat(dataDir); err != nil {
+		t.Fatalf("expected retained target dir, stat err = %v", err)
 	}
 }
 
-func TestReplicationStrategyExecuteCleansUpWhenStandbyConfigWriteFails(t *testing.T) {
+func TestReplicationStrategyRetainsPartialTargetOnValidationFailure(t *testing.T) {
 	targetDir := t.TempDir()
 	dataDir := filepath.Join(targetDir, "data")
-	if err := os.WriteFile(dataDir, []byte("not a directory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	err := (&ReplicationStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), Options{
+	runner := &mockCommandRunner{runFn: func() {
+		if err := os.RemoveAll(dataDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dataDir, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	err := (&ReplicationStrategy{Runner: runner}).Execute(context.Background(), Options{
 		SourceDSN: "postgres://u:p@h:5432/db",
 		TargetDir: dataDir,
 	})
-	if err == nil {
+	if err == nil || !contains(err.Error(), "postgresql.auto.conf") || !contains(err.Error(), dataDir) || !contains(err.Error(), "remove it explicitly") {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "postgresql.auto.conf") {
-		t.Fatalf("error = %v", err)
+	if info, statErr := os.Stat(dataDir); statErr != nil || info.IsDir() {
+		t.Fatalf("expected retained partial target file, info=%v err=%v", info, statErr)
 	}
-	if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
-		t.Fatalf("expected target path removed on standby config failure, stat err = %v", err)
+}
+
+func TestReplicationStrategyRejectsCallerOwnedDirectoryBeforeRun(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(target, "caller-owned")
+	if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &mockCommandRunner{}
+	err := (&ReplicationStrategy{Runner: runner}).Execute(context.Background(), Options{SourceDSN: "postgres://u:p@h:5432/db", TargetDir: target})
+	if err == nil || !contains(err.Error(), "already exists") {
+		t.Fatalf("error = %v, want existing target failure", err)
+	}
+	if len(runner.runCalls) != 0 {
+		t.Fatalf("pg_basebackup ran for caller-owned target: %v", runner.runCalls)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep" {
+		t.Fatalf("caller-owned content changed: %q, %v", data, err)
 	}
 }
 
@@ -886,13 +906,17 @@ func TestCopyStreamStrategyExecute(t *testing.T) {
 	defer func() { openCopyConn = origOpenCopy }()
 
 	origListSchemas := listSchemaNamesFunc
+	listedSchemas := false
 	listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error) {
+		listedSchemas = true
 		return []string{"public", "app"}, nil
 	}
 	defer func() { listSchemaNamesFunc = origListSchemas }()
 
 	origLoadSchemas := loadSchemasFunc
+	var loadedSchemas []string
 	loadSchemasFunc = func(ctx context.Context, q *sql.DB, schemas []string) ([]db.Table, error) {
+		loadedSchemas = append([]string(nil), schemas...)
 		return []db.Table{
 			{Schema: "public", Name: "users"},
 			{Schema: "public", Name: "orders", ForeignKeys: []db.ForeignKey{{ReferencedTableName: "users", ReferencedTableSchema: "public"}}},
@@ -920,6 +944,9 @@ func TestCopyStreamStrategyExecute(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !listedSchemas || !sliceEqual(loadedSchemas, []string{"public", "app"}) {
+		t.Fatalf("unfiltered stream schemas = %v, listed=%v", loadedSchemas, listedSchemas)
 	}
 
 	// Verify schema replay pipe was called
@@ -999,13 +1026,49 @@ func TestCopyStreamStrategySchemaReplayFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// Schema enumeration happens before schema replay in the restructured
-	// copy-stream strategy, so the error comes from listing schemas.
-	if !contains(err.Error(), "list schemas") {
-		t.Fatalf("error should mention list schemas: %v", err)
+	// A dump schema filter bypasses source-wide schema enumeration.
+	if !contains(err.Error(), "load schema") {
+		t.Fatalf("error should mention load schema: %v", err)
 	}
 	if !mentionsHostResolutionFailure(err.Error()) {
 		t.Fatalf("error should mention host resolution failure: %v", err)
+	}
+}
+
+func TestCopyStreamStrategyForwardsSchemaOptions(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts Options
+		want []string
+	}{
+		{"selected dump schemas", Options{DumpOpts: []dump.Option{dump.WithSchemas([]string{"app"})}}, []string{"app"}},
+		{"restore fallback", Options{RestoreOpts: []restore.Option{restore.WithSchemas([]string{"audit"})}}, []string{"audit"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dbConn, _, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dbConn.Close()
+			origOpenDB, origList, origLoad := sqlOpenDB, listSchemaNamesFunc, loadSchemasFunc
+			sqlOpenDB = func(string) (*sql.DB, error) { return dbConn, nil }
+			listSchemaNamesFunc = func(context.Context, *sql.DB) ([]string, error) {
+				t.Fatal("listed all schemas despite filter")
+				return nil, nil
+			}
+			var got []string
+			loadSchemasFunc = func(_ context.Context, _ *sql.DB, schemas []string) ([]db.Table, error) {
+				got = append([]string(nil), schemas...)
+				return nil, errors.New("stop")
+			}
+			defer func() { sqlOpenDB, listSchemaNamesFunc, loadSchemasFunc = origOpenDB, origList, origLoad }()
+
+			tt.opts.SourceDSN, tt.opts.CloneName, tt.opts.SkipCreate = "postgres://u:p@h:5432/source", "clone", true
+			err = (&CopyStreamStrategy{}).Execute(context.Background(), tt.opts)
+			if err == nil || !sliceEqual(got, tt.want) {
+				t.Fatalf("error=%v schemas=%v, want %v", err, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1571,6 +1634,119 @@ func TestSchemaReplayStrategyDropOnPostCreateFailure(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestSchemaReplayStrategyCleanupSurvivesCancellation(t *testing.T) {
+	origDrop := dropDatabaseFunc
+	defer func() { dropDatabaseFunc = origDrop }()
+	primary := errors.New("replay canceled")
+	var cleanupLive, cleanupBounded bool
+	dropDatabaseFunc = func(ctx context.Context, _, _ string) error {
+		cleanupLive = ctx.Err() == nil
+		_, cleanupBounded = ctx.Deadline()
+		return errors.New("cleanup failed")
+	}
+
+	origOpenDB := sqlOpenDB
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+	mock.ExpectExec(`CREATE DATABASE "db_clone"`).WillReturnResult(sqlmock.NewResult(1, 1))
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		if strings.Contains(dsn, "/postgres") {
+			return mockDB, nil
+		}
+		return nil, errors.New("source unavailable")
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &mockCommandRunner{pipeErr: primary, pipeFn: cancel}
+	err = (&SchemaReplayStrategy{Runner: runner}).Execute(ctx, Options{SourceDSN: "postgres://u:p@h:5432/source", CloneName: "db_clone"})
+	if !errors.Is(err, primary) {
+		t.Fatalf("error = %v, want primary error", err)
+	}
+	if !cleanupLive || !cleanupBounded {
+		t.Fatalf("cleanup context live=%v bounded=%v", cleanupLive, cleanupBounded)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSchemaReplayStrategyCleanupDeadlinePreservesPrimaryError(t *testing.T) {
+	origDrop := dropDatabaseFunc
+	origTimeout := schemaReplayCleanupTimeout
+	defer func() {
+		dropDatabaseFunc = origDrop
+		schemaReplayCleanupTimeout = origTimeout
+	}()
+
+	primary := errors.New("replay canceled")
+	cleanupStarted := make(chan struct{}, 1)
+	var cleanupErr error
+	schemaReplayCleanupTimeout = time.Millisecond
+	dropDatabaseFunc = func(ctx context.Context, _, _ string) error {
+		cleanupStarted <- struct{}{}
+		<-ctx.Done()
+		cleanupErr = ctx.Err()
+		return cleanupErr
+	}
+
+	origOpenDB := sqlOpenDB
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+	mock.ExpectExec(`CREATE DATABASE "db_clone"`).WillReturnResult(sqlmock.NewResult(1, 1))
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		if strings.Contains(dsn, "/postgres") {
+			return mockDB, nil
+		}
+		return nil, errors.New("source unavailable")
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+	origStderr := os.Stderr
+	os.Stderr = stderr
+	defer func() { os.Stderr = origStderr }()
+
+	err = (&SchemaReplayStrategy{Runner: &mockCommandRunner{pipeErr: primary}}).Execute(context.Background(), Options{
+		SourceDSN: "postgres://u:p@h:5432/source",
+		CloneName: "db_clone",
+	})
+	if !errors.Is(err, primary) {
+		t.Fatalf("error = %v, want primary error", err)
+	}
+	if !errors.Is(cleanupErr, context.DeadlineExceeded) {
+		t.Fatalf("cleanup error = %v, want DeadlineExceeded", cleanupErr)
+	}
+	select {
+	case <-cleanupStarted:
+	default:
+		t.Fatal("cleanup did not start")
+	}
+	if _, err := stderr.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	warning, err := io.ReadAll(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(warning), "warning: cleanup drop database") {
+		t.Fatalf("cleanup warning missing: %q", warning)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

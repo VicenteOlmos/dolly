@@ -39,6 +39,12 @@ func (s *ReplicationStrategy) Execute(ctx context.Context, opts Options) error {
 	}
 
 	runner := commandRunnerForProgress(s.Runner, opts.ProgressFn)
+	if err := os.Mkdir(opts.TargetDir, 0o700); err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("target directory already exists: %s", opts.TargetDir)
+		}
+		return fmt.Errorf("create target directory: %w", err)
+	}
 	args := []string{
 		"-h", comps.Host,
 		"-p", comps.Port,
@@ -59,22 +65,19 @@ func (s *ReplicationStrategy) Execute(ctx context.Context, opts Options) error {
 		Elapsed: time.Since(startedAt),
 	})
 	if err := runner.RunWithEnv(ctx, env, "pg_basebackup", args...); err != nil {
-		_ = os.RemoveAll(opts.TargetDir)
-		return fmt.Errorf("pg_basebackup: %w", err)
+		return fmt.Errorf("pg_basebackup: %w; retained partial target %s; operator must inspect and remove it explicitly", err, opts.TargetDir)
 	}
 
 	conninfo := BuildPrimaryConninfo(comps)
 	autoConfPath := filepath.Join(opts.TargetDir, "postgresql.auto.conf")
 	autoConf := fmt.Sprintf("primary_conninfo = %s\n", quoteLiteral(conninfo))
 	if err := os.WriteFile(autoConfPath, []byte(autoConf), 0o600); err != nil {
-		_ = os.RemoveAll(opts.TargetDir)
-		return fmt.Errorf("write postgresql.auto.conf: %w", err)
+		return fmt.Errorf("write postgresql.auto.conf: %w; retained partial target %s; operator must inspect and remove it explicitly", err, opts.TargetDir)
 	}
 
 	standbyPath := filepath.Join(opts.TargetDir, "standby.signal")
 	if err := os.WriteFile(standbyPath, nil, 0o600); err != nil {
-		_ = os.RemoveAll(opts.TargetDir)
-		return fmt.Errorf("write standby.signal: %w", err)
+		return fmt.Errorf("write standby.signal: %w; retained partial target %s; operator must inspect and remove it explicitly", err, opts.TargetDir)
 	}
 
 	reportProgressEvent(opts, ProgressEvent{

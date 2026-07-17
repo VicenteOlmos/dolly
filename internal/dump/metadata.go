@@ -1,6 +1,7 @@
 package dump
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,20 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
+
+func assignDataFiles(tables []db.Table) {
+	for i := range tables {
+		path := "data/" + hex.EncodeToString([]byte(tables[i].Schema)) + "." + hex.EncodeToString([]byte(tables[i].Name)) + ".ndjson"
+		tables[i].DataFile = &path
+	}
+}
+
+func tableDataPath(dir string, table db.Table) string {
+	if table.DataFile != nil {
+		return filepath.Join(dir, *table.DataFile)
+	}
+	return filepath.Join(dir, table.Name+".ndjson")
+}
 
 // SubsetManifest records how a subset dump was produced.
 type SubsetManifest struct {

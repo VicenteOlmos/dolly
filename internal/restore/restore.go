@@ -156,8 +156,12 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 		return err
 	}
 	meta.Tables = dump.SortTables(meta.Tables)
-	if err := verifyNDJSONFiles(meta, inputDir); err != nil {
+	dataPaths, err := verifyNDJSONFiles(meta, inputDir)
+	if err != nil {
 		return err
+	}
+	if cfg.replace && cfg.withoutTransaction {
+		return fmt.Errorf("replace requires transactions")
 	}
 
 	insertPolicy := cfg.policy
@@ -176,6 +180,9 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	}
 	if err := validateSchema(meta.Tables, target); err != nil {
 		if cfg.schemaSQL && isTableNotFoundErr(err) {
+			if !cfg.withoutTransaction {
+				return fmt.Errorf("validate schema: automatic schema application requires WithoutTransaction")
+			}
 			applyErr := restoreApplySchemaSQL(ctx, cfg.dsn, inputDir)
 			if applyErr != nil {
 				return fmt.Errorf("validate schema: %w (schema.sql apply failed: %v)", err, applyErr)
@@ -240,7 +247,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 		// not participate in the sql.DB transaction. For WITH-transaction mode,
 		// fall back to INSERT-per-row so truncation and inserts stay in the tx.
 		if cfg.withoutTransaction && canUseCopy(insertPolicy) && cfg.dsn != "" {
-			if err := loadTableCopy(ctx, cfg.dsn, table, ndjsonPath(inputDir, table.Name)); err != nil {
+			if err := loadTableCopy(ctx, cfg.dsn, table, dataPaths[i]); err != nil {
 				return err
 			}
 		} else {
@@ -255,7 +262,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 				tq = tableTx
 			}
 
-			if err := loadTable(ctx, tq, table, ndjsonPath(inputDir, table.Name), insertPolicy); err != nil {
+			if err := loadTable(ctx, tq, table, dataPaths[i], insertPolicy); err != nil {
 				if tableTx != nil {
 					_ = tableTx.Rollback()
 				}

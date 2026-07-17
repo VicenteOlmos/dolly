@@ -13,6 +13,8 @@ import (
 // lookPath is overridable for testing precondition checks.
 var lookPath = exec.LookPath
 
+var schemaReplayCleanupTimeout = 10 * time.Second
+
 // SchemaReplayStrategy replays schema via pg_dump --schema-only | psql,
 // then dumps and restores data.
 type SchemaReplayStrategy struct {
@@ -67,7 +69,9 @@ func (s *SchemaReplayStrategy) Execute(ctx context.Context, opts Options) error 
 		// Run the remaining steps; if they fail, clean up the database
 		// we just created.
 		if err := s.postCreate(ctx, opts, targetDSN, startedAt, totalSteps, step); err != nil {
-			if dropErr := dropDatabaseFunc(ctx, adminDSN, opts.CloneName); dropErr != nil {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), schemaReplayCleanupTimeout)
+			defer cancel()
+			if dropErr := dropDatabaseFunc(cleanupCtx, adminDSN, opts.CloneName); dropErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: cleanup drop database %q failed: %v (original error: %v)\n", opts.CloneName, dropErr, err)
 			}
 			return err
@@ -140,7 +144,9 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		Elapsed: time.Since(startedAt),
 	})
 	dumpOpts := opts.DumpOpts
-	if dump.InspectSchemas(dumpOpts...) == nil {
+	if schemas := SchemasFromOptions(opts); len(schemas) > 0 {
+		dumpOpts = append(append([]dump.Option(nil), dumpOpts...), dump.WithSchemas(schemas))
+	} else if dump.InspectSchemas(dumpOpts...) == nil {
 		schemaNames, err := listSchemaNamesFunc(ctx, srcDB)
 		if err != nil {
 			return fmt.Errorf("list schemas: %w", err)

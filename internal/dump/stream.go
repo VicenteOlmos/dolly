@@ -286,7 +286,11 @@ func streamTable(ctx context.Context, q querier, table db.Table, dir string, row
 	}
 	defer rows.Close()
 
-	tmpPath := filepath.Join(dir, table.Name+".ndjson.tmp")
+	finalPath := tableDataPath(dir, table)
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+	tmpPath := finalPath + ".tmp"
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create file for table %q: %w", table.Name, err)
@@ -356,7 +360,6 @@ func streamTable(ctx context.Context, q querier, table db.Table, dir string, row
 		return fmt.Errorf("close file for table %q: %w", table.Name, err)
 	}
 
-	finalPath := filepath.Join(dir, table.Name+".ndjson")
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("rename table %q: %w", table.Name, err)
 	}
@@ -392,7 +395,11 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 	}
 	defer rows.Close()
 
-	tmpPath := filepath.Join(dir, table.Name+".ndjson.tmp")
+	finalPath := tableDataPath(dir, table)
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+	tmpPath := finalPath + ".tmp"
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create file for table %q: %w", table.Name, err)
@@ -462,7 +469,6 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 		return fmt.Errorf("close file for table %q: %w", table.Name, err)
 	}
 
-	finalPath := filepath.Join(dir, table.Name+".ndjson")
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("rename table %q: %w", table.Name, err)
 	}
@@ -490,7 +496,10 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		return err
 	}
 
-	finalPath := filepath.Join(dir, table.Name+".ndjson")
+	finalPath := tableDataPath(dir, table)
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
 	ckptPath := checkpointPath(dir, table.Name)
 	tmpPath := filepath.Join(dir, table.Name+".ndjson.tmp")
 	if _, err := os.Stat(finalPath); err == nil {

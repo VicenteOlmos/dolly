@@ -100,6 +100,25 @@ func containsString(xs []string, want string) bool {
 func TestRestoreFullFlow(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureDump(t, dir)
+	dataFile := "data/7075626c6963.7573657273.ndjson"
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Tables[0].DataFile = &dataFile
+	if err := os.Mkdir(filepath.Join(dir, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(dir, "users.ndjson"), filepath.Join(dir, dataFile)); err != nil {
+		t.Fatal(err)
+	}
+	metaData, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), metaData, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -136,6 +155,61 @@ func TestRestoreFullFlow(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRestoreRejectsReplaceWithoutTransactionBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := Restore(context.Background(), sqlDB, dir, WithReplace(), WithoutTransaction()); err == nil || !strings.Contains(err.Error(), "requires transactions") {
+		t.Fatalf("error = %v, want replace transaction gate", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("replace gate mutated SQL state: %v", err)
+	}
+}
+
+func TestRestoreMissingSchemaDefaultRejectsBeforeSchemaApply(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
+	if err := Restore(context.Background(), sqlDB, dir, WithSchemaSQL()); err == nil || !strings.Contains(err.Error(), "requires WithoutTransaction") {
+		t.Fatalf("error = %v, want schema transaction gate", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreMissingSchemaWithoutTransactionAppliesSchema(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	origApply := restoreApplySchemaSQL
+	defer func() { restoreApplySchemaSQL = origApply }()
+	applied := false
+	restoreApplySchemaSQL = func(context.Context, string, string) error {
+		applied = true
+		return nil
+	}
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
+	_ = Restore(context.Background(), sqlDB, dir, WithSchemaSQL(), WithoutTransaction())
+	if !applied {
+		t.Fatal("expected explicit non-transactional schema application")
 	}
 }
 
@@ -657,8 +731,7 @@ func TestRestoreReplaceTruncatesChildrenBeforeParents(t *testing.T) {
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WillReturnRows(fksRows)
 
 	mock.ExpectBegin()
-	mock.ExpectExec(`TRUNCATE TABLE "public"\."items" CASCADE`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`TRUNCATE TABLE "public"\."categories" CASCADE`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`TRUNCATE TABLE "public"\."categories", "public"\."items"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
 		WithArgs("public").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))

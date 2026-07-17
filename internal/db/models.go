@@ -22,6 +22,7 @@ type ForeignKey struct {
 type Table struct {
 	Schema      string       `json:"schema"`
 	Name        string       `json:"name"`
+	DataFile    *string      `json:"data_file,omitempty"`
 	RowCount    *int64       `json:"row_count,omitempty"`
 	Columns     []Column     `json:"columns"`
 	ForeignKeys []ForeignKey `json:"foreign_keys"`

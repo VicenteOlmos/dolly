@@ -127,9 +127,12 @@ func (s *CopyStreamStrategy) Execute(ctx context.Context, opts Options) error {
 	}
 	defer srcDB.Close()
 
-	schemaNames, err := listSchemaNamesFunc(ctx, srcDB)
-	if err != nil {
-		return s.wrapWithCleanup("list schemas", adminDSN, opts.CloneName, err)
+	schemaNames := SchemasFromOptions(opts)
+	if len(schemaNames) == 0 {
+		schemaNames, err = listSchemaNamesFunc(ctx, srcDB)
+		if err != nil {
+			return s.wrapWithCleanup("list schemas", adminDSN, opts.CloneName, err)
+		}
 	}
 
 	tables, err := loadSchemasFunc(ctx, srcDB, schemaNames)
