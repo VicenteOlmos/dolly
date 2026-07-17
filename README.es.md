@@ -1,18 +1,26 @@
-# Dolly
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="720" alt="Dos ovejas Dolly adorables e idénticas, cada una abrazando una gran base de datos marcada DB bajo el nombre Dolly, con un arco brillante de duplicación entre ellas.">
+</p>
 
-[English](README.md)
+<h1 align="center">Dolly</h1>
 
-CLI y TUI local-first para PostgreSQL: dump, restore y clone de bases de datos.
+<p align="center">
+  CLI y TUI local-first para PostgreSQL que permiten crear volcados, restaurar y clonar bases de datos.<br>
+  <a href="README.md">English</a>
+</p>
 
-Después de instalar, el uso habitual es:
+Elija su ruta:
 
-```bash
-dolly tui
-```
+| Si desea… | Comience aquí |
+|---|---|
+| Trabajar de forma interactiva | `dolly tui` — conecte, inspeccione esquemas, cree volcados y clone desde una terminal real. |
+| Automatizar un flujo de trabajo | `dolly dump`, `dolly restore` y `dolly clone` — use un DSN o una conexión guardada. |
 
-Abre el cockpit interactivo (conectar → schemas → dump/clone). Sin flags. Necesita una terminal real (TTY). La config vive en `config.jsonc` del directorio actual.
+`dolly tui` no tiene flags, requiere una TTY y lee `config.jsonc` desde el directorio actual.
 
 ## Instalación
+
+Los instaladores descargan el recurso correspondiente de GitHub Release y lo verifican con el `checksums.txt` de esa versión antes de instalarlo.
 
 ### Linux / macOS
 
@@ -20,13 +28,13 @@ Abre el cockpit interactivo (conectar → schemas → dump/clone). Sin flags. Ne
 curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | sh
 ```
 
-Fijar versión:
+Fijar una versión:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.0 sh
 ```
 
-Ruta por defecto: `/usr/local/bin` (cambiar con `DOLLY_INSTALL_DIR`). Verifica checksums contra el `checksums.txt` del release.
+Ruta de instalación predeterminada: `/usr/local/bin`. Defina `DOLLY_INSTALL_DIR` para instalar en otra ubicación.
 
 ### Windows (PowerShell)
 
@@ -34,144 +42,134 @@ Ruta por defecto: `/usr/local/bin` (cambiar con `DOLLY_INSTALL_DIR`). Verifica c
 irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
-Fijar versión:
+Fijar una versión:
 
 ```powershell
 $env:DOLLY_VERSION="0.1.0"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
-Ruta por defecto: `%LOCALAPPDATA%\Programs\dolly\bin` (se agrega al `PATH` de usuario).
+Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el instalador la agrega al `PATH` del usuario.
 
-### Desde código fuente
+### Desde el código fuente
 
 ```bash
 go install github.com/VicenteOlmos/dolly/cmd/dolly@latest
-# o desde un checkout:
+# or from a checkout:
 go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
 ```
 
-## Primeros minutos
+## Primer flujo de trabajo
 
-1. Instalá (arriba).
-2. En un directorio de proyecto, opcionalmente creá config:
+Cree una configuración local opcional y elija la ruta interactiva o automatizable.
 
-   ```bash
-   dolly config init
-   ```
+```bash
+dolly config init
+dolly tui
+```
 
-3. Arrancá la TUI:
+Para un flujo de trabajo con la CLI, proporcione un DSN de PostgreSQL:
 
-   ```bash
-   dolly tui
-   ```
+```bash
+export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
+dolly dump --dsn "$DB" --output ./dolly_dump
+dolly dump list --output ./dolly_dump
+dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
+```
 
-4. O usá la CLI con un DSN:
+## Funcionalidades de Dolly
 
-   ```bash
-   export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
-   dolly dump --dsn "$DB" --output ./dolly_dump
-   dolly dump list --output ./dolly_dump
-   dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
-   ```
+| Comando | Propósito |
+|---|---|
+| `dolly tui` | Interfaz interactiva para conectarse, crear volcados y clonar. |
+| `dolly dump` | Exporta datos a directorios de volcado NDJSON numerados. |
+| `dolly dump --percent N` | Volcado parcial: raíces recientes más cierre de claves foráneas; la salida puede superar el `N%`. |
+| `dolly dump list` | Enumera el historial local de volcados sin conectarse a una base de datos. |
+| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. |
+| `dolly clone` | Clona con `schema-replay`, `template`, `logical-stream` o `physical-backup`. |
+| `dolly config` | Crea o inspecciona `config.jsonc` con `init` y `show`. |
+| `dolly version` | Muestra la versión de compilación. |
 
-## Comandos
+Ejecute `dolly <command> --help` para consultar los flags específicos de cada comando.
 
-| Comando | Para qué |
-|---------|----------|
-| `dolly tui` | Cockpit interactivo (conectar, dump, clone). |
-| `dolly dump` | Exportar datos a directorios NDJSON numerados. |
-| `dolly dump --percent N` | Dump parcial (raíces recientes + cierre FK; el tamaño puede superar N%). |
-| `dolly dump list` | Listar historial local de dumps (sin conectar a la DB). |
-| `dolly restore` | Cargar un dump en PostgreSQL. |
-| `dolly clone` | Clonar con una estrategia (`schema-replay`, `template`, `logical-stream`, `physical-backup`). |
-| `dolly config` | Crear/ver `config.jsonc` (`init`, `show`). |
-| `dolly version` | Imprimir versión del build. |
+**La restauración mediante TUI y CLI es diferente:** la TUI restaura desde el historial de volcados de Dolly. Para restaurar un directorio arbitrario, use `dolly restore --input <dir>`.
 
-`dolly <comando> --help` muestra los flags.
+Cuando `pg_dump` está en el `PATH`, Dolly captura `schema.sql` y lo sanitiza para permitir restauraciones compatibles entre versiones.
 
-**Restore TUI vs CLI:** la TUI restaura desde el historial de dumps de Dolly. Para un directorio arbitrario usá `dolly restore --input <dir>`.
+## Flujos de trabajo y límites habituales
 
-Si `pg_dump` está en el `PATH`, Dolly también captura `schema.sql` (sanitizado para restore entre versiones).
-
-## Recetas comunes
-
-### Dump local más chico
+### Volcado local más pequeño
 
 ```bash
 dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1000
 ```
 
-`--percent` choca con `--seed-file` y `--slow-connection`.
+`--percent` es incompatible con `--seed-file` y `--slow-connection`. El cierre de claves foráneas puede hacer que un volcado parcial supere el porcentaje solicitado.
 
-### Restore masivo más rápido (avanzado)
+### Restauración masiva más rápida — avanzado
 
-El restore por defecto es una sola transacción. Para targets vacíos de confianza / cargas muy grandes:
+La restauración predeterminada se ejecuta en una sola transacción. Para destinos vacíos de confianza o cargas muy grandes:
 
 ```bash
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 ```
 
-Si falla a mitad de camino puede quedar progreso parcial. Preferí el modo por defecto cuando necesitás rollback atómico.
+Este modo puede dejar avances parciales si falla durante el proceso. Prefiera el modo predeterminado cuando necesite una reversión atómica.
 
-### Estrategias de clone
+### Estrategias de clonación
 
-| Estrategia | Cuándo | Sanitización |
-|------------|--------|--------------|
-| `schema-replay` | Clone cross-server / dev por defecto | Sí |
-| `template` | Misma instancia Postgres, más rápido | No |
-| `logical-stream` | Copia lógica grande entre servers | No |
-| `physical-backup` | Copia del directorio del cluster | No |
+| Estrategia | Cuándo usarla | Sanitización |
+|---|---|---|
+| `schema-replay` | Clonación predeterminada entre servidores o para desarrollo | Compatible |
+| `template` | Misma instancia de PostgreSQL; más rápida | No |
+| `logical-stream` | Copia lógica grande entre servidores | No |
+| `physical-backup` | Copia del directorio de todo el clúster | No |
 
-## Configuración y conexiones guardadas
+`physical-backup` usa `pg_basebackup`, requiere privilegios de replicación y copia todo el directorio de datos del clúster en lugar de una sola base de datos. Lea [copia de seguridad física](docs/physical-backup.md) antes de usarla.
 
-```bash
-dolly config init   # escribe config.jsonc
-```
+## Seguridad
 
-Las conexiones guardadas vienen **apagadas**. Para activarlas en `config.jsonc`:
+Trate a Dolly como una herramienta de administración de bases de datos:
+
+- `restore --replace` trunca las tablas de destino antes de insertar.
+- `restore --no-transaction --yes` puede dejar un estado parcial en las tablas.
+- La sanitización se basa en patrones y solo se aplica a `dump` y `schema-replay`; no garantiza el cumplimiento normativo.
+- `template`, `logical-stream` y `physical-backup` copian datos de filas sin sanitizar.
+
+Antes de usar datos de producción o similares a producción, utilice un rol con privilegios mínimos, mantenga los DSN y los volcados fuera de Git, confirme que los destinos de operaciones destructivas sean descartables, valide manualmente la sanitización y ensaye en un entorno de preproducción. Consulte [seguridad](docs/security.md) y [copia de seguridad física](docs/physical-backup.md).
+
+## Configuración y automatización
+
+`dolly config init` escribe `config.jsonc`. Consulte [config.example.jsonc](config.example.jsonc) para ver la plantilla completa.
+
+Las conexiones guardadas están desactivadas de forma predeterminada. Actívelas explícitamente:
 
 ```jsonc
 {
   "save_connections": true,
   "connections": {
-    "scope": "xdg",   // o "project"
-    "encrypt": true   // setear DOLLY_CONNECTIONS_KEY (32 bytes en base64 estándar)
+    "scope": "xdg",   // or "project"
+    "encrypt": true    // set DOLLY_CONNECTIONS_KEY (32-byte standard base64)
   }
 }
 ```
 
-Después la CLI puede usar `--connection <nombre>` en lugar de `--dsn`.
-
-Plantilla completa: `config.example.jsonc`.
-
-## Modo agente / `--json`
+Después, los comandos de la CLI pueden usar `--connection <name>` en lugar de `--dsn`. Los almacenes con alcance de proyecto son prácticos, pero es más fácil incluirlos en un commit por accidente; los almacenes cifrados requieren `DOLLY_CONNECTIONS_KEY`, y perder esa clave impide acceder a los perfiles cifrados.
 
 `dump`, `restore`, `clone` y `version` aceptan `--json`:
 
-- Exit 0 → JSON de éxito en **stdout**
-- Exit 1 → `{"ok":false,"command":"...","error":"..."}` en **stderr**
-- `clone --json` requiere `-ff` (no interactivo)
-- `dump list --json` usa otra forma (array de historial)
+- Exit 0: JSON de éxito en **stdout**.
+- Exit 1: `{"ok":false,"command":"...","error":"..."}` en **stderr**.
+- `clone --json` requiere `-ff` para uso no interactivo.
+- `dump list --json` devuelve un array de registros del historial en lugar del sobre del comando.
 
 ```bash
 result=$(dolly dump --dsn "$DB" --output ./out --json 2>err.json) || { cat err.json; exit 1; }
 echo "$result"
 ```
 
-## Seguridad
-
-Tratá a Dolly como herramienta de admin de DB:
-
-- `restore --replace` trunca tablas destino antes de insertar.
-- `restore --no-transaction --yes` puede dejar estado parcial por tabla.
-- La sanitización es por patrones y solo en dump / `schema-replay` — no es garantía de compliance.
-- `template` y `physical-backup` copian datos sin sanitizar.
-
-Más detalle: [seguridad](docs/security.md) · [physical backup](docs/physical-backup.md)
-
 ## Desarrollo
 
-Postgres de desarrollo + round trip desde un checkout:
+Ejecute un recorrido completo con PostgreSQL local desde un checkout del código fuente:
 
 ```bash
 docker compose up -d
@@ -185,10 +183,10 @@ go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
 go test ./...
 go vet ./...
 make preflight
-make test-integration   # necesita DOLLY_TEST_PG_DSN
+make test-integration   # needs DOLLY_TEST_PG_DSN
 ```
 
-Release: [docs/release.md](docs/release.md) · [CHANGELOG.md](CHANGELOG.md)
+Notas de la versión: [docs/release.md](docs/release.md) · [CHANGELOG.md](CHANGELOG.md)
 
 ## Licencia
 
