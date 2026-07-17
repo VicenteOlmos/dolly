@@ -54,7 +54,7 @@ The strategy MUST validate replication-specific prerequisites before execution a
 
 ### Requirement: pg_basebackup execution
 
-The strategy MUST run `pg_basebackup` as a subprocess, decomposing the `SourceDSN` into host, port, user, and password flags.
+The strategy MUST run `pg_basebackup` as a subprocess, decomposing the `SourceDSN` into host, port, user, and password flags. An existing caller-owned target MUST be rejected before `pg_basebackup` starts and MUST remain untouched. If Dolly creates a partial target, the strategy MUST retain it after `pg_basebackup` or post-backup validation failure, return an error identifying the retained target for explicit cleanup, and MUST NOT invoke recursive target deletion on any failure path.
 
 #### Scenario: Successful base backup
 
@@ -69,8 +69,23 @@ The strategy MUST run `pg_basebackup` as a subprocess, decomposing the `SourceDS
 - GIVEN preflight checks pass
 - AND `pg_basebackup` exits non-zero (e.g., disk full, connection lost)
 - WHEN `ReplicationStrategy.Execute` is called
-- THEN the error wraps the `pg_basebackup` exit reason
-- AND the target directory SHOULD be cleaned up if partially written
+   - THEN the error wraps the `pg_basebackup` exit reason
+   - AND the error names the retained target for explicit cleanup
+   - AND the target directory remains available if partially written
+
+#### Scenario: Existing target is rejected before backup
+
+- GIVEN target already exists and is caller-owned
+- WHEN the strategy is executed
+- THEN it returns an error before `pg_basebackup` starts
+- AND target contents remain unchanged
+
+#### Scenario: Dolly-created target is retained after validation failure
+
+- GIVEN `pg_basebackup` succeeds and Dolly-created target fails post-backup validation
+- WHEN execution returns the validation error
+- THEN the error identifies the retained target for explicit cleanup
+- AND no recursive target deletion is invoked
 
 ### Requirement: Recovery configuration written
 

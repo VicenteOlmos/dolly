@@ -6,7 +6,7 @@ Define how `internal/dump` exports PostgreSQL public schema metadata and table r
 ## Requirements
 ### Requirement: Dump Artifact Generation
 
-The system MUST dump PostgreSQL public schema data into an output directory containing `metadata.json` and one `.ndjson` file per dumped table.
+The system MUST dump PostgreSQL public schema data into an output directory containing `metadata.json` and one `.ndjson` file per dumped table. Each table's data MUST be written to `data/<hex-UTF-8(schema)>.<hex-UTF-8(table)>.ndjson` and that relative path MUST be declared as `data_file` in table metadata. Encoding MUST be deterministic and MUST preserve distinct schema/table identities.
 
 #### Scenario: Complete dump artifacts are produced
 
@@ -15,12 +15,24 @@ The system MUST dump PostgreSQL public schema data into an output directory cont
 - THEN the output contains `metadata.json`
 - AND each discovered table has a corresponding `.ndjson` data file
 
+#### Scenario: Same table names do not collide
+
+- GIVEN tables with same name in different schemas
+- WHEN a dump is written
+- THEN each table has distinct encoded `data_file` metadata and data file
+
 #### Scenario: Empty tables are represented
 
 - GIVEN a discovered public table with no rows
 - WHEN the dump completes
 - THEN the table appears in `metadata.json`
 - AND its `.ndjson` file is present and contains no row objects
+
+#### Scenario: Legacy-independent output is deterministic
+
+- GIVEN same schema and table names across repeated dumps
+- WHEN artifacts are generated
+- THEN their relative `data_file` values are identical
 
 ### Requirement: Metadata Descriptor
 
@@ -253,4 +265,3 @@ When integration tests are enabled, the suite MUST include at least one scenario
 - WHEN `Dump` targets a non-writable or invalid output path
 - THEN it returns a non-nil error identifying the failure context
 - AND incomplete output is not treated as success
-

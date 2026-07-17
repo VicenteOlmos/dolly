@@ -8,7 +8,7 @@ Define how `internal/restore` loads PostgreSQL `public` schema row data from dum
 
 ### Requirement: Restore Artifact Input
 
-The system MUST accept a dump output directory containing `metadata.json` and one `.ndjson` file per table listed in metadata.
+The system MUST accept a dump output directory containing `metadata.json` and one `.ndjson` file per table listed in metadata. It MUST use metadata `data_file` when present, resolve it only within the dump root, and reject missing or unsafe artifacts before any mutation. If `data_file` is absent, it MUST fall back to legacy `<table>.ndjson`.
 
 #### Scenario: Complete artifact set is accepted
 
@@ -24,12 +24,25 @@ The system MUST accept a dump output directory containing `metadata.json` and on
 - THEN restore returns an error identifying the missing artifact
 - AND no row inserts are attempted
 
+#### Scenario: Unsafe artifact references fail before mutation
+
+- GIVEN metadata declares an empty, absolute, backslash-containing, non-clean, `.`, `..`, traversal, duplicate, directory, or symlink-escaping `data_file`
+- WHEN restore starts
+- THEN restore fails before truncate or insert
+- AND no schema/data mutation is attempted
+
 #### Scenario: Empty table file is valid
 
 - GIVEN a table with zero rows in metadata and an empty or whitespace-only `.ndjson` file
 - WHEN restore processes that table
 - THEN no rows are inserted for that table
 - AND restore continues with remaining tables
+
+#### Scenario: Legacy metadata remains readable
+
+- GIVEN metadata omits `data_file` and legacy `<table>.ndjson` exists
+- WHEN restore starts
+- THEN legacy file is read
 
 ### Requirement: Metadata Contract
 
@@ -131,7 +144,7 @@ The system MUST read each `.ndjson` file incrementally and MUST NOT require load
 
 ### Requirement: Conflict Policies
 
-The system MUST support configurable row-level conflict handling: `error` (default), `skip`, `upsert`, and table-level `replace` (truncate then insert).
+The system MUST support configurable row-level conflict handling: `error` (default), `skip`, `upsert`, and table-level `replace`. `replace` MUST use one transaction-bound metadata-table-only truncate without `CASCADE` and MUST fail closed when external foreign-key dependencies make that operation unsafe.
 
 #### Scenario: Default error on duplicate key
 
@@ -161,6 +174,12 @@ The system MUST support configurable row-level conflict handling: `error` (defau
 - THEN target table data is removed using truncate semantics that respect foreign-key direction (children before parents, or equivalent CASCADE)
 - AND subsequent inserts load all rows from the artifact for that table
 
+#### Scenario: External dependency rejects replace
+
+- GIVEN an external foreign key would prevent safe metadata-only truncation
+- WHEN replace begins
+- THEN restore fails before mutation
+
 #### Scenario: Replace is destructive and opt-in
 
 - GIVEN conflict policy `replace`
@@ -170,7 +189,7 @@ The system MUST support configurable row-level conflict handling: `error` (defau
 
 ### Requirement: Transactional Atomicity
 
-The system MUST wrap restore in a single read/write transaction by default and MAY allow per-table commits when opted out.
+The system MUST wrap restore in a single read/write transaction by default and MAY allow per-table commits when opted out. Default restore MUST reject automatic schema application when schema is missing because external schema execution cannot join its transaction. Explicit non-transactional mode MAY apply schema and MAY retain partial effects; default transactional failure MUST leave schema and data unchanged.
 
 #### Scenario: Default single-transaction restore
 
@@ -178,6 +197,20 @@ The system MUST wrap restore in a single read/write transaction by default and M
 - WHEN any table load or validation fails
 - THEN no partial commits from that restore run remain visible
 - AND the database state is unchanged from before the restore began
+
+#### Scenario: Default missing schema fails closed
+
+- GIVEN target schema is missing and default transactional mode is enabled
+- WHEN restore starts
+- THEN it rejects automatic schema application
+- AND schema and data remain unchanged
+
+#### Scenario: Explicit non-transactional schema application
+
+- GIVEN target schema is missing and explicit non-transactional mode is enabled
+- WHEN restore starts
+- THEN schema application MAY occur
+- AND later failure MAY leave partial effects
 
 #### Scenario: Successful transactional restore commits once
 
