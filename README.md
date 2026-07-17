@@ -1,11 +1,12 @@
-# Dolly
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="720" alt="Two identical cute Dolly sheep each hugging a large database marked DB beneath the Dolly name, with a sparkling duplication arc between them.">
+</p>
 
-[Español](README.es.md)
-
-Local-first PostgreSQL CLI and TUI for dumping, restoring, and cloning databases.
+<h1 align="center">Dolly</h1>
 
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Dolly workflow: dump PostgreSQL to ./dolly_dump/1, restore it, or clone between databases.">
+  Local-first PostgreSQL CLI and TUI for dumping, restoring, and cloning databases.<br>
+  <a href="README.es.md">Español</a>
 </p>
 
 Choose your path:
@@ -48,22 +49,6 @@ $env:DOLLY_VERSION="0.1.0"; irm https://raw.githubusercontent.com/VicenteOlmos/d
 ```
 
 Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it to your user `PATH`.
-
-### Verification failures are fail-closed
-
-Tagged releases require a downloadable `checksums.txt`, an entry for the platform archive, and SHA-256 verification. The installers stop if any of those checks cannot complete or if a checksum mismatches.
-
-For `latest`, missing or unavailable checksum verification also stops installation by default. Only opt out deliberately when the checksum file or verifier is unavailable:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_ALLOW_UNVERIFIED=1 sh
-```
-
-```powershell
-$env:DOLLY_ALLOW_UNVERIFIED="1"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
-```
-
-`DOLLY_ALLOW_UNVERIFIED=1` never accepts a checksum mismatch and does not bypass verification for pinned releases.
 
 ### From source
 
