@@ -13,9 +13,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -25,11 +25,12 @@ jobs:
       - if: runner.os != 'Windows'
         run: go test -race -count=1 ./...
 
-      # Windows: compile all packages/tests with race instrumentation, but do
-      # not execute tests until Windows-specific test portability is fixed.
-      # Full runtime suites still run on Linux/macOS. See issue #1.
       - if: runner.os == 'Windows'
-        name: Compile tests on Windows
+        name: Run Windows lock runtime tests
+        run: go test -race -count=1 ./internal/connections ./internal/dumphistory
+
+      - if: runner.os == 'Windows'
+        name: Compile remaining tests on Windows
         run: go test -race -run '^$' ./...
 
       - run: go build -buildvcs=false ./cmd/dolly
@@ -62,9 +63,9 @@ jobs:
     env:
       DOLLY_TEST_PG_DSN: postgres://dolly:dolly@127.0.0.1:5433/dolly?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true

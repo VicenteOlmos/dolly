@@ -25,26 +25,6 @@ func TestCLICatalogParityDump(t *testing.T) {
 	want := tui.FlagNames("dump")
 	sort.Strings(want)
 
-	// --slow-connection, --chunk-size, --retry-max, --retry-base are CLI-only.
-	withoutCatalog := func(names []string) []string {
-		cliOnly := map[string]bool{
-			"slow-connection": true,
-			"chunk-size":      true,
-			"retry-max":       true,
-			"retry-base":      true,
-		}
-		out := make([]string, 0, len(names))
-		for _, n := range names {
-			if cliOnly[n] {
-				continue
-			}
-			out = append(out, n)
-		}
-		sort.Strings(out)
-		return out
-	}
-
-	got = withoutCatalog(got)
 	if len(got) != len(want) {
 		t.Fatalf("dump flags: parser %v catalog %v", got, want)
 	}

@@ -4,6 +4,12 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+## 0.1.1 — 2026-07-20
+
+- **Fixed** release workflow action pinning and shell-safe release tags.
+- **Fixed** sequence synchronization for empty restored tables, physical backup target directories, Windows locks, installer replacement, dump validation, and TUI dump help.
+- **Added** root security reporting policy.
+
 ## 0.1.0 — 2026-07-10
 
 First public release.

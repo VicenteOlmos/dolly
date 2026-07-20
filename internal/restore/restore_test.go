@@ -146,7 +146,7 @@ func TestRestoreFullFlow(t *testing.T) {
 		WithArgs("public").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
 			AddRow("public", "users", "id"))
-	mock.ExpectExec(`SELECT setval\(pg_get_serial_sequence\('public\.users', 'id'\), COALESCE\(\(SELECT max\("id"\) FROM "public"\."users"\), 1\), true\)`).
+	mock.ExpectExec(`SELECT CASE WHEN m\.max_value IS NULL THEN NULL ELSE setval\(pg_get_serial_sequence\('"public"\."users"', 'id'\), m\.max_value, true\) END`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -796,6 +796,7 @@ func TestRestoreInvokesSequenceRestore(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Sequences run inside the main transaction before commit.
+	mock.ExpectQuery(`SELECT tbl_ns.nspname, tbl.relname, a.attname`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column"}).AddRow("public", "users", "id"))
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 99, true\)`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
@@ -860,6 +861,7 @@ func TestRestoreSequenceFailureRollsBackMainTransaction(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"\."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT tbl_ns.nspname, tbl.relname, a.attname`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column"}).AddRow("public", "users", "id"))
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 99, true\)`).
 		WillReturnError(errors.New("setval denied"))
 	mock.ExpectRollback()
@@ -898,7 +900,7 @@ func TestRestoreSyncSequenceFailureRollsBackMainTransaction(t *testing.T) {
 		WithArgs("public").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
 			AddRow("public", "users", "id"))
-	mock.ExpectExec(`SELECT setval\(pg_get_serial_sequence`).WillReturnError(errors.New("setval denied"))
+	mock.ExpectExec(`SELECT CASE WHEN m\.max_value IS NULL THEN NULL ELSE setval\(pg_get_serial_sequence`).WillReturnError(errors.New("setval denied"))
 	mock.ExpectRollback()
 
 	err = Restore(context.Background(), sqlDB, dir)

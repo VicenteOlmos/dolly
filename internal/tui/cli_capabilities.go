@@ -38,12 +38,16 @@ func CLICatalog() []CLICommand {
 			Short:       "export PostgreSQL database to NDJSON",
 			ShellPolicy: ShellPolicyInTUI,
 			Flags: []CLIFlag{
-				{Name: "dsn", Required: true, Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
+				{Name: "dsn", Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
 				{Name: "connection", Description: "saved connection profile name (requires save_connections in config.jsonc)"},
-				{Name: "output", Required: true, Description: "output directory"},
+				{Name: "output", Description: "output directory (or config dump.output_dir)"},
 				{Name: "no-transaction", Description: "skip read-only transaction wrapper (recommended for large subset closures)"},
 				{Name: "seed-file", Description: "JSON seed file for subset dump (omit for full-schema dump; conflicts with --percent/--slow-connection)"},
 				{Name: "percent", Description: "percent-based subset dump (1-100). Samples recent root rows, then FK closure may exceed percent. Conflicts with --seed-file/--slow-connection"},
+				{Name: "slow-connection", Description: "stream in resumable chunks; incompatible with subset modes"},
+				{Name: "chunk-size", Description: "rows per slow-connection chunk"},
+				{Name: "retry-max", Description: "slow-connection retry attempts"},
+				{Name: "retry-base", Description: "slow-connection retry delay"},
 				{Name: "max-depth", Description: "subset max FK closure depth (default 10)", SubsetOnly: true},
 				{Name: "max-tables", Description: "subset max tables in closure (default 50)", SubsetOnly: true},
 				{Name: "max-rows", Description: "subset max rows read during planning (default 100000)", SubsetOnly: true},
@@ -63,7 +67,7 @@ func CLICatalog() []CLICommand {
 			Short:       "load dump artifacts into PostgreSQL",
 			ShellPolicy: ShellPolicyCLIOnly,
 			Flags: []CLIFlag{
-				{Name: "dsn", Required: true, Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
+				{Name: "dsn", Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
 				{Name: "connection", Description: "saved connection profile name (requires save_connections in config.jsonc)"},
 				{Name: "input", Required: true, Description: "dump input directory"},
 				{Name: "on-conflict", Default: "error", Description: "row conflict policy: error, skip, upsert"},
@@ -184,7 +188,7 @@ func renderFlagLine(f CLIFlag, width int) string {
 		meta = append(meta, "default="+f.Default)
 	}
 	if f.SubsetOnly {
-		meta = append(meta, "CLI-only with --seed-file")
+		meta = append(meta, "CLI-only with --seed-file or --percent")
 	}
 	desc := f.Description
 	if len(meta) > 0 {

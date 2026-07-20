@@ -4,6 +4,7 @@ set -eu
 DOLLY_VERSION="${DOLLY_VERSION:-latest}"
 DOLLY_INSTALL_DIR="${DOLLY_INSTALL_DIR:-/usr/local/bin}"
 DOLLY_REPO="${DOLLY_REPO:-VicenteOlmos/dolly}"
+DOLLY_DOWNLOAD_TIMEOUT="${DOLLY_DOWNLOAD_TIMEOUT:-60}"
 
 die() {
 	printf '%s\n' "error: $*" >&2
@@ -23,15 +24,21 @@ download() {
 	output="$2"
 
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL "$url" -o "$output"
+		curl -fsSL --connect-timeout 10 --max-time "$DOLLY_DOWNLOAD_TIMEOUT" "$url" -o "$output"
 	elif command -v wget >/dev/null 2>&1; then
-		wget -q "$url" -O "$output"
+		wget -q --timeout="$DOLLY_DOWNLOAD_TIMEOUT" "$url" -O "$output"
 	else
 		die "curl or wget is required"
 	fi
 }
 
 cleanup() {
+	if [ -n "${tmp_target:-}" ]; then
+		rm -f "$tmp_target" || true
+	fi
+	if [ -n "${sudo_tmp_target:-}" ]; then
+		sudo rm -f "$sudo_tmp_target" || true
+	fi
 	if [ -n "${tmpdir:-}" ]; then
 		rm -rf "$tmpdir"
 	fi
@@ -151,18 +158,27 @@ if [ "$DOLLY_INSTALL_DIR" = "/usr/local/bin" ] && [ ! -w "/usr/local/bin" ]; the
 fi
 
 if [ -d "$DOLLY_INSTALL_DIR" ] && [ -w "$DOLLY_INSTALL_DIR" ]; then
-	cp "$binary_path" "$target"
-	chmod 755 "$target"
+	tmp_target="$(mktemp "$DOLLY_INSTALL_DIR/.dolly.XXXXXX")"
+	cp "$binary_path" "$tmp_target"
+	chmod 755 "$tmp_target"
+	mv -f "$tmp_target" "$target"
+	tmp_target=""
 elif mkdir -p "$DOLLY_INSTALL_DIR" 2>/dev/null && [ -w "$DOLLY_INSTALL_DIR" ]; then
-	cp "$binary_path" "$target"
-	chmod 755 "$target"
+	tmp_target="$(mktemp "$DOLLY_INSTALL_DIR/.dolly.XXXXXX")"
+	cp "$binary_path" "$tmp_target"
+	chmod 755 "$tmp_target"
+	mv -f "$tmp_target" "$target"
+	tmp_target=""
 elif [ ! -w "$DOLLY_INSTALL_DIR" ] && [ "$DOLLY_INSTALL_DIR" != "/usr/local/bin" ]; then
 	die "$DOLLY_INSTALL_DIR is not writable and is not the default; set DOLLY_INSTALL_DIR to a writable directory"
 else
 	command -v sudo >/dev/null 2>&1 || die "$DOLLY_INSTALL_DIR is not writable and sudo is not available"
 	sudo mkdir -p "$DOLLY_INSTALL_DIR"
-	sudo cp "$binary_path" "$target"
-	sudo chmod 755 "$target"
+	sudo_tmp_target="$DOLLY_INSTALL_DIR/.dolly.$$"
+	sudo cp "$binary_path" "$sudo_tmp_target"
+	sudo chmod 755 "$sudo_tmp_target"
+	sudo mv -f "$sudo_tmp_target" "$target"
+	sudo_tmp_target=""
 fi
 
 printf '%s\n' "Installed dolly to $target"

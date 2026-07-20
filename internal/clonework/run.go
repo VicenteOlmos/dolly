@@ -91,6 +91,7 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 		TargetDSN:   targetURL,
 		SkipCreate:  cfg.Clone.SkipCreate,
 		DumpDir:     cfg.Clone.DumpDir,
+		TargetDir:   cfg.Clone.TargetDir,
 		DumpOpts:    dumpOpts,
 		RestoreOpts: restoreOpts,
 		Strategy:    strategy,

@@ -58,7 +58,9 @@ type Provenance struct {
 	Seq              int      `json:"seq"`
 	BaseDir          string   `json:"base_dir"`
 	SourceDatabase   string   `json:"source_database,omitempty"`
+	SourceSignature  string   `json:"source_signature,omitempty"`
 	Schemas          []string `json:"schemas,omitempty"`
+	Sanitized        *bool    `json:"sanitization_enabled,omitempty"`
 	TableCount       int      `json:"table_count"`
 	TotalRowEstimate int64    `json:"total_row_estimate,omitempty"`
 }

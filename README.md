@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh 
 Pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.1 sh
 ```
 
 Default install path: `/usr/local/bin`. Set `DOLLY_INSTALL_DIR` to install elsewhere.
@@ -45,7 +45,7 @@ irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 Pin a release:
 
 ```powershell
-$env:DOLLY_VERSION="0.1.0"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
 Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it to your user `PATH`.

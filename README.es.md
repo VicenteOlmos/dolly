@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh 
 Fijar una versión:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.1 sh
 ```
 
 Ruta de instalación predeterminada: `/usr/local/bin`. Defina `DOLLY_INSTALL_DIR` para instalar en otra ubicación.
@@ -45,7 +45,7 @@ irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 Fijar una versión:
 
 ```powershell
-$env:DOLLY_VERSION="0.1.0"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
 Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el instalador la agrega al `PATH` del usuario.

@@ -55,7 +55,7 @@ The repo is `VicenteOlmos/dolly`; all decisions below are finalized.
 
 1. Push `main` to the public remote.
 2. Tag the first release only after CI passes on the public remote.
-3. Push an annotated tag `vX.Y.Z` (for example `v0.1.0`). The `Release` workflow runs vet, race tests, installer behavior tests, and Postgres integration before publishing assets to GitHub Releases.
+3. Push an annotated tag `vX.Y.Z` (for example `v0.1.1`). The `Release` workflow runs vet, race tests, installer behavior tests, and Postgres integration before publishing assets to GitHub Releases.
 4. Optional local rebuild: `scripts/build-release-assets.sh dist` (override metadata with `VERSION`, `COMMIT`, `DATE` env vars).
 
 The release workflow is tag-only on purpose. If a release job needs a rebuild,
@@ -96,13 +96,13 @@ Before publishing `install.sh` and `install.ps1` as a public install path:
 - [ ] Test a pinned release command on Linux and macOS:
 
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_REPO=VicenteOlmos/dolly DOLLY_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_REPO=VicenteOlmos/dolly DOLLY_VERSION=0.1.1 sh
   ```
 
 - [ ] Test a pinned release command on Windows:
 
   ```powershell
-  $env:DOLLY_VERSION="0.1.0"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
   ```
 
 - [ ] Run `dolly version` after install and confirm the printed version matches the release.
