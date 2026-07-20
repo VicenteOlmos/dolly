@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 // so a slow-connection dump can resume after interruption.
 // LastPK is stored as json.Number to keep arbitrary integer precision.
 type slowCheckpoint struct {
+	Schema    string   `json:"schema,omitempty"`
 	Table     string   `json:"table"`
 	PKColumns []string `json:"pk_columns,omitempty"`
 	PKColumn  string   `json:"pk_column,omitempty"` // legacy single-PK format; detected and discarded
@@ -30,6 +32,34 @@ type slowCheckpoint struct {
 
 func checkpointPath(dir, table string) string {
 	return filepath.Join(dir, table+".ckpt.json")
+}
+
+func slowArtifactStem(table db.Table) string {
+	return hex.EncodeToString([]byte(table.Schema)) + "." + hex.EncodeToString([]byte(table.Name))
+}
+
+func slowCheckpointPath(dir string, table db.Table) string {
+	return checkpointPath(dir, slowArtifactStem(table))
+}
+
+func rejectAmbiguousLegacySlowArtifacts(dir string, tables []db.Table) error {
+	counts := make(map[string]int, len(tables))
+	for _, table := range tables {
+		counts[table.Name]++
+	}
+	for name, count := range counts {
+		if count < 2 {
+			continue
+		}
+		for _, path := range []string{checkpointPath(dir, name), checkpointPath(dir, name) + ".tmp", filepath.Join(dir, name+".ndjson.tmp")} {
+			if _, err := os.Stat(path); err == nil {
+				return fmt.Errorf("ambiguous legacy slow artifact %q for same-named tables", path)
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("stat legacy slow artifact %q: %w", path, err)
+			}
+		}
+	}
+	return nil
 }
 
 func loadSlowCheckpoint(path string) (*slowCheckpoint, error) {
@@ -54,7 +84,7 @@ func loadSlowCheckpoint(path string) (*slowCheckpoint, error) {
 	return &slowCheckpoint{Table: leg.Table, PKColumn: leg.PKColumn}, nil
 }
 
-func saveSlowCheckpoint(path, table string, pkCols []string, lastPk []any) error {
+func saveSlowCheckpoint(path string, table db.Table, pkCols []string, lastPk []any) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -65,7 +95,7 @@ func saveSlowCheckpoint(path, table string, pkCols []string, lastPk []any) error
 	for i, v := range lastPk {
 		nums[i] = checkpointStoreValue(v)
 	}
-	cp := slowCheckpoint{Table: table, PKColumns: pkCols, LastPK: nums}
+	cp := slowCheckpoint{Schema: table.Schema, Table: table.Name, PKColumns: pkCols, LastPK: nums}
 	if err := json.NewEncoder(f).Encode(cp); err != nil {
 		f.Close()
 		return err
@@ -500,8 +530,21 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	ckptPath := checkpointPath(dir, table.Name)
-	tmpPath := filepath.Join(dir, table.Name+".ndjson.tmp")
+	ckptPath := slowCheckpointPath(dir, table)
+	tmpPath := finalPath + ".tmp"
+	legacyCkptPath := checkpointPath(dir, table.Name)
+	legacyTmpPath := filepath.Join(dir, table.Name+".ndjson.tmp")
+	legacyPaths := []string{legacyCkptPath, legacyCkptPath + ".tmp"}
+	if legacyTmpPath != tmpPath {
+		legacyPaths = append(legacyPaths, legacyTmpPath)
+	}
+	for _, legacyPath := range legacyPaths {
+		if _, err := os.Stat(legacyPath); err == nil {
+			tmpPath = legacyTmpPath
+			ckptPath = legacyCkptPath
+			break
+		}
+	}
 	if _, err := os.Stat(finalPath); err == nil {
 		// ponytail: already completed — skip re-streaming and clean stale artifacts.
 		os.Remove(ckptPath)
@@ -734,7 +777,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 			return fmt.Errorf("flush table %q: %w", table.Name, err)
 		}
 		if lastPk != nil {
-			if err := saveSlowCheckpoint(ckptPath, table.Name, pkCols, lastPk); err != nil {
+			if err := saveSlowCheckpoint(ckptPath, table, pkCols, lastPk); err != nil {
 				// ponytail: checkpoint failed after flush; truncate the chunk so
 				// the next resume cannot see duplicate rows.
 				_ = f.Truncate(offset)

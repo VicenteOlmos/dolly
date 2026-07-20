@@ -499,14 +499,9 @@ func (c *cloneScreen) renderTargetField(width int) string {
 	focused := c.sectionActive(cloneSectionForm) && c.formField == 1
 	badge := StyleMuted.Render(fmt.Sprintf("[%s]", c.draft.TargetSource))
 	displayDSN := c.draft.TargetDSN
-	if c.draft.TargetSource != TargetSourceManual {
-		displayDSN = connections.RedactMessage(displayDSN)
-	}
+	displayDSN = connections.RedactMessage(displayDSN)
 	var value string
 	switch {
-	case focused && c.draft.TargetSource == TargetSourceManual:
-		rendered := renderEditableField(c.draft.TargetDSN, c.fieldCursors[1], false, true)
-		value = StyleAccent.Render(rendered)
 	case focused:
 		value = StyleAccent.Render(displayDSN)
 	case displayDSN == "":

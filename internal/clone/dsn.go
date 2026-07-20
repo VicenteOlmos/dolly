@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 // parsePostgresURL parses a PostgreSQL connection URL. It uses net/url when the
@@ -122,8 +124,11 @@ func DecomposeDSN(dsn string) (DSNComponents, error) {
 		return DSNComponents{}, err
 	}
 	host, port := hostPort(u)
-	user := u.User.Username()
-	password, _ := u.User.Password()
+	var user, password string
+	if u.User != nil {
+		user = u.User.Username()
+		password, _ = u.User.Password()
+	}
 	return DSNComponents{
 		Host:     host,
 		Port:     port,
@@ -175,23 +180,7 @@ func hostPort(u *url.URL) (host, port string) {
 	return
 }
 
-// StripPassword returns a DSN with the password removed and the password
-// as a separate string. It also removes query parameters that pg_dump/psql
-// reject as invalid URI params (statement_timeout is a GUC, not a libpq
-// param). When the DSN cannot be parsed the original is returned as-is with
-// an empty password.
-func StripPassword(dsn string) (cleanDSN, password string) {
-	u, err := parsePostgresURL(dsn)
-	if err != nil {
-		return dsn, ""
-	}
-	pw, _ := u.User.Password()
-	if pw != "" {
-		u.User = url.User(u.User.Username())
-	}
-	// pg_dump/psql reject these as connection URI params; they're GUCs, not libpq params.
-	q := u.Query()
-	q.Del("statement_timeout")
-	u.RawQuery = q.Encode()
-	return u.String(), pw
+// StripPassword returns a subprocess-safe DSN and its PGPASSWORD value.
+func StripPassword(dsn string) (cleanDSN, password string, err error) {
+	return connections.SubprocessDSN(dsn)
 }

@@ -10,11 +10,11 @@ import (
 func validateSchema(metaTables, targetTables []db.Table) error {
 	targetByName := make(map[string]db.Table, len(targetTables))
 	for _, t := range targetTables {
-		targetByName[t.Name] = t
+		targetByName[t.Schema+"\x00"+t.Name] = t
 	}
 
 	for _, meta := range metaTables {
-		target, ok := targetByName[meta.Name]
+		target, ok := targetByName[meta.Schema+"\x00"+meta.Name]
 		if !ok {
 			return fmt.Errorf("table %q in metadata not found in target schema", meta.Name)
 		}

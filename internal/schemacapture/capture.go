@@ -33,7 +33,10 @@ func Capture(ctx context.Context, dsn, outDir string) error {
 	if _, err := lookPath("pg_dump"); err != nil {
 		return fmt.Errorf("pg_dump not on PATH, schema.sql skipped")
 	}
-	cleanDSN, password := clone.StripPassword(dsn)
+	cleanDSN, password, err := connections.SubprocessDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("clean DSN: %w", err)
+	}
 	args := []string{"--schema-only", "--no-owner", "--no-acl", cleanDSN}
 	env := clone.StripSensitiveEnv(os.Environ())
 	if password != "" {

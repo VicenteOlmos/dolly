@@ -12,6 +12,22 @@ func TestDecomposeDSN(t *testing.T) {
 	}
 }
 
+func TestDecomposeDSNNilUserinfo(t *testing.T) {
+	got, err := DecomposeDSN("postgres://localhost:5432/app?sslmode=verify-full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.User != "" || got.Password != "" {
+		t.Fatalf("credentials = %#v, want empty for environment or .pgpass authentication", got)
+	}
+}
+
+func TestStripPasswordRejectsMalformedDSN(t *testing.T) {
+	if _, _, err := StripPassword("not a postgres DSN"); err == nil {
+		t.Fatal("StripPassword accepted malformed DSN")
+	}
+}
+
 func TestBuildPrimaryConninfo(t *testing.T) {
 	got := BuildPrimaryConninfo(DSNComponents{
 		Host:     "db-host",

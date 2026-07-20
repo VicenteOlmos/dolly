@@ -62,10 +62,12 @@ Preflight does **not** connect to a target database — there is none until the 
 After a successful base backup, dolly writes:
 
 ```
-primary_conninfo = 'host=... port=... user=... password=... application_name=dolly_clone'
+primary_conninfo = 'host=... port=... user=... application_name=dolly_clone'
 ```
 
-into `postgresql.auto.conf`, and touches `standby.signal`. Start the new instance with:
+into `postgresql.auto.conf`, and touches `standby.signal`. Dolly never writes a
+DSN password there; configure a matching `~/.pgpass` entry for replication
+authentication. Start the new instance with:
 
 ```bash
 pg_ctl -D /path/to/empty/data start

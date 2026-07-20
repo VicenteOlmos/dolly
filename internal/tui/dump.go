@@ -19,20 +19,21 @@ const (
 )
 
 type dumpScreen struct {
-	draft           *DumpDraft
-	dumpStatus      *DumpStatus
-	dumpLog         *[]string
-	dumpError       *string
-	dumpResult      **DumpResultSummary
-	dumpProgress    **DumpProgressEvent
-	restoreProgress **RestoreProgressEvent
-	restoreRunning  *bool
-	hasSession      func() bool
-	nav             SectionNav
-	pathCursor      int
-	logTailOffset   int
-	fileListOffset  int
-	spinnerFrame    *int
+	draft            *DumpDraft
+	dumpStatus       *DumpStatus
+	dumpLog          *[]string
+	dumpError        *string
+	dumpResult       **DumpResultSummary
+	dumpProgress     **DumpProgressEvent
+	restoreProgress  **RestoreProgressEvent
+	restoreRunning   *bool
+	hasSession       func() bool
+	nav              SectionNav
+	pathCursor       int
+	logTailOffset    int
+	fileListOffset   int
+	spinnerFrame     *int
+	trustedSchemaSQL bool
 }
 
 func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool) ScreenModel {
@@ -157,6 +158,10 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	if d.nav.InInside() && d.nav.Section == dumpSectionHistory {
+		if k.Code == tea.KeySpace {
+			d.trustedSchemaSQL = !d.trustedSchemaSQL
+			return nil
+		}
 		switch k.String() {
 		case "r":
 			return d.requestRestore()
@@ -236,7 +241,9 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 func (d *dumpScreen) requestRestore() tea.Cmd {
 	if sel := d.draft.History.Selected(); sel != nil {
 		dir := sel.Path
-		return func() tea.Msg { return restoreConfirmRequestedMsg{inputDir: dir} }
+		trusted := d.trustedSchemaSQL
+		d.trustedSchemaSQL = false
+		return func() tea.Msg { return restoreConfirmRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted} }
 	}
 	return nil
 }
@@ -363,9 +370,14 @@ func (d *dumpScreen) pathSectionLines() []string {
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
-	hint := "(↑/↓ move · Enter/r restore · Esc back)"
+	hint := "(↑/↓ move · Space trust schema.sql · Enter/r restore · Esc back)"
 	lines = append(lines, label+" "+StyleMuted.Render(hint))
-	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines)...)
+	trusted := "[ ]"
+	if d.trustedSchemaSQL {
+		trusted = "[x]"
+	}
+	lines = append(lines, StyleMuted.Render(trusted+" Trust schema.sql for this restore"))
+	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-1)...)
 	return lines
 }
 

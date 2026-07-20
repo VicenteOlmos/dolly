@@ -21,7 +21,7 @@ type fkGraph struct {
 func buildFKGraph(tables []db.Table) (*fkGraph, error) {
 	nameSet := make(map[string]struct{}, len(tables))
 	for _, t := range tables {
-		nameSet[t.Name] = struct{}{}
+		nameSet[tableKey(t.Schema, t.Name)] = struct{}{}
 	}
 
 	g := &fkGraph{
@@ -31,26 +31,20 @@ func buildFKGraph(tables []db.Table) (*fkGraph, error) {
 
 	for _, t := range tables {
 		for _, fk := range t.ForeignKeys {
-			if fk.ReferencedTableSchema != "public" {
-				return nil, fmt.Errorf(
-					"foreign key %q on %q references schema %q (only public schema supported)",
-					fk.ConstraintName, t.Name, fk.ReferencedTableSchema,
-				)
-			}
-			if _, ok := nameSet[fk.ReferencedTableName]; !ok {
+			if _, ok := nameSet[tableKey(fk.ReferencedTableSchema, fk.ReferencedTableName)]; !ok {
 				return nil, fmt.Errorf(
 					"foreign key %q on %q references external table %q",
 					fk.ConstraintName, t.Name, fk.ReferencedTableName,
 				)
 			}
 			edge := fkEdge{
-				childTable:   t.Name,
+				childTable:   tableKey(t.Schema, t.Name),
 				childColumn:  fk.ColumnName,
-				parentTable:  fk.ReferencedTableName,
+				parentTable:  tableKey(fk.ReferencedTableSchema, fk.ReferencedTableName),
 				parentColumn: fk.ReferencedColumnName,
 			}
-			g.childToParents[t.Name] = append(g.childToParents[t.Name], edge)
-			g.parentToChildren[fk.ReferencedTableName] = append(g.parentToChildren[fk.ReferencedTableName], edge)
+			g.childToParents[edge.childTable] = append(g.childToParents[edge.childTable], edge)
+			g.parentToChildren[edge.parentTable] = append(g.parentToChildren[edge.parentTable], edge)
 		}
 	}
 	return g, nil
@@ -59,7 +53,7 @@ func buildFKGraph(tables []db.Table) (*fkGraph, error) {
 func inSchemaParentEdges(t db.Table, nameToIdx map[string]int) map[string]struct{} {
 	parents := make(map[string]struct{})
 	for _, fk := range t.ForeignKeys {
-		q := qualifiedName(fk.ReferencedTableSchema, fk.ReferencedTableName)
+		q := tableKey(fk.ReferencedTableSchema, fk.ReferencedTableName)
 		if _, ok := nameToIdx[q]; !ok {
 			continue
 		}

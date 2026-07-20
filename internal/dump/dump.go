@@ -243,6 +243,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	}
 
 	sorted := SortTables(tables)
+	if cfg.slowConnection {
+		if err := rejectAmbiguousLegacySlowArtifacts(outputDir, sorted); err != nil {
+			return err
+		}
+	}
 	assignDataFiles(sorted)
 
 	var sequences []SequenceState
@@ -366,7 +371,7 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 	byName := make(map[string]db.Table, len(tables))
 	pkCols := make(map[string]string, len(tables))
 	for _, t := range tables {
-		byName[t.Name] = t
+		byName[tableKey(t.Schema, t.Name)] = t
 	}
 
 	var included []db.Table
@@ -396,7 +401,8 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 			Total:   len(included),
 			Elapsed: time.Since(startedAt),
 		})
-		tp := plan.tables[table.Name]
+		key := tableKey(table.Schema, table.Name)
+		tp := plan.tables[key]
 		pkCol, pkErr := primaryKeyColumn(table)
 		if pkErr != nil && len(tp.compositeFKVals) == 0 {
 			return fmt.Errorf("table %q: %w", table.Name, pkErr)
@@ -404,7 +410,7 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 
 		var clauses []compiledWhere
 		if pkErr == nil {
-			pkCols[table.Name] = pkCol
+			pkCols[key] = pkCol
 			clauses, err = buildStreamClauses(pkCol, tp, subCfg.Limits)
 		} else {
 			clauses, err = buildStreamClauses("", tp, subCfg.Limits)

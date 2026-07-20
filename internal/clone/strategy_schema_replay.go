@@ -69,7 +69,7 @@ func (s *SchemaReplayStrategy) Execute(ctx context.Context, opts Options) error 
 		// Run the remaining steps; if they fail, clean up the database
 		// we just created.
 		if err := s.postCreate(ctx, opts, targetDSN, startedAt, totalSteps, step); err != nil {
-				cleanupCtx, cancel := context.WithTimeout(context.Background(), schemaReplayCleanupTimeout)
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), schemaReplayCleanupTimeout)
 			defer cancel()
 			if dropErr := dropDatabaseFunc(cleanupCtx, adminDSN, opts.CloneName); dropErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: cleanup drop database %q failed: %v (original error: %v)\n", opts.CloneName, dropErr, err)
@@ -88,8 +88,14 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 	// Replay schema: pg_dump --schema-only --no-owner --no-acl | psql target
 	runner := commandRunnerForProgress(s.Runner, opts.ProgressFn)
 
-	srcCleanDSN, srcPw := StripPassword(opts.SourceDSN)
-	tgtCleanDSN, tgtPw := StripPassword(targetDSN)
+	srcCleanDSN, srcPw, cleanErr := StripPassword(opts.SourceDSN)
+	if cleanErr != nil {
+		return fmt.Errorf("clean source DSN: %w", cleanErr)
+	}
+	tgtCleanDSN, tgtPw, cleanErr := StripPassword(targetDSN)
+	if cleanErr != nil {
+		return fmt.Errorf("clean target DSN: %w", cleanErr)
+	}
 	if srcPw != "" && tgtPw != "" && srcPw != tgtPw {
 		return fmt.Errorf("source and target DSNs have different passwords: schema-replay pipe shares a single PGPASSWORD environment; use matching credentials or connect via ~/.pgpass")
 	}

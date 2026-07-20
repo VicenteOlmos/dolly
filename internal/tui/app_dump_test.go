@@ -94,12 +94,14 @@ type recordingRestoreRunner struct {
 	inputDir string
 	schemas  []string
 	dsn      string
+	trusted  bool
 }
 
-func (r *recordingRestoreRunner) Run(_ context.Context, _ *sql.DB, inputDir string, schemas []string, dsn string, _ func(restore.ProgressEvent)) error {
+func (r *recordingRestoreRunner) Run(_ context.Context, _ *sql.DB, inputDir string, schemas []string, trusted bool, dsn string, _ func(restore.ProgressEvent)) error {
 	r.dsn = dsn
 	r.inputDir = inputDir
 	r.schemas = append([]string(nil), schemas...)
+	r.trusted = trusted
 	return nil
 }
 
@@ -108,7 +110,7 @@ type mockRestoreRunner struct {
 	blockCtx bool
 }
 
-func (m mockRestoreRunner) Run(ctx context.Context, _ *sql.DB, _ string, _ []string, _ string, _ func(restore.ProgressEvent)) error {
+func (m mockRestoreRunner) Run(ctx context.Context, _ *sql.DB, _ string, _ []string, _ bool, _ string, _ func(restore.ProgressEvent)) error {
 	if m.blockCtx {
 		<-ctx.Done()
 		return ctx.Err()
@@ -812,8 +814,37 @@ func TestAppDumpRestoreFromHistoryEnter(t *testing.T) {
 	if !strings.Contains(restoreRunner.dsn, "db_stub") {
 		t.Fatalf("restore dsn = %q, want db_stub", restoreRunner.dsn)
 	}
+	if restoreRunner.trusted {
+		t.Fatal("default history restore enabled trusted schema replay")
+	}
 	if !containsPlain(app.statusMsg, "Restore complete") {
 		t.Fatalf("statusMsg = %q, want restore complete", stripANSIForGolden(app.statusMsg))
+	}
+}
+
+func TestAppDumpRestoreFromHistoryTrustedSchema(t *testing.T) {
+	conn, err := sql.Open("pgx", "postgres://u:p@h-x/db_stub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	dumpPath := t.TempDir()
+	runner := &recordingRestoreRunner{}
+	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, runner, nil, nil, nil, false)
+	app.db, app.screen, app.cfg = conn, ScreenDump, config.DefaultConfig()
+	app.width, app.height = 80, 24
+	app.dump.History = DumpHistoryState{Entries: []DumpHistoryEntry{{Path: dumpPath, Schemas: []string{"public"}}}}
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionHistory)
+
+	app = drainUpdate(app, keyPress("", tea.KeySpace, 0))
+	app = drainUpdate(app, keyPress("", tea.KeyEnter, 0))
+	if !runner.trusted {
+		t.Fatal("selected history restore did not enable trusted schema replay")
+	}
+	if ds.trustedSchemaSQL {
+		t.Fatal("trusted schema selection persisted after request")
 	}
 }
 
@@ -937,6 +968,7 @@ func TestAppDumpRestoreDestructiveRequiresConfirm(t *testing.T) {
 	ds := app.screens[ScreenDump].(*dumpScreen)
 	enterDumpSection(ds, dumpSectionHistory)
 
+	app = drainUpdate(app, keyPress("", tea.KeySpace, 0))
 	app = drainUpdate(app, keyPress("", tea.KeyEnter, 0))
 
 	if !app.modalOpen() {
@@ -956,6 +988,9 @@ func TestAppDumpRestoreDestructiveRequiresConfirm(t *testing.T) {
 
 	if restoreRunner.inputDir != dumpPath {
 		t.Fatalf("restore inputDir = %q, want %q", restoreRunner.inputDir, dumpPath)
+	}
+	if !restoreRunner.trusted {
+		t.Fatal("confirmed restore did not preserve trusted schema selection")
 	}
 	if !containsPlain(app.statusMsg, "Restore complete") {
 		t.Fatalf("statusMsg = %q, want restore complete", stripANSIForGolden(app.statusMsg))
@@ -996,6 +1031,7 @@ func TestAppDumpRestoreDestructiveCancel(t *testing.T) {
 	ds := app.screens[ScreenDump].(*dumpScreen)
 	enterDumpSection(ds, dumpSectionHistory)
 
+	app = drainUpdate(app, keyPress("", tea.KeySpace, 0))
 	app = drainUpdate(app, keyPress("", tea.KeyEnter, 0))
 
 	if !app.modalOpen() {
@@ -1006,6 +1042,9 @@ func TestAppDumpRestoreDestructiveCancel(t *testing.T) {
 
 	if app.modalOpen() {
 		t.Fatal("expected modal dismissed after N")
+	}
+	if ds.trustedSchemaSQL {
+		t.Fatal("trusted schema selection persisted after cancellation")
 	}
 	if restoreRunner.inputDir != "" {
 		t.Fatalf("restore inputDir = %q, want empty after cancel", restoreRunner.inputDir)

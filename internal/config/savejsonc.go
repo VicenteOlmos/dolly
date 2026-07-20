@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -12,12 +13,29 @@ import (
 
 const configFileMode = 0o600
 
-func writeConfigFile(path string, data []byte) error {
-	if err := os.WriteFile(path, data, configFileMode); err != nil {
+var configRename = os.Rename
+
+// WriteConfigFile atomically replaces path with data using a same-directory 0600 temp file.
+func WriteConfigFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create config temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(configFileMode); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod config temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write config %s: %w", path, err)
 	}
-	if err := os.Chmod(path, configFileMode); err != nil {
-		return fmt.Errorf("chmod config %s: %w", path, err)
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close config temp file: %w", err)
+	}
+	if err := configRename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace config %s: %w", path, err)
 	}
 	return nil
 }
@@ -27,7 +45,7 @@ func saveConfigCleanJSON(cfg *Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return writeConfigFile(path, data)
+	return WriteConfigFile(path, data)
 }
 
 func loadSaveBaseline(path string) (base []byte, oldCfg *Config, err error) {
@@ -122,6 +140,9 @@ func saveConfigJSONC(cfg *Config, path string) error {
 		return err
 	}
 	if len(patch) == 0 {
+		if err := os.Chmod(path, configFileMode); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("chmod config %s: %w", path, err)
+		}
 		return nil
 	}
 
@@ -137,5 +158,5 @@ func saveConfigJSONC(cfg *Config, path string) error {
 	}
 
 	data := doc.Pack()
-	return writeConfigFile(path, data)
+	return WriteConfigFile(path, data)
 }

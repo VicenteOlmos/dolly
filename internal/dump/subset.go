@@ -52,7 +52,22 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 	byName := make(map[string]db.Table, len(tables))
 	pkCol := make(map[string]string, len(tables))
 	for _, t := range tables {
-		byName[t.Name] = t
+		byName[tableKey(t.Schema, t.Name)] = t
+	}
+	resolveTable := func(name string) (string, error) {
+		if _, ok := byName[name]; ok {
+			return name, nil
+		}
+		var matches []string
+		for key, table := range byName {
+			if table.Name == name {
+				matches = append(matches, key)
+			}
+		}
+		if len(matches) != 1 {
+			return "", fmt.Errorf("seed table %q is ambiguous or not selected", name)
+		}
+		return matches[0], nil
 	}
 	pkColumn := func(tableName string) (string, error) {
 		if col, ok := pkCol[tableName]; ok {
@@ -120,7 +135,8 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 			return nil, fmt.Errorf("percent subset: %w", err)
 		}
 		for _, root := range roots {
-			pk, err := pkColumn(root.table.Name)
+			rootKey := tableKey(root.table.Schema, root.table.Name)
+			pk, err := pkColumn(rootKey)
 			if err != nil {
 				return nil, fmt.Errorf("percent table %q: %w", root.table.Name, err)
 			}
@@ -144,7 +160,7 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 				return nil, err
 			}
 			for _, val := range pks {
-				if _, err := addPK(root.table.Name, val, 0); err != nil {
+				if _, err := addPK(tableKey(root.table.Schema, root.table.Name), val, 0); err != nil {
 					return nil, err
 				}
 			}
@@ -158,14 +174,18 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 	} else {
 		for _, raw := range cfg.Seeds {
 			p := normalizePredicate(raw)
+			tableKey, err := resolveTable(p.Table)
+			if err != nil {
+				return nil, err
+			}
 			cw, err := compilePredicate(p)
 			if err != nil {
 				return nil, err
 			}
-			seedByTable[p.Table] = append(seedByTable[p.Table], cw)
+			seedByTable[tableKey] = append(seedByTable[tableKey], cw)
 
-			tbl := byName[p.Table]
-			pk, err := pkColumn(p.Table)
+			tbl := byName[tableKey]
+			pk, err := pkColumn(tableKey)
 			if err != nil {
 				return nil, fmt.Errorf("seed table %q: %w", p.Table, err)
 			}
@@ -177,7 +197,7 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 				return nil, err
 			}
 			for _, pk := range pks {
-				if _, err := addPK(p.Table, pk, 0); err != nil {
+				if _, err := addPK(tableKey, pk, 0); err != nil {
 					return nil, err
 				}
 			}
@@ -301,28 +321,29 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 	// parent rows. Without this, a join table with FK to a 0-row parent would
 	// export orphan rows that violate FK on restore.
 	for _, t := range tables {
-		if _, ok := visited[t.Name]; !ok {
+		key := tableKey(t.Schema, t.Name)
+		if _, ok := visited[key]; !ok {
 			continue
 		}
 		// Only composite-PK tables use compositeWhere.
-		if _, err := pkColumn(t.Name); err == nil {
+		if _, err := pkColumn(key); err == nil {
 			continue
 		}
 		for _, fk := range t.ForeignKeys {
-			parentSet, ok := visited[fk.ReferencedTableName]
+			parentSet, ok := visited[tableKey(fk.ReferencedTableSchema, fk.ReferencedTableName)]
 			if !ok {
 				continue
 			}
-			if compositeWhere[t.Name] == nil {
-				compositeWhere[t.Name] = make(map[string][]any)
+			if compositeWhere[key] == nil {
+				compositeWhere[key] = make(map[string][]any)
 			}
-			if _, exists := compositeWhere[t.Name][fk.ColumnName]; exists {
+			if _, exists := compositeWhere[key][fk.ColumnName]; exists {
 				continue
 			}
 			// Parent is visited but this FK column wasn't populated during BFS.
 			// Add parent PKs (may be empty → AND predicate will be false → 0 rows).
 			if parentSet != nil {
-				compositeWhere[t.Name][fk.ColumnName] = append([]any{}, parentSet.vals...)
+				compositeWhere[key][fk.ColumnName] = append([]any{}, parentSet.vals...)
 			}
 		}
 	}
@@ -335,31 +356,32 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 	rowsExported := make(map[string]int, len(visited))
 	var included []db.Table
 	for _, t := range tables {
-		set, ok := visited[t.Name]
+		key := tableKey(t.Schema, t.Name)
+		set, ok := visited[key]
 		if !ok {
 			continue
 		}
 		included = append(included, t)
-		plans[t.Name] = tablePlan{
-			seedPredicates:  seedByTable[t.Name],
+		plans[key] = tablePlan{
+			seedPredicates:  seedByTable[key],
 			pkValues:        set.vals,
-			compositeFKVals: compositeWhere[t.Name],
+			compositeFKVals: compositeWhere[key],
 		}
 		if len(set.vals) > 0 {
-			rowsExported[t.Name] = len(set.vals)
-		} else if fkVals := compositeWhere[t.Name]; len(fkVals) > 0 {
+			rowsExported[key] = len(set.vals)
+		} else if fkVals := compositeWhere[key]; len(fkVals) > 0 {
 			total := 0
 			for _, vals := range fkVals {
 				total += len(vals)
 			}
-			rowsExported[t.Name] = total // ponytail: sum of FK values across all columns
+			rowsExported[key] = total // ponytail: sum of FK values across all columns
 		}
 	}
 
 	sorted := SortTables(included)
 	names := make([]string, len(sorted))
 	for i, t := range sorted {
-		names[i] = t.Name
+		names[i] = tableKey(t.Schema, t.Name)
 	}
 
 	return &planResult{
@@ -964,22 +986,22 @@ func expandPercentClosure(
 					}
 				}
 
-			inScope, err := countRowsInScope(ctx, q, child, edge.childColumn, parentPKs)
-			if err != nil {
-				return fmt.Errorf("count child rows %q: %w", edge.childTable, err)
-			}
-			if inScope == 0 {
-				// Still register the table in visited with 0 PKs so that
-				// composite-PK children with FKs to this table AND an empty
-				// IN clause (0 rows) instead of skipping the FK entirely.
-				if err := ensureTable(edge.childTable, depth+1); err != nil {
-					return err
+				inScope, err := countRowsInScope(ctx, q, child, edge.childColumn, parentPKs)
+				if err != nil {
+					return fmt.Errorf("count child rows %q: %w", edge.childTable, err)
 				}
-				if visited[edge.childTable] == nil {
-					visited[edge.childTable] = &pkSet{keys: make(map[string]struct{})}
+				if inScope == 0 {
+					// Still register the table in visited with 0 PKs so that
+					// composite-PK children with FKs to this table AND an empty
+					// IN clause (0 rows) instead of skipping the FK entirely.
+					if err := ensureTable(edge.childTable, depth+1); err != nil {
+						return err
+					}
+					if visited[edge.childTable] == nil {
+						visited[edge.childTable] = &pkSet{keys: make(map[string]struct{})}
+					}
+					continue
 				}
-				continue
-			}
 
 				budget := remainingBudget()
 				limit, err := resolveSampleLimit(inScope, percent, budget)

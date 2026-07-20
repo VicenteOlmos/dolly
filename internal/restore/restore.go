@@ -12,7 +12,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,12 +82,12 @@ func WithDSN(dsn string) Option {
 	}
 }
 
-// WithSchemaSQL enables automatic schema.sql application when target tables
-// are missing. When enabled and schema.sql exists in the input directory,
-// it is applied via psql before schema validation.
-func WithSchemaSQL() Option {
+// WithTrustedSchemaSQL permits replaying a reviewed schema.sql artifact.
+// schemasql.Sanitize is compatibility filtering, not security validation.
+func WithTrustedSchemaSQL() Option {
 	return func(c *config) {
 		c.schemaSQL = true
+		c.withoutTransaction = true
 	}
 }
 
@@ -344,7 +343,10 @@ func applySchemaSQL(ctx context.Context, dsn, inputDir string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close sanitized schema.sql: %w", err)
 	}
-	cleanDSN, password := stripPasswordDSN(dsn)
+	cleanDSN, password, err := connections.SubprocessDSN(dsn)
+	if err != nil {
+		return err
+	}
 	args := []string{"-v", "ON_ERROR_STOP=1", "-f", tmpPath, cleanDSN}
 	env := stripSensitiveEnv(os.Environ())
 	if password != "" {
@@ -371,20 +373,4 @@ func stripSensitiveEnv(environ []string) []string {
 		out = append(out, kv)
 	}
 	return out
-}
-
-// stripPasswordDSN removes password and pg_dump/psql-rejected URI params from a DSN.
-func stripPasswordDSN(dsn string) (cleanDSN, password string) {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return dsn, ""
-	}
-	pw, _ := u.User.Password()
-	if pw != "" {
-		u.User = url.User(u.User.Username())
-	}
-	q := u.Query()
-	q.Del("statement_timeout")
-	u.RawQuery = q.Encode()
-	return u.String(), pw
 }

@@ -27,15 +27,15 @@ var (
 )
 
 type restoreFlags struct {
-	DSN           string
-	Connection    string
-	Input         string
-	OnConflict    string
-	Replace       bool
-	NoTransaction bool
-	Yes           bool
-	JSON          bool
-	NoSchema      bool
+	DSN            string
+	Connection     string
+	Input          string
+	OnConflict     string
+	Replace        bool
+	NoTransaction  bool
+	Yes            bool
+	JSON           bool
+	TrustSchemaSQL bool
 }
 
 func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
@@ -49,7 +49,7 @@ func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
 	fs.BoolVar(&flags.NoTransaction, "no-transaction", false, "commit after each table")
 	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive or advanced operations (required with --replace or --no-transaction)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
-	fs.BoolVar(&flags.NoSchema, "no-schema", false, "skip automatic schema.sql application even when target tables are missing")
+	fs.BoolVar(&flags.TrustSchemaSQL, "trust-schema-sql", false, "replay reviewed schema.sql when target tables are missing")
 	return fs
 }
 
@@ -160,8 +160,8 @@ func runRestore(args []string) (err error) {
 	}
 	opts = append(opts, restore.WithDSN(dsn))
 
-	if !flags.NoSchema {
-		opts = append(opts, restore.WithSchemaSQL())
+	if flags.TrustSchemaSQL {
+		opts = append(opts, restore.WithTrustedSchemaSQL())
 	}
 
 	opts = append(opts, restore.WithProgress(func(ev restore.ProgressEvent) {

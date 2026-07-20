@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
 func TestPrimaryKeyColumnRejectsComposite(t *testing.T) {
@@ -95,10 +95,10 @@ func TestPlanSubsetTableSeed(t *testing.T) {
 	if len(plan.tables) < 2 {
 		t.Fatalf("tables = %d, want at least 2", len(plan.tables))
 	}
-	if _, ok := plan.tables["tbl_a"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "tbl_a")]; !ok {
 		t.Fatal("missing tbl_a in plan")
 	}
-	if _, ok := plan.tables["departments"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "departments")]; !ok {
 		t.Fatal("missing departments in plan")
 	}
 
@@ -210,10 +210,10 @@ func TestPlanSubsetParentSeed(t *testing.T) {
 	if len(plan.tables) != 2 {
 		t.Fatalf("tables = %d, want 2", len(plan.tables))
 	}
-	if _, ok := plan.tables["departments"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "departments")]; !ok {
 		t.Fatal("missing departments")
 	}
-	if _, ok := plan.tables["tbl_a"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "tbl_a")]; !ok {
 		t.Fatal("missing tbl_a")
 	}
 
@@ -277,10 +277,10 @@ func TestPlanSubsetNullableFKSkip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := plan.tables["departments"]; ok {
+	if _, ok := plan.tables[tableKey("public", "departments")]; ok {
 		t.Fatal("departments should not be included when FK is NULL")
 	}
-	if _, ok := plan.tables["tbl_a"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "tbl_a")]; !ok {
 		t.Fatal("missing tbl_a")
 	}
 
@@ -410,7 +410,7 @@ func TestPlanSubsetTextPKIdentity(t *testing.T) {
 		t.Fatalf("tables = %d, want 2", len(plan.tables))
 	}
 
-	codesPlan := plan.tables["codes"]
+	codesPlan := plan.tables[tableKey("public", "codes")]
 	if len(codesPlan.pkValues) != 1 || codesPlan.pkValues[0] != "001" {
 		t.Fatalf("codes pk = %v, want [\"001\"]", codesPlan.pkValues)
 	}
@@ -478,17 +478,17 @@ func TestPlanSubsetPercentModeReachesPlan(t *testing.T) {
 	if len(plan.tables) < 2 {
 		t.Fatalf("tables = %d, want at least 2", len(plan.tables))
 	}
-	if _, ok := plan.tables["tbl_a"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "tbl_a")]; !ok {
 		t.Fatal("missing tbl_a in plan")
 	}
-	if _, ok := plan.tables["departments"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "departments")]; !ok {
 		t.Fatal("missing departments in plan")
 	}
 	// Verify rows_exported has both tables.
-	if plan.rowsExported["tbl_a"] == 0 {
+	if plan.rowsExported[tableKey("public", "tbl_a")] == 0 {
 		t.Fatal("expected rows for tbl_a")
 	}
-	if plan.rowsExported["departments"] == 0 {
+	if plan.rowsExported[tableKey("public", "departments")] == 0 {
 		t.Fatal("expected rows for departments")
 	}
 }
@@ -586,11 +586,11 @@ func TestPlanSubsetPercentJoinTableChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	// projects must be in plan (as root).
-	if _, ok := plan.tables["projects"]; !ok {
+	if _, ok := plan.tables[tableKey("public", "projects")]; !ok {
 		t.Fatal("missing projects in plan")
 	}
 	// project_members must be in plan (as composite-PK child).
-	pm, ok := plan.tables["project_members"]
+	pm, ok := plan.tables[tableKey("public", "project_members")]
 	if !ok {
 		t.Fatal("missing project_members in plan — composite-PK join table was skipped")
 	}
@@ -606,8 +606,8 @@ func TestPlanSubsetPercentJoinTableChild(t *testing.T) {
 	for _, vals := range pm.compositeFKVals {
 		totalFK += len(vals)
 	}
-	if plan.rowsExported["project_members"] != totalFK {
-		t.Fatalf("rowsExported = %d, want %d", plan.rowsExported["project_members"], totalFK)
+	if plan.rowsExported[tableKey("public", "project_members")] != totalFK {
+		t.Fatalf("rowsExported = %d, want %d", plan.rowsExported[tableKey("public", "project_members")], totalFK)
 	}
 }
 
@@ -740,7 +740,7 @@ func TestPlanSubsetMultiFKJoinTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pm, ok := plan.tables["project_members"]
+	pm, ok := plan.tables[tableKey("public", "project_members")]
 	if !ok {
 		t.Fatal("missing project_members in plan")
 	}
@@ -993,7 +993,7 @@ func TestPlanSubsetPercentChildSampling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items := plan.tables["order_items"]
+	items := plan.tables[tableKey("public", "order_items")]
 	if len(items.pkValues) != 10 {
 		t.Fatalf("order_items pk count = %d, want 10", len(items.pkValues))
 	}
@@ -1072,7 +1072,7 @@ func TestPlanSubsetMaxRowsPerTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items := plan.tables["order_items"]
+	items := plan.tables[tableKey("public", "order_items")]
 	if len(items.pkValues) != 5 {
 		t.Fatalf("order_items pk count = %d, want 5", len(items.pkValues))
 	}

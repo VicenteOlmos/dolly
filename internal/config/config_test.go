@@ -220,6 +220,47 @@ func TestBootstrapConfigWrites0600(t *testing.T) {
 	}
 }
 
+func TestSaveConfigTightensExistingFilePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.jsonc")
+	if err := os.WriteFile(path, []byte(`{"clone":{"strategy":"template"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfig(DefaultConfig(), path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 0600", got)
+	}
+}
+
+func TestSaveConfigNoopTightensExistingFilePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.jsonc")
+	if err := os.WriteFile(path, DefaultTemplate(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 0600", got)
+	}
+}
+
 func TestBootstrapConfig_idempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.jsonc")
@@ -259,7 +300,7 @@ func TestSaveConfig(t *testing.T) {
 
 		orig := DefaultConfig()
 		orig.DB.StatementTimeout = "5min" // template default — match what gets round-tripped
-		orig.Clone.Schemas = []string{} // match JSON "schemas": [] after template-based save
+		orig.Clone.Schemas = []string{}   // match JSON "schemas": [] after template-based save
 		orig.Clone.Strategy = "template"
 		orig.Env.Path = ".env.custom"
 		orig.Subset.Percent = 42
@@ -304,7 +345,7 @@ func TestSaveConfig_preservesJSONCComments(t *testing.T) {
 	path := filepath.Join(dir, "config.jsonc")
 
 	// Start from the documented template so comments are present.
-	if err := os.WriteFile(path, DefaultTemplate(), 0o644); err != nil {
+	if err := os.WriteFile(path, DefaultTemplate(), 0o600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 	before, err := os.ReadFile(path)
@@ -349,11 +390,11 @@ func TestSaveConfig_preservesJSONCComments(t *testing.T) {
 	}
 }
 
-func TestSaveConfig_writes0600(t *testing.T) {
+func TestSaveConfig_preserves0600(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.jsonc")
 
-	if err := os.WriteFile(path, DefaultTemplate(), 0o644); err != nil {
+	if err := os.WriteFile(path, DefaultTemplate(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(path)
@@ -371,6 +412,32 @@ func TestSaveConfig_writes0600(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode = %o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestSaveConfigAtomicallyTightensExistingMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.jsonc")
+	if err := os.WriteFile(path, DefaultTemplate(), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Clone.Strategy = "template"
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 0600", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config.jsonc.tmp-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary config files remain: %v, %v", matches, err)
 	}
 }
 
