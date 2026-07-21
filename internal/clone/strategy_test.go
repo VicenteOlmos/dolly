@@ -1233,6 +1233,25 @@ func TestCopyTableTargetErrorPriority(t *testing.T) {
 	}
 }
 
+func TestCopyStreamCleanupUsesBoundedIndependentContext(t *testing.T) {
+	origDrop := dropDatabaseFunc
+	defer func() { dropDatabaseFunc = origDrop }()
+	primary := errors.New("source unavailable")
+	var live, bounded bool
+	dropDatabaseFunc = func(ctx context.Context, _, _ string) error {
+		live = ctx.Err() == nil
+		_, bounded = ctx.Deadline()
+		return errors.New("cleanup failed")
+	}
+	err := (&CopyStreamStrategy{}).wrapWithCleanup("open source", "postgres://admin@host/postgres", "clone", primary)
+	if !errors.Is(err, primary) {
+		t.Fatalf("error = %v, want primary error", err)
+	}
+	if !live || !bounded {
+		t.Fatalf("cleanup context live=%v bounded=%v", live, bounded)
+	}
+}
+
 func TestRestoreSequences(t *testing.T) {
 	srcDB, srcMock, err := sqlmock.New()
 	if err != nil {

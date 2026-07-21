@@ -12,8 +12,8 @@
 │   2 schema                 ││ postgres://u:%2A%2A%2 │
 │   3 dump                   ││ A@h-                  │
 │ > 4 clone                  ││ x:5432/db_stub?channe │
-│   5 config                 ││ l_binding=%2A%2A%2A&s │
-╰────────────────────────────╯│ slmode=verify-full    │
+│   5 config                 ││ l_binding=require&ssl │
+╰────────────────────────────╯│ mode=verify-full      │
                               │ Strategy: schema-     │
                               │ replay                │
                               │ Analyze: [✓] U@U~     │

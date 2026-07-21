@@ -106,15 +106,14 @@ func printRestoreUsage() {
 	fmt.Fprintln(os.Stderr, "  --no-transaction")
 	fmt.Fprintln(os.Stderr, "        advanced: commit after each table (no global rollback); requires --yes")
 	fmt.Fprintln(os.Stderr, "        Use only for trusted clean targets or very large restores; default is atomic")
-	fmt.Fprintln(os.Stderr, "  --no-schema")
-	fmt.Fprintln(os.Stderr, "        skip automatic schema.sql application (use when managing schema manually)")
+	fmt.Fprintln(os.Stderr, "  --trust-schema-sql")
+	fmt.Fprintln(os.Stderr, "        replay reviewed schema.sql when target tables are missing; requires --no-transaction --yes")
 	fmt.Fprintln(os.Stderr, "  --yes")
-	fmt.Fprintln(os.Stderr, "        confirm destructive operations (required with --replace or --no-transaction)")
+	fmt.Fprintln(os.Stderr, "        confirm destructive or advanced operations (required with --replace, --no-transaction, or --trust-schema-sql)")
 	fmt.Fprintln(os.Stderr, "  --json")
 	fmt.Fprintln(os.Stderr, "        emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "When target tables are missing and schema.sql exists in the input directory,")
-	fmt.Fprintln(os.Stderr, "it is applied automatically via psql before data load.")
+	fmt.Fprintln(os.Stderr, "schema.sql is never applied unless --trust-schema-sql is set for a reviewed artifact.")
 }
 
 func printCloneUsage() {

@@ -27,15 +27,15 @@ var (
 )
 
 type restoreFlags struct {
-	DSN           string
-	Connection    string
-	Input         string
-	OnConflict    string
-	Replace       bool
-	NoTransaction bool
-	Yes           bool
-	JSON          bool
-	NoSchema      bool
+	DSN            string
+	Connection     string
+	Input          string
+	OnConflict     string
+	Replace        bool
+	NoTransaction  bool
+	Yes            bool
+	JSON           bool
+	TrustSchemaSQL bool
 }
 
 func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
@@ -47,9 +47,9 @@ func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
 	fs.StringVar(&flags.OnConflict, "on-conflict", "error", "row conflict policy: error, skip, upsert")
 	fs.BoolVar(&flags.Replace, "replace", false, "truncate tables before insert (destructive)")
 	fs.BoolVar(&flags.NoTransaction, "no-transaction", false, "commit after each table")
-	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive or advanced operations (required with --replace or --no-transaction)")
+	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive or advanced operations (required with --replace, --no-transaction, or --trust-schema-sql)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
-	fs.BoolVar(&flags.NoSchema, "no-schema", false, "skip automatic schema.sql application even when target tables are missing")
+	fs.BoolVar(&flags.TrustSchemaSQL, "trust-schema-sql", false, "replay reviewed schema.sql when target tables are missing (requires --no-transaction --yes)")
 	return fs
 }
 
@@ -80,6 +80,9 @@ func parseRestoreFlags(args []string) (restoreFlags, error) {
 	}
 	if flags.Replace && flags.NoTransaction {
 		return flags, errors.New("--replace and --no-transaction together can leave tables empty on failure; use --replace alone (atomic truncate+restore in one transaction) or --no-transaction alone (no truncate)")
+	}
+	if flags.TrustSchemaSQL && !flags.NoTransaction {
+		return flags, errors.New("--trust-schema-sql requires --no-transaction because schema replay disables atomic data restore; pass --no-transaction --yes")
 	}
 	if flags.NoTransaction && !flags.Yes {
 		return flags, errors.New("--no-transaction commits per table with no global rollback; pass --yes to confirm (default restore is atomic)")
@@ -160,8 +163,8 @@ func runRestore(args []string) (err error) {
 	}
 	opts = append(opts, restore.WithDSN(dsn))
 
-	if !flags.NoSchema {
-		opts = append(opts, restore.WithSchemaSQL())
+	if flags.TrustSchemaSQL {
+		opts = append(opts, restore.WithTrustedSchemaSQL())
 	}
 
 	opts = append(opts, restore.WithProgress(func(ev restore.ProgressEvent) {

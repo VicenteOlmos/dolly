@@ -11,8 +11,8 @@
 │   1 connect                ││ postgres://app:%2A%2A │
 │   2 schema                 ││ %2A@db.example.com:54 │
 │   3 dump                   ││ 32/app?channel_bindin │
-│ > 4 clone                  ││ g=%2A%2A%2A&sslmode=v │
-│   5 config                 ││ erify-full            │
+│ > 4 clone                  ││ g=require&sslmode=ver │
+│   5 config                 ││ ify-full              │
 ╰────────────────────────────╯│ Strategy: schema-     │
                               │ replay                │
                               │ Analyze: [ ]          │

@@ -14,7 +14,8 @@ var unsupportedSchemaSetVars = map[string]struct{}{
 	"transaction_timeout": {},
 }
 
-// Sanitize removes SET lines for GUCs unsupported on older restore targets.
+// Sanitize removes compatibility-breaking SET lines for older restore targets.
+// It is not a security validation boundary for schema SQL.
 func Sanitize(in []byte) ([]byte, error) {
 	var out bytes.Buffer
 	sc := bufio.NewScanner(bytes.NewReader(in))

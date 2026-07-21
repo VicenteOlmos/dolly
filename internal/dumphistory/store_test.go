@@ -139,7 +139,7 @@ func TestFileStoreLoadFixesLoosePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if os.PathSeparator != '\\' && info.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode = %o, want 0600", info.Mode().Perm())
 	}
 }
@@ -158,7 +158,7 @@ func TestFileStorePersistWrites0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if os.PathSeparator != '\\' && info.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode = %o, want 0600", info.Mode().Perm())
 	}
 }

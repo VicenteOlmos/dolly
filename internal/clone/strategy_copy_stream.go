@@ -65,6 +65,8 @@ var listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error)
 // restoreSequencesFunc wraps restoreSequences for testability.
 var restoreSequencesFunc = restoreSequences
 
+var copyStreamCleanupTimeout = 10 * time.Second
+
 // CopyStreamStrategy streams table data directly from source to target
 // using pgx native COPY without intermediate NDJSON files.
 type CopyStreamStrategy struct {
@@ -153,9 +155,7 @@ func (s *CopyStreamStrategy) Execute(ctx context.Context, opts Options) error {
 	// Replay schema and stream data inside cleanup wrapper.
 	if !opts.SkipCreate {
 		if err := s.postCreate(ctx, opts, srcDB, targetDSN, sorted, startedAt, totalSteps, step); err != nil {
-			if dropErr := dropDatabaseFunc(ctx, adminDSN, opts.CloneName); dropErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: cleanup drop database %q failed: %v (original error: %v)\n", opts.CloneName, dropErr, err)
-			}
+			s.cleanup(adminDSN, opts.CloneName, err)
 			return err
 		}
 		return nil
@@ -169,10 +169,16 @@ func (s *CopyStreamStrategy) wrapWithCleanup(label, adminDSN, cloneName string, 
 	if adminDSN == "" {
 		return fmt.Errorf("%s: %w", label, err)
 	}
-	if dropErr := dropDatabaseFunc(context.Background(), adminDSN, cloneName); dropErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: cleanup drop database %q failed: %v (original error: %v)\n", cloneName, dropErr, err)
-	}
+	s.cleanup(adminDSN, cloneName, err)
 	return fmt.Errorf("%s: %w", label, err)
+}
+
+func (s *CopyStreamStrategy) cleanup(adminDSN, cloneName string, primary error) {
+	ctx, cancel := context.WithTimeout(context.Background(), copyStreamCleanupTimeout)
+	defer cancel()
+	if dropErr := dropDatabaseFunc(ctx, adminDSN, cloneName); dropErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: cleanup drop database %q failed: %v (original error: %v)\n", cloneName, dropErr, primary)
+	}
 }
 
 // postCreate handles all steps after database creation (or when SkipCreate is set).
@@ -182,8 +188,14 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 	// Replay schema using pg_dump --schema-only | psql
 	runner := commandRunnerForProgress(s.Runner, opts.ProgressFn)
 
-	srcCleanDSN, srcPw := StripPassword(opts.SourceDSN)
-	tgtCleanDSN, tgtPw := StripPassword(targetDSN)
+	srcCleanDSN, srcPw, cleanErr := StripPassword(opts.SourceDSN)
+	if cleanErr != nil {
+		return fmt.Errorf("clean source DSN: %w", cleanErr)
+	}
+	tgtCleanDSN, tgtPw, cleanErr := StripPassword(targetDSN)
+	if cleanErr != nil {
+		return fmt.Errorf("clean target DSN: %w", cleanErr)
+	}
 	if srcPw != "" && tgtPw != "" && srcPw != tgtPw {
 		return fmt.Errorf("source and target DSNs have different passwords: copy-stream pipe shares a single PGPASSWORD environment; use matching credentials or connect via ~/.pgpass")
 	}

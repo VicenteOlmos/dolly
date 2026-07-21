@@ -99,6 +99,9 @@ func TestConfigInit_forceOverwrites(t *testing.T) {
 			t.Fatalf("mode = %o, want 600", got)
 		}
 	}
+	if matches, err := filepath.Glob(".config.jsonc.tmp-*"); err != nil || len(matches) != 0 {
+		t.Fatalf("temporary config files remain: %v, %v", matches, err)
+	}
 }
 
 func TestConfigInit_helpFlag(t *testing.T) {
@@ -116,6 +119,18 @@ func TestConfigInit_helpFlag(t *testing.T) {
 		t.Fatal("-h should not create config.jsonc")
 	}
 	_ = out
+}
+
+func TestConfigInit_rejectsUnknownFlagsWithoutWriting(t *testing.T) {
+	restore := chdirTemp(t)
+	defer restore()
+
+	if err := runConfigInit([]string{"--unknown"}); err == nil {
+		t.Fatal("expected unknown flag error")
+	}
+	if _, err := os.Stat("config.jsonc"); !os.IsNotExist(err) {
+		t.Fatalf("unknown flag created config.jsonc: %v", err)
+	}
 }
 
 func captureStdout(fn func()) string {
@@ -148,6 +163,26 @@ func TestConfigShow_printsJSON(t *testing.T) {
 	}
 	if !strings.Contains(out, `"clone"`) {
 		t.Fatalf("output missing clone section: %s", out)
+	}
+}
+
+func TestConfigShow_redactsTargetURLCredentials(t *testing.T) {
+	restore := chdirTemp(t)
+	defer restore()
+
+	if err := os.WriteFile("config.jsonc", []byte(`{"clone":{"target_url":"postgres://user:secret@db.example/app?sslmode=require&token=hidden"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(func() {
+		if err := runConfigShow(nil); err != nil {
+			t.Errorf("runConfigShow: %v", err)
+		}
+	})
+	if strings.Contains(out, "secret") || strings.Contains(out, "hidden") {
+		t.Fatalf("config show leaked credential: %s", out)
+	}
+	if !strings.Contains(out, "db.example") || !strings.Contains(out, "sslmode=require") {
+		t.Fatalf("config show lost usable target details: %s", out)
 	}
 }
 

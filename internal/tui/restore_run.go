@@ -12,11 +12,13 @@ import (
 )
 
 type restoreConfirmRequestedMsg struct {
-	inputDir string
+	inputDir         string
+	trustedSchemaSQL bool
 }
 
 type restoreRequestedMsg struct {
-	inputDir string
+	inputDir         string
+	trustedSchemaSQL bool
 }
 
 type restoreProgressMsg struct {
@@ -30,12 +32,12 @@ type restoreResultMsg struct {
 
 // RestoreRunner restores a dump directory into the connected session.
 type RestoreRunner interface {
-	Run(ctx context.Context, db *sql.DB, inputDir string, schemas []string, dsn string, onProgress func(restore.ProgressEvent)) error
+	Run(ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, onProgress func(restore.ProgressEvent)) error
 }
 
 type productionRestoreRunner struct{}
 
-func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir string, schemas []string, dsn string, onProgress func(restore.ProgressEvent)) error {
+func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, onProgress func(restore.ProgressEvent)) error {
 	cfg, err := config.LoadConfig(config.ResolveConfigPath())
 	if err != nil {
 		return err
@@ -56,7 +58,9 @@ func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir str
 	if dsn != "" {
 		opts = append(opts, restore.WithDSN(dsn))
 	}
-	opts = append(opts, restore.WithSchemaSQL())
+	if trustedSchemaSQL {
+		opts = append(opts, restore.WithTrustedSchemaSQL())
+	}
 	if onProgress != nil {
 		opts = append(opts, restore.WithProgress(onProgress))
 	}
@@ -74,7 +78,7 @@ func formatRestoreProgress(ev restore.ProgressEvent) string {
 	}
 }
 
-func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inputDir string, schemas []string, dsn string) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
+func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
 	ch := make(chan tea.Msg, 32)
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
@@ -93,7 +97,7 @@ func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inpu
 			case <-ctx.Done():
 			}
 		}
-		err := runner.Run(ctx, db, inputDir, schemas, dsn, onProgress)
+		err := runner.Run(ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress)
 		ch <- restoreResultMsg{err: err}
 	}()
 	return waitRestoreCmd(ch), ch, cancel

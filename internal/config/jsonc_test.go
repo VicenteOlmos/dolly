@@ -2,6 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -162,5 +165,35 @@ func validJSON(t *testing.T, out []byte) {
 	t.Helper()
 	if !json.Valid(out) {
 		t.Fatalf("output is not valid JSON:\n%s", out)
+	}
+}
+
+func TestWriteConfigFileRenameFailurePreservesDestination(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+	if err := os.WriteFile(path, []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	const wantMode = 0o640
+	sentinel := errors.New("rename failed")
+	original := configRename
+	configRename = func(_, _ string) error { return sentinel }
+	t.Cleanup(func() { configRename = original })
+
+	err := WriteConfigFile(path, []byte("new"))
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("WriteConfigFile error = %v, want sentinel", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "old" {
+		t.Fatalf("destination = %q, %v; want old, nil", got, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != wantMode {
+		t.Fatalf("destination mode = %v, %v; want %o, nil", info.Mode(), err, wantMode)
+	}
+	staged, err := filepath.Glob(filepath.Join(dir, ".config.jsonc.tmp-*"))
+	if err != nil || len(staged) != 0 {
+		t.Fatalf("staged files = %v, %v; want none, nil", staged, err)
 	}
 }

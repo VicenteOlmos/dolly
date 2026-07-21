@@ -12,7 +12,7 @@ import (
 var redactParamRE = regexp.MustCompile(`(?i)([&?])?(` + strings.Join(allSecretKeyNames(), "|") + `)=([^\s"']*)`)
 
 // libpqKeywordRE matches libpq keyword=value pairs in arbitrary text.
-var libpqKeywordRE = regexp.MustCompile(`(?i)\b(` + strings.Join(allSecretKeyNames(), "|") + `)=([^\s"']*)`)
+var libpqKeywordRE = regexp.MustCompile(`(?i)\b(` + strings.Join(allSecretKeyNames(), "|") + `)=(?:'(?:[^'\\]|\\.)*'|[^\s"']*)`)
 
 // postgresURLRE matches PostgreSQL URL DSNs embedded in arbitrary text.
 var postgresURLRE = regexp.MustCompile(`postgres(?:ql)?://[^\s"']+`)
@@ -27,11 +27,18 @@ func RedactDSN(dsn string) string {
 	if redacted, ok := redactLibpqKeywordDSN(dsn); ok {
 		return redacted
 	}
-	u, err := url.Parse(dsn)
+	rawQueryRedacted := false
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		dsn, rawQueryRedacted = redactRawQuerySecrets(dsn)
+	}
+	u, err := parsePostgresURL(dsn)
 	if err != nil {
+		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+			return "postgresql://***"
+		}
 		return dsn
 	}
-	modified := false
+	modified := rawQueryRedacted
 
 	// Redact userinfo password.
 	if u.User != nil {
@@ -56,15 +63,41 @@ func RedactDSN(dsn string) string {
 	return u.String()
 }
 
+// redactRawQuerySecrets handles malformed query escapes before url.Values drops them.
+func redactRawQuerySecrets(dsn string) (string, bool) {
+	start := strings.IndexByte(dsn, '?')
+	if start < 0 {
+		return dsn, false
+	}
+	end := strings.IndexByte(dsn[start:], '#')
+	if end < 0 {
+		end = len(dsn)
+	} else {
+		end += start
+	}
+	parts := strings.Split(dsn[start+1:end], "&")
+	changed := false
+	for i, part := range parts {
+		key, _, ok := strings.Cut(part, "=")
+		if ok && isSecretQueryKey(key) {
+			parts[i] = key + "=***"
+			changed = true
+		}
+	}
+	if !changed {
+		return dsn, false
+	}
+	return dsn[:start+1] + strings.Join(parts, "&") + dsn[end:], true
+}
+
 var secretQueryKeys = map[string]struct{}{
-	"password":        {},
-	"pass":            {},
-	"pwd":             {},
-	"sslpassword":     {},
-	"sslcert":         {},
-	"sslkey":          {},
-	"passcode":        {},
-	"channel_binding": {},
+	"password":    {},
+	"pass":        {},
+	"pwd":         {},
+	"sslpassword": {},
+	"sslcert":     {},
+	"sslkey":      {},
+	"passcode":    {},
 }
 
 // secretSubstrings are patterns that, when found anywhere in a lowercased
@@ -112,27 +145,7 @@ func redactLibpqKeywordDSN(dsn string) (string, bool) {
 	if strings.Contains(dsn, "://") || !strings.Contains(dsn, "=") {
 		return "", false
 	}
-	fields := strings.Fields(dsn)
-	if len(fields) == 0 {
-		return "", false
-	}
-	modified := false
-	for i, f := range fields {
-		eq := strings.IndexByte(f, '=')
-		if eq <= 0 {
-			continue
-		}
-		key := f[:eq]
-		if !isSecretQueryKey(key) {
-			continue
-		}
-		fields[i] = key + "=***"
-		modified = true
-	}
-	if !modified {
-		return dsn, true
-	}
-	return strings.Join(fields, " "), true
+	return libpqKeywordRE.ReplaceAllStringFunc(dsn, redactKeyValueMatch), true
 }
 
 // RedactMessage scrubs password-like query parameters from arbitrary text.

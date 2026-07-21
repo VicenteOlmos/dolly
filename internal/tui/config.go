@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 type saveConfigRequestedMsg struct{}
@@ -474,6 +475,9 @@ func (cs *configScreen) View(width, height int) string {
 		}
 
 		val := f.Get(cfg)
+		if f.Section == "clone" && f.Label == "target_url" && !cs.editing {
+			val = connections.RedactDSN(val)
+		}
 		if val == "" {
 			val = StyleMuted.Render("(empty)")
 		}
@@ -481,7 +485,13 @@ func (cs *configScreen) View(width, height int) string {
 		var row string
 		if i == cs.cursor {
 			if cs.editing {
-				editDisplay := renderEditableField(cs.editValue, cs.editCursor, false, true)
+				editValue := cs.editValue
+				editCursor := cs.editCursor
+				if f.Section == "clone" && f.Label == "target_url" {
+					editValue = connections.RedactDSN(editValue)
+					editCursor = len(editValue)
+				}
+				editDisplay := renderEditableField(editValue, editCursor, false, true)
 				row = StyleAccent.Render("> "+f.Label) + fmt.Sprintf("%-*s %s", 28-2, "", editDisplay)
 			} else {
 				row = StyleAccent.Render("> "+f.Label) + fmt.Sprintf("%-*s %s", 28-2, "", val)

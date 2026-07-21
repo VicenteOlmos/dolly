@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
 func TestSanitizeByPattern(t *testing.T) {
@@ -101,12 +101,23 @@ func TestSanitizeByPatternCreditCard(t *testing.T) {
 	}
 }
 
+func TestSanitizeByPatternCitextPreservesNonNullRedaction(t *testing.T) {
+	columns := []db.Column{{Name: "email", DataType: "citext"}}
+	got, err := SanitizeByPattern("public", "users", columns, map[string]any{"email": "alice@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["email"] != "redacted@example.com" {
+		t.Fatalf("citext email = %v, want redacted value", got["email"])
+	}
+}
+
 func TestSanitizeByPatternNewExactNames(t *testing.T) {
 	tests := []struct {
-		colName    string
-		dataType   string
-		value      any
-		want       any
+		colName  string
+		dataType string
+		value    any
+		want     any
 	}{
 		{"user_password", "text", "hunter2", "[REDACTED]"},
 		{"auth_token", "text", "tok123", "[REDACTED]"},

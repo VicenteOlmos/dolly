@@ -115,10 +115,9 @@ func TestRedactDSN(t *testing.T) {
 			not:  []string{"mycert", "mykey"},
 		},
 		{
-			name: "channel_binding redacted",
+			name: "channel_binding preserved",
 			dsn:  "postgres://user@host/db?channel_binding=xxx&db=foo",
-			want: []string{"channel_binding=%2A%2A%2A", "db=foo"},
-			not:  []string{"xxx"},
+			want: []string{"channel_binding=xxx", "db=foo"},
 		},
 	}
 
@@ -136,6 +135,25 @@ func TestRedactDSN(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRedactDSNMalformedPostgresURLFailsClosed(t *testing.T) {
+	const secret = "secret%zz"
+	got := RedactDSN("postgres://user:" + secret + "@localhost/db")
+	if strings.Contains(got, secret) {
+		t.Fatalf("RedactDSN leaked malformed URL credential: %q", got)
+	}
+}
+
+func TestRedactDSNRedactsMalformedSecretQueryValue(t *testing.T) {
+	const secret = "secret%zz"
+	got := RedactDSN("postgres://user@localhost/db?sslmode=require&password=" + secret)
+	if strings.Contains(got, secret) {
+		t.Fatalf("RedactDSN leaked malformed query credential: %q", got)
+	}
+	if !strings.Contains(got, "sslmode=require") {
+		t.Fatalf("RedactDSN lost safe query content: %q", got)
 	}
 }
 
@@ -163,6 +181,12 @@ func TestRedactMessage(t *testing.T) {
 			in:   "host=db.example.com user=app password=secret dbname=app",
 			want: []string{"password=***", "host=db.example.com"},
 			not:  []string{"password=secret"},
+		},
+		{
+			name: "quoted libpq password with whitespace redacted",
+			in:   "connection failed: host=db password='secret tail' dbname=app",
+			want: []string{"password=***", "dbname=app"},
+			not:  []string{"secret", "tail"},
 		},
 		{
 			name: "auth_token in text redacted",

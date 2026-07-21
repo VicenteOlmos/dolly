@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 func printConfigUsage() {
@@ -28,8 +29,11 @@ func runConfigInit(args []string) error {
 
 	force := false
 	for _, a := range args {
-		if a == "--force" || a == "-force" {
+		switch a {
+		case "--force", "-force":
 			force = true
+		default:
+			return fmt.Errorf("unknown config init flag %q", a)
 		}
 	}
 
@@ -42,12 +46,8 @@ func runConfigInit(args []string) error {
 	}
 
 	if force {
-		// Force-overwrite: write the template unconditionally.
-		if err := os.WriteFile(path, config.DefaultTemplate(), 0o600); err != nil {
+		if err := config.WriteConfigFile(path, config.DefaultTemplate()); err != nil {
 			return fmt.Errorf("write config.jsonc: %w", err)
-		}
-		if err := os.Chmod(path, 0o600); err != nil {
-			return fmt.Errorf("chmod config.jsonc: %w", err)
 		}
 		fmt.Fprintln(os.Stderr, "config.jsonc written (overwritten)")
 		return nil
@@ -72,6 +72,7 @@ func runConfigShow(args []string) error {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		return fmt.Errorf("load config: %w", err)
 	}
+	cfg.Clone.TargetURL = connections.RedactDSN(cfg.Clone.TargetURL)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

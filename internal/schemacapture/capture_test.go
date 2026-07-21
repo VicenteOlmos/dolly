@@ -74,6 +74,24 @@ func TestCaptureRemovesSchemaOnDumpFailure(t *testing.T) {
 	}
 }
 
+func TestCaptureRejectsMalformedDSNBeforeRunningCommand(t *testing.T) {
+	restoreSeams := stubSeams(t)
+	defer restoreSeams()
+	ran := false
+	runCommand = func(context.Context, string, []string, []string, *os.File) error {
+		ran = true
+		return nil
+	}
+
+	err := Capture(context.Background(), "not a postgres DSN", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "clean DSN") {
+		t.Fatalf("Capture error = %v", err)
+	}
+	if ran {
+		t.Fatal("pg_dump ran with a malformed DSN")
+	}
+}
+
 func stubSeams(t *testing.T) func() {
 	t.Helper()
 	origLookPath := lookPath

@@ -3,11 +3,23 @@
 package connections
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/windows"
+)
+
+var ErrLockTimeout = errors.New("connection lock acquisition timed out")
+
+const lockTimeout = 2 * time.Second
+
+var (
+	lockFileEx = windows.LockFileEx
+	lockNow    = time.Now
+	lockSleep  = time.Sleep
 )
 
 type connLock struct {
@@ -22,12 +34,23 @@ func lockFile(path string) (*connLock, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open lock file: %w", err)
 	}
-	var overlapped windows.Overlapped
-	if err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("acquire lock: %w", err)
+	deadline := lockNow().Add(lockTimeout)
+	for delay := time.Millisecond; ; delay = min(delay*2, 50*time.Millisecond) {
+		var overlapped windows.Overlapped
+		err := lockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped)
+		if err == nil {
+			return &connLock{f: f}, nil
+		}
+		if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+			_ = f.Close()
+			return nil, fmt.Errorf("acquire lock: %w", err)
+		}
+		if lockNow().Add(delay).After(deadline) {
+			_ = f.Close()
+			return nil, ErrLockTimeout
+		}
+		lockSleep(delay)
 	}
-	return &connLock{f: f}, nil
 }
 
 func (l *connLock) close() error {

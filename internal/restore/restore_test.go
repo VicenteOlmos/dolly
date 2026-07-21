@@ -183,8 +183,8 @@ func TestRestoreMissingSchemaDefaultRejectsBeforeSchemaApply(t *testing.T) {
 	}
 	defer sqlDB.Close()
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
-	if err := Restore(context.Background(), sqlDB, dir, WithSchemaSQL()); err == nil || !strings.Contains(err.Error(), "requires WithoutTransaction") {
-		t.Fatalf("error = %v, want schema transaction gate", err)
+	if err := Restore(context.Background(), sqlDB, dir); err == nil || !strings.Contains(err.Error(), "table \"users\"") {
+		t.Fatalf("error = %v, want missing schema rejection", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestRestoreMissingSchemaWithoutTransactionAppliesSchema(t *testing.T) {
 	}
 	defer sqlDB.Close()
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
-	_ = Restore(context.Background(), sqlDB, dir, WithSchemaSQL(), WithoutTransaction())
+	_ = Restore(context.Background(), sqlDB, dir, WithTrustedSchemaSQL(), WithoutTransaction())
 	if !applied {
 		t.Fatal("expected explicit non-transactional schema application")
 	}

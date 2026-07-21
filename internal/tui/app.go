@@ -532,10 +532,13 @@ func (a *App) restoreNeedsConfirm() (bool, string) {
 func (a *App) handleRestoreConfirmRequested(msg restoreConfirmRequestedMsg) (tea.Model, tea.Cmd) {
 	needs, policy := a.restoreNeedsConfirm()
 	if !needs {
-		return a.handleRestoreRequested(restoreRequestedMsg{inputDir: msg.inputDir})
+		return a.handleRestoreRequested(restoreRequestedMsg{inputDir: msg.inputDir, trustedSchemaSQL: msg.trustedSchemaSQL})
 	}
 	body := fmt.Sprintf("Path: %s\nTarget: %s\n\nThis will %s.", msg.inputDir, connections.RedactMessage(a.conn.DSN()), policy)
-	a.mountRestoreConfirmModal("Restore dump?", body, msg.inputDir, nil)
+	dir, trusted := msg.inputDir, msg.trustedSchemaSQL
+	a.mountRestoreConfirmModal("Restore dump?", body, dir, func() tea.Cmd {
+		return func() tea.Msg { return restoreRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted} }
+	})
 	return a, nil
 }
 
@@ -568,7 +571,7 @@ func (a *App) handleRestoreRequested(msg restoreRequestedMsg) (tea.Model, tea.Cm
 	a.restoreProgress = nil
 	a.statusMsg = "Restoring…"
 	appendDumpLog(&a.dumpLog, "restore started: "+msg.inputDir)
-	cmd, ch, cancel := startRestoreCmd(runner, context.Background(), a.db, msg.inputDir, schemas, a.conn.DSN())
+	cmd, ch, cancel := startRestoreCmd(runner, context.Background(), a.db, msg.inputDir, schemas, msg.trustedSchemaSQL, a.conn.DSN())
 	a.restoreCh = ch
 	a.restoreCancel = cancel
 	return a, cmd
