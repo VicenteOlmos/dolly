@@ -73,7 +73,7 @@ func CLICatalog() []CLICommand {
 				{Name: "on-conflict", Default: "error", Description: "row conflict policy: error, skip, upsert"},
 				{Name: "replace", Description: "truncate tables before insert (destructive)"},
 				{Name: "no-transaction", Description: "advanced: commit after each table (no global rollback; requires --yes; default is atomic)"},
-				{Name: "trust-schema-sql", Description: "replay reviewed schema.sql when target tables are missing (default off)"},
+				{Name: "trust-schema-sql", Description: "replay reviewed schema.sql when target tables are missing (requires --no-transaction --yes; default off)"},
 				{Name: "yes", Description: "confirm destructive or advanced operations (required with --replace/--no-transaction)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
 			},

@@ -10,10 +10,10 @@ import (
 
 var subprocessQueryControls = map[string]bool{
 	"application_name": true, "channel_binding": true, "connect_timeout": true,
-	"gssencmode": true, "gsslib": true, "keepalives": true,
-	"keepalives_count": true, "keepalives_idle": true, "keepalives_interval": true,
-	"krbsrvname": true, "load_balance_hosts": true, "sslcert": true,
-	"sslcrl": true, "sslcrldir": true, "sslkey": true,
+	"gssencmode": true, "gsslib": true, "host": true, "hostaddr": true,
+	"keepalives": true, "keepalives_count": true, "keepalives_idle": true,
+	"keepalives_interval": true, "krbsrvname": true, "load_balance_hosts": true,
+	"port": true, "sslcert": true, "sslcrl": true, "sslcrldir": true, "sslkey": true,
 	"ssl_max_protocol_version": true, "ssl_min_protocol_version": true,
 	"sslmode": true, "sslnegotiation": true, "sslrootcert": true,
 	"target_session_attrs": true, "tcp_user_timeout": true,

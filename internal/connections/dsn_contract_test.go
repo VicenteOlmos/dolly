@@ -67,3 +67,23 @@ func TestSubprocessDSNAllowsOnlyKnownNonSecretQueryControls(t *testing.T) {
 		}
 	}
 }
+
+func TestSubprocessDSNPreservesLibpqLocationParameters(t *testing.T) {
+	clean, password, err := SubprocessDSN("postgresql:///mydb?host=/var/lib/postgresql&hostaddr=127.0.0.1&port=5433&sslmode=disable&password=query-secret&statement_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if password != "query-secret" {
+		t.Fatalf("password = %q", password)
+	}
+	for _, leaked := range []string{"query-secret", "password=", "statement_timeout"} {
+		if strings.Contains(clean, leaked) {
+			t.Fatalf("clean DSN leaked %q: %q", leaked, clean)
+		}
+	}
+	for _, required := range []string{"host=%2Fvar%2Flib%2Fpostgresql", "hostaddr=127.0.0.1", "port=5433", "sslmode=disable"} {
+		if !strings.Contains(clean, required) {
+			t.Fatalf("clean DSN lost %q: %q", required, clean)
+		}
+	}
+}

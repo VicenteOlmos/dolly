@@ -87,7 +87,7 @@ func TestPrintDumpUsage(t *testing.T) {
 
 func TestPrintRestoreUsage(t *testing.T) {
 	out := captureStderr(printRestoreUsage)
-	for _, sub := range []string{"--dsn", "--connection", "--input", "--on-conflict", "--replace", "--no-transaction", "advanced", "--yes", "default is atomic"} {
+	for _, sub := range []string{"--dsn", "--connection", "--input", "--on-conflict", "--replace", "--no-transaction", "advanced", "--trust-schema-sql", "--yes", "default is atomic"} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("restore usage missing %q:\n%s", sub, out)
 		}
