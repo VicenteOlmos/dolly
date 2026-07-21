@@ -73,6 +73,15 @@ run_install() {
 
 echo ""
 
+# Test 0: network downloader remains bounded when no mock transport is used.
+grep -F -- '--connect-timeout 10 --max-time "$DOLLY_DOWNLOAD_TIMEOUT"' "$install_sh" >/dev/null || fail_test "stalled download: curl timeout missing"
+grep -F -- '--timeout="$DOLLY_DOWNLOAD_TIMEOUT"' "$install_sh" >/dev/null || fail_test "stalled download: wget timeout missing"
+pass "stalled download: curl and wget timeouts configured"
+
+grep -F 'rm -f "$tmp_target" || true' "$install_sh" >/dev/null || fail_test "replacement cleanup: writable temp cleanup missing"
+grep -F 'sudo rm -f "$sudo_tmp_target" || true' "$install_sh" >/dev/null || fail_test "replacement cleanup: sudo temp cleanup missing"
+pass "replacement cleanup: temp files removed on failure"
+
 # Test 1: latest fails when checksums are unavailable
 if run_install "$tmpdir/mock_no_checksums"; then
 	fail_test "latest: expected failure when checksums.txt is missing, but install succeeded"
@@ -85,6 +94,19 @@ if run_install "$tmpdir/mock_no_checksums" "DOLLY_ALLOW_UNVERIFIED=1"; then
 else
 	fail_test "latest: expected success with DOLLY_ALLOW_UNVERIFIED=1, but install failed"
 fi
+
+# Test 3: corrupt checksum leaves an existing target untouched.
+mkdir -p "$tmpdir/mock_corrupt"
+cp "$tmpdir/$asset_name" "$tmpdir/mock_corrupt/"
+printf '%064d  %s\n' 0 "$asset_name" > "$tmpdir/mock_corrupt/checksums.txt"
+printf 'old binary\n' > "$tmpdir/install_dir/dolly"
+if run_install "$tmpdir/mock_corrupt"; then
+	fail_test "corrupt checksum: expected failure"
+fi
+if [ "$(cat "$tmpdir/install_dir/dolly")" != "old binary" ]; then
+	fail_test "corrupt checksum replaced existing target"
+fi
+pass "corrupt checksum leaves existing target unchanged"
 
 echo ""
 printf '%s\n' "All install.sh behavior tests passed."

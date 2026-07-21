@@ -1,6 +1,7 @@
 package dump
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,20 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
+
+func assignDataFiles(tables []db.Table) {
+	for i := range tables {
+		path := "data/" + hex.EncodeToString([]byte(tables[i].Schema)) + "." + hex.EncodeToString([]byte(tables[i].Name)) + ".ndjson"
+		tables[i].DataFile = &path
+	}
+}
+
+func tableDataPath(dir string, table db.Table) string {
+	if table.DataFile != nil {
+		return filepath.Join(dir, *table.DataFile)
+	}
+	return filepath.Join(dir, table.Name+".ndjson")
+}
 
 // SubsetManifest records how a subset dump was produced.
 type SubsetManifest struct {
@@ -43,7 +58,9 @@ type Provenance struct {
 	Seq              int      `json:"seq"`
 	BaseDir          string   `json:"base_dir"`
 	SourceDatabase   string   `json:"source_database,omitempty"`
+	SourceSignature  string   `json:"source_signature,omitempty"`
 	Schemas          []string `json:"schemas,omitempty"`
+	Sanitized        *bool    `json:"sanitization_enabled,omitempty"`
 	TableCount       int      `json:"table_count"`
 	TotalRowEstimate int64    `json:"total_row_estimate,omitempty"`
 }

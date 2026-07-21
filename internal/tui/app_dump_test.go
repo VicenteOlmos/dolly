@@ -913,6 +913,10 @@ func TestAppDumpRestoreDestructiveRequiresConfirm(t *testing.T) {
 	restoreRunner := &recordingRestoreRunner{}
 	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, restoreRunner, nil, nil, nil, false)
 	app.db = conn
+	app.conn.Host = "h-x"
+	app.conn.Database = "db_stub"
+	app.conn.User = "u"
+	app.conn.Password = "p"
 	app.cfg = config.DefaultConfig()
 	app.cfg.Clone.Replace = true
 	app.screen = ScreenDump
@@ -937,6 +941,12 @@ func TestAppDumpRestoreDestructiveRequiresConfirm(t *testing.T) {
 
 	if !app.modalOpen() {
 		t.Fatal("expected restore confirm modal")
+	}
+	if !strings.Contains(app.modal.body, "Target:") {
+		t.Fatalf("modal body missing Target: line:\n%s", app.modal.body)
+	}
+	if strings.Contains(app.modal.body, ":p@") {
+		t.Fatalf("modal body leaked password:\n%s", app.modal.body)
 	}
 	if restoreRunner.inputDir != "" {
 		t.Fatalf("restore inputDir = %q, want empty before confirm", restoreRunner.inputDir)

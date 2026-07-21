@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $DOLLY_VERSION  = if ($env:DOLLY_VERSION)  { $env:DOLLY_VERSION }  else { "latest" }
 $DOLLY_REPO     = if ($env:DOLLY_REPO)     { $env:DOLLY_REPO }     else { "VicenteOlmos/dolly" }
 $DOLLY_INSTALL_DIR = if ($env:DOLLY_INSTALL_DIR) { $env:DOLLY_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\dolly\bin" }
+$DOLLY_DOWNLOAD_TIMEOUT = if ($env:DOLLY_DOWNLOAD_TIMEOUT) { [int]$env:DOLLY_DOWNLOAD_TIMEOUT } else { 60 }
 
 function die { Write-Error "error: $($args -join ' ')"; exit 1 }
 function warn { Write-Warning ($args -join ' ') }
@@ -71,18 +72,18 @@ function Download-File {
         }
         return
     }
-    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
-        & curl.exe -fsSL $Url -o $Output
-    } elseif (Get-Command wget.exe -ErrorAction SilentlyContinue) {
-        & wget.exe -q $Url -O $Output
-    } else {
-        die "curl.exe or wget.exe is required"
-    }
+    Invoke-WebRequest -Uri $Url -OutFile $Output -TimeoutSec $DOLLY_DOWNLOAD_TIMEOUT
 }
 
 $asset_name = "dolly_windows_${arch}.zip"
 $tmpdir = Join-Path ([System.IO.Path]::GetTempPath()) "dolly-install-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force $tmpdir | Out-Null
+$tmp_target = $null
+trap {
+    if ($tmp_target -and (Test-Path $tmp_target)) { Remove-Item -Force $tmp_target -ErrorAction SilentlyContinue }
+    if (Test-Path $tmpdir) { Remove-Item -Recurse -Force $tmpdir -ErrorAction SilentlyContinue }
+    throw $_
+}
 
 $archive   = Join-Path $tmpdir $asset_name
 $checksums = Join-Path $tmpdir "checksums.txt"
@@ -153,7 +154,10 @@ if (-not (Test-Path $DOLLY_INSTALL_DIR)) {
 }
 
 $target = Join-Path $DOLLY_INSTALL_DIR "dolly.exe"
-Copy-Item $binary_path $target -Force
+$tmp_target = Join-Path $DOLLY_INSTALL_DIR ".dolly.$([System.Guid]::NewGuid().ToString('N')).tmp"
+Copy-Item $binary_path $tmp_target
+Move-Item $tmp_target $target -Force
+$tmp_target = $null
 
 Write-Host "Installed dolly to $target"
 
@@ -163,5 +167,6 @@ if (-not (Path-ContainsDir $userPath $DOLLY_INSTALL_DIR)) {
     Write-Host "Added $DOLLY_INSTALL_DIR to your user PATH. Open a new terminal if 'dolly' is not found."
 }
 if (-not (Path-ContainsDir $env:Path $DOLLY_INSTALL_DIR)) {
-    $env:Path = Add-DirToPathValue $env:Path $DOLLY_INSTALL_DIR
+	$env:Path = Add-DirToPathValue $env:Path $DOLLY_INSTALL_DIR
 }
+Remove-Item -Recurse -Force $tmpdir -ErrorAction SilentlyContinue

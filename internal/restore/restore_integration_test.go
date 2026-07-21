@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,10 @@ import (
 var integrationDB *sql.DB
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+	if testing.Short() {
+		os.Exit(0)
+	}
 	db, err := pgintegration.SetupMainDB()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "postgres integration setup: %v\n", err)
@@ -167,7 +172,21 @@ func TestIntegrationRestoreConflictUpsert(t *testing.T) {
 	}
 
 	const wantName = "n1 (upserted)"
-	if err := patchNDJSONField(filepath.Join(dir, "tbl_a.ndjson"), "id", float64(1), "name", wantName); err != nil {
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var path string
+	for _, table := range meta.Tables {
+		if table.Name == "tbl_a" {
+			path, err = resolveDataFile(dir, table)
+			break
+		}
+	}
+	if err != nil || path == "" {
+		t.Fatalf("resolve tbl_a data file: %v", err)
+	}
+	if err := patchNDJSONField(path, "id", float64(1), "name", wantName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -216,6 +235,101 @@ func TestIntegrationRestoreWithoutTransaction(t *testing.T) {
 	}
 	if count != 4 {
 		t.Fatalf("departments count = %d, want 4", count)
+	}
+}
+
+func TestIntegrationLoadTableCopy(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := integrationDump(t, conn)
+	ctx := context.Background()
+
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncateFixtureData(t, conn, ctx)
+
+	for _, table := range meta.Tables {
+		if table.Name != "departments" {
+			continue
+		}
+		path, err := resolveDataFile(dir, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := loadTableCopy(ctx, os.Getenv(pgintegration.EnvDSN), table, path); err != nil {
+			t.Fatal(err)
+		}
+
+		var count int
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM departments`).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 4 {
+			t.Fatalf("departments count = %d, want 4", count)
+		}
+		return
+	}
+	t.Fatal("departments missing from dump metadata")
+}
+
+func TestIntegrationRestoreReplaceRejectsExternalForeignKey(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := integrationDump(t, conn)
+	ctx := context.Background()
+	var before int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE dolly_restore_external_fk (id integer PRIMARY KEY, parent_id integer REFERENCES tbl_a(id))`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.ExecContext(context.Background(), `DROP TABLE dolly_restore_external_fk`) })
+
+	if err := Restore(ctx, conn, dir, WithReplace()); err == nil {
+		t.Fatal("expected external foreign key to reject replace")
+	}
+	var after int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("tbl_a changed after rejected replace: %d -> %d", before, after)
+	}
+}
+
+func TestIntegrationRestoreReplaceRollsBackAfterLaterLoadFailure(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := integrationDump(t, conn)
+	ctx := context.Background()
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tables) < 2 {
+		t.Fatal("fixture needs multiple tables")
+	}
+	path, err := resolveDataFile(dir, meta.Tables[len(meta.Tables)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var before int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(ctx, conn, dir, WithReplace()); err == nil {
+		t.Fatal("expected later table load failure")
+	}
+	var after int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("replace rollback lost tbl_a rows: %d -> %d", before, after)
 	}
 }
 

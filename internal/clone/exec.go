@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 // CommandRunner abstracts os/exec for pg_dump/psql invocation.
@@ -115,13 +117,14 @@ func (OSCommandRunner) Run(ctx context.Context, name string, args ...string) err
 func (OSCommandRunner) RunWithEnv(ctx context.Context, env map[string]string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	cmd.Env = StripSensitiveEnv(os.Environ())
 	if len(env) > 0 {
 		cmd.Env = append(cmd.Env, envMapToSlice(env)...)
 	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run %s: %w", name, err)
+		return commandFailed("run "+name, err, stderr.String())
 	}
 	return nil
 }
@@ -182,11 +185,12 @@ func (OSCommandRunner) PipeWithEnv(ctx context.Context, env map[string]string, s
 	if err != nil {
 		return fmt.Errorf("pipe stdout from %s: %w", srcName, err)
 	}
-	srcCmd.Stderr = os.Stderr
+	var srcStderr, dstStderr strings.Builder
+	srcCmd.Stderr = &srcStderr
 
 	dstCmd.Stdin = srcOut
 	dstCmd.Stdout = os.Stdout
-	dstCmd.Stderr = os.Stderr
+	dstCmd.Stderr = &dstStderr
 
 	if err := srcCmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", srcName, err)
@@ -209,10 +213,27 @@ func (OSCommandRunner) PipeWithEnv(ctx context.Context, env map[string]string, s
 	srcErr := srcCmd.Wait()
 
 	if dstErr != nil {
-		return fmt.Errorf("%s failed: %w", dstName, dstErr)
+		return commandFailed(dstName+" failed", dstErr, firstNonEmpty(dstStderr.String(), srcStderr.String()))
 	}
 	if srcErr != nil {
-		return fmt.Errorf("%s failed: %w", srcName, srcErr)
+		return commandFailed(srcName+" failed", srcErr, firstNonEmpty(srcStderr.String(), dstStderr.String()))
 	}
 	return nil
+}
+
+func commandFailed(label string, err error, stderr string) error {
+	stderr = strings.TrimSpace(connections.RedactMessage(stderr))
+	if stderr == "" {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	return fmt.Errorf("%s: %w (stderr: %s)", label, err, stderr)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }

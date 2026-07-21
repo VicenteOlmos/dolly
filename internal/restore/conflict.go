@@ -125,12 +125,13 @@ func canUseCopy(policy ConflictPolicy) bool {
 }
 
 func truncateTables(ctx context.Context, q execQuerier, tables []db.Table) error {
-	for i := len(tables) - 1; i >= 0; i-- {
-		table := tables[i]
-		ident := pgx.Identifier{table.Schema, table.Name}.Sanitize()
-		stmt := fmt.Sprintf("TRUNCATE TABLE %s CASCADE", ident)
-		if _, err := q.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("truncate table %q: %w", table.Name, err)
+	idents := make([]string, len(tables))
+	for i, table := range tables {
+		idents[i] = pgx.Identifier{table.Schema, table.Name}.Sanitize()
+	}
+	if len(idents) > 0 {
+		if _, err := q.ExecContext(ctx, "TRUNCATE TABLE "+strings.Join(idents, ", ")); err != nil {
+			return fmt.Errorf("truncate tables: %w", err)
 		}
 	}
 	return nil

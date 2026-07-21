@@ -46,8 +46,21 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 	}
 
 	schemaFilter := schemaSet(schemas)
+	restoredColumns := make(map[string]bool)
+	for _, table := range meta.Tables {
+		for _, column := range table.Columns {
+			restoredColumns[table.Schema+"\x00"+table.Name+"\x00"+column.Name] = true
+		}
+	}
 	for _, seq := range meta.Sequences {
 		if schemaFilter != nil && !schemaFilter[seq.Schema] {
+			continue
+		}
+		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns)
+		if err != nil {
+			return err
+		}
+		if !owned {
 			continue
 		}
 
@@ -69,6 +82,37 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 		}
 	}
 	return nil
+}
+
+func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.SequenceState, restoredColumns map[string]bool) (bool, error) {
+	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT tbl_ns.nspname, tbl.relname, a.attname
+		FROM pg_class seq
+		JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
+		JOIN pg_class tbl ON tbl.oid = dep.refobjid
+		JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
+		JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = dep.refobjsubid AND NOT a.attisdropped
+		WHERE seq.oid = %s::regclass`, quoteLiteral(quoteQualifiedTable(seq.Schema, seq.Name))))
+	if err != nil {
+		return false, fmt.Errorf("validate sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("validate sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+		return false, nil
+	}
+	var schema, table, column string
+	if err := rows.Scan(&schema, &table, &column); err != nil {
+		return false, fmt.Errorf("scan sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	if !restoredColumns[schema+"\x00"+table+"\x00"+column] {
+		return false, fmt.Errorf("sequence %s.%s is not owned by a restored column", seq.Schema, seq.Name)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("validate sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	return true, nil
 }
 
 // SyncSequencesToData advances every serial/identity sequence on the target
@@ -118,8 +162,8 @@ func SyncSequencesToData(ctx context.Context, q execQuerier, schemas []string) e
 	for _, c := range cols {
 		qualifiedTable := quoteQualifiedTable(c.schema, c.table)
 		setvalSQL := fmt.Sprintf(
-			`SELECT setval(pg_get_serial_sequence(%s, %s), COALESCE((SELECT max(%s) FROM %s), 1), true)`,
-			quoteLiteral(c.schema+"."+c.table),
+			`SELECT CASE WHEN m.max_value IS NULL THEN NULL ELSE setval(pg_get_serial_sequence(%s, %s), m.max_value, true) END FROM (SELECT max(%s) AS max_value FROM %s) AS m`,
+			quoteLiteral(qualifiedTable),
 			quoteLiteral(c.column),
 			quoteIdentifier(c.column),
 			qualifiedTable,

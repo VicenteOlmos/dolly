@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
 func TestDumpFullFlow(t *testing.T) {
@@ -55,7 +57,7 @@ func TestDumpFullFlow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "metadata.json")); os.IsNotExist(err) {
 		t.Fatal("metadata.json not found")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "users.ndjson")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "data", "7075626c6963.7573657273.ndjson")); os.IsNotExist(err) {
 		t.Fatal("users.ndjson not found")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "metadata.json.tmp")); err == nil {
@@ -74,20 +76,20 @@ func TestDumpWithSchemasMulti(t *testing.T) {
 	mock.ExpectBegin()
 
 	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
-		AddRow("app", "orders", int64(1)).
-		AddRow("billing", "invoices", int64(0))
+		AddRow("app", "users", int64(1)).
+		AddRow("billing", "users", int64(1))
 	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1, \$2\)[\s\S]*ORDER BY t\.table_schema, t\.table_name`).
 		WithArgs("app", "billing").
 		WillReturnRows(tablesRows)
 
 	allCols := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
-		AddRow("app", "orders", "id", "integer", "NO", 1, true).
-		AddRow("billing", "invoices", "id", "integer", "NO", 1, true)
+		AddRow("app", "users", "id", "integer", "NO", 1, true).
+		AddRow("billing", "users", "id", "integer", "NO", 1, true)
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("app", "billing").WillReturnRows(allCols)
 	allFks := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("app", "billing").WillReturnRows(allFks)
-	for range 2 {
-		streamRows := sqlmock.NewRows([]string{"id"})
+	for _, id := range []int{1, 2} {
+		streamRows := sqlmock.NewRows([]string{"id"}).AddRow(id)
 		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
 	}
 
@@ -107,6 +109,19 @@ func TestDumpWithSchemasMulti(t *testing.T) {
 	}
 	if meta.Schema != "multi" {
 		t.Fatalf("metadata schema = %q, want multi", meta.Schema)
+	}
+	paths := map[string]bool{}
+	for _, table := range meta.Tables {
+		if table.DataFile == nil {
+			t.Fatalf("table %s missing data_file", table.Schema)
+		}
+		paths[*table.DataFile] = true
+		if _, err := os.Stat(filepath.Join(dir, *table.DataFile)); err != nil {
+			t.Fatalf("table %s data file: %v", table.Schema, err)
+		}
+	}
+	if len(paths) != 2 {
+		t.Fatalf("same-name cross-schema paths collided: %v", paths)
 	}
 }
 
@@ -145,7 +160,7 @@ func TestDumpEmptyTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "empty_tbl.ndjson"))
+	data, err := os.ReadFile(filepath.Join(dir, "data", "7075626c6963.656d7074795f74626c.ndjson"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,13 +168,53 @@ func TestDumpEmptyTable(t *testing.T) {
 		t.Fatalf("expected empty ndjson file, got %q", string(data))
 	}
 
-	metaPath := filepath.Join(dir, "metadata.json")
-	metaData, err := os.ReadFile(metaPath)
+	meta, err := ReadMetadata(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(metaData), "empty_tbl") {
-		t.Fatal("metadata.json should contain empty_tbl")
+	if len(meta.Tables) != 1 || meta.Tables[0].DataFile == nil || *meta.Tables[0].DataFile != "data/7075626c6963.656d7074795f74626c.ndjson" {
+		t.Fatalf("empty table data_file = %#v", meta.Tables)
+	}
+}
+
+func TestAssignDataFilesIsCollisionFreeAndDeterministic(t *testing.T) {
+	tables := []db.Table{{Schema: "app", Name: "users"}, {Schema: "audit", Name: "users"}}
+	assignDataFiles(tables)
+	first := []string{*tables[0].DataFile, *tables[1].DataFile}
+	assignDataFiles(tables)
+	second := []string{*tables[0].DataFile, *tables[1].DataFile}
+	if first[0] == first[1] {
+		t.Fatalf("same table name collided: %v", first)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("data_file paths changed: %v -> %v", first, second)
+	}
+}
+
+func TestDumpCompleteDataFilesAreDeterministic(t *testing.T) {
+	for run := 0; run < 2; run++ {
+		sqlDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(t.TempDir(), "dump")
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).AddRow("public", "users", 1))
+		mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).AddRow("public", "users", "id", "integer", "NO", 1, true))
+		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
+		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+		mock.ExpectCommit()
+		if err := Dump(context.Background(), sqlDB, dir, WithoutSequences()); err != nil {
+			t.Fatal(err)
+		}
+		meta, err := ReadMetadata(dir)
+		if err != nil || len(meta.Tables) != 1 || meta.Tables[0].DataFile == nil || *meta.Tables[0].DataFile != "data/7075626c6963.7573657273.ndjson" {
+			t.Fatalf("run %d metadata=%+v err=%v", run, meta.Tables, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+		sqlDB.Close()
 	}
 }
 
@@ -476,7 +531,7 @@ func TestDumpWithProgressObserverPanic(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "metadata.json")); err != nil {
 		t.Fatalf("metadata.json: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "users.ndjson")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "data", "7075626c6963.7573657273.ndjson")); err != nil {
 		t.Fatalf("users.ndjson: %v", err)
 	}
 
@@ -527,7 +582,7 @@ func TestDumpSanitizedVsUnsanitized(t *testing.T) {
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "users.ndjson"))
+		data, err := os.ReadFile(filepath.Join(dir, "data", "7075626c6963.7573657273.ndjson"))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"os/signal"
@@ -96,6 +97,27 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 	return flags, nil
 }
 
+func applySubsetLimits(limits dump.SubsetLimits, flags dumpFlags, cfg *config.Config) dump.SubsetLimits {
+	if flags.MaxDepth > 0 {
+		limits.MaxDepth = flags.MaxDepth
+	}
+	if flags.MaxTables > 0 {
+		limits.MaxTables = flags.MaxTables
+	}
+	if flags.MaxRows > 0 {
+		limits.MaxRows = flags.MaxRows
+	}
+	if flags.MaxRowsPerTable > 0 {
+		limits.MaxRowsPerTable = flags.MaxRowsPerTable
+	} else if cfg.Subset.MaxRowsPerTable > 0 {
+		limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
+	}
+	if flags.MaxInListSize > 0 {
+		limits.MaxInListSize = flags.MaxInListSize
+	}
+	return limits
+}
+
 func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error) {
 	var opts []dump.Option
 	if flags.NoTransaction {
@@ -108,10 +130,13 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 		effectiveSeedFile = cfg.Subset.SeedFile
 	}
 	effectivePercent := flags.Percent
-	if effectivePercent == 0 && cfg.Subset.Percent > 0 {
+	if effectivePercent == 0 {
 		effectivePercent = cfg.Subset.Percent
 	}
 
+	if effectivePercent < 0 || effectivePercent > 100 {
+		return nil, fmt.Errorf("--percent must be between 1 and 100, got %d", effectivePercent)
+	}
 	if effectiveSeedFile != "" && effectivePercent > 0 {
 		return nil, errors.New("--percent and --seed-file are mutually exclusive")
 	}
@@ -167,51 +192,16 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 			return nil, err
 		}
 		subCfg.Limits = dump.ApplySubsetLimitDefaults(subCfg.Limits)
-		if flags.MaxDepth > 0 {
-			subCfg.Limits.MaxDepth = flags.MaxDepth
-		}
-		if flags.MaxTables > 0 {
-			subCfg.Limits.MaxTables = flags.MaxTables
-		}
-		if flags.MaxRows > 0 {
-			subCfg.Limits.MaxRows = flags.MaxRows
-		}
-		if flags.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = flags.MaxRowsPerTable
-		} else if cfg.Subset.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
-		}
-		if flags.MaxInListSize > 0 {
-			subCfg.Limits.MaxInListSize = flags.MaxInListSize
-		}
+		subCfg.Limits = applySubsetLimits(subCfg.Limits, flags, cfg)
 		opts = append(opts, dump.WithSubset(subCfg))
 	}
 
 	if effectivePercent > 0 {
-		if effectivePercent < 1 || effectivePercent > 100 {
-			return nil, fmt.Errorf("--percent must be between 1 and 100, got %d", effectivePercent)
-		}
 		subCfg := dump.SubsetConfig{
 			Percent: effectivePercent,
 			Limits:  dump.DefaultSubsetLimits(),
 		}
-		if flags.MaxDepth > 0 {
-			subCfg.Limits.MaxDepth = flags.MaxDepth
-		}
-		if flags.MaxTables > 0 {
-			subCfg.Limits.MaxTables = flags.MaxTables
-		}
-		if flags.MaxRows > 0 {
-			subCfg.Limits.MaxRows = flags.MaxRows
-		}
-		if flags.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = flags.MaxRowsPerTable
-		} else if cfg.Subset.MaxRowsPerTable > 0 {
-			subCfg.Limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
-		}
-		if flags.MaxInListSize > 0 {
-			subCfg.Limits.MaxInListSize = flags.MaxInListSize
-		}
+		subCfg.Limits = applySubsetLimits(subCfg.Limits, flags, cfg)
 		opts = append(opts, dump.WithSubset(subCfg))
 	}
 
@@ -257,6 +247,11 @@ func runDump(args []string) (err error) {
 	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
 		dsn = appendQueryParam(dsn, "statement_timeout", cfg.DB.StatementTimeout)
 	}
+	// Validate all dump options before opening the database or allocating output.
+	opts, err := buildDumpOptions(flags, cfg)
+	if err != nil {
+		return err
+	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -285,7 +280,7 @@ func runDump(args []string) (err error) {
 	var outputDir string
 	var seq int
 	if flags.SlowConnection {
-		if resumable, resumableSeq, ok := findResumableSlowDumpDir(out, databaseFromDSN(dsn), schemas); ok {
+		if resumable, resumableSeq, ok := findResumableSlowDumpDir(out, sourceSignatureFromDSN(dsn), schemas, cfg.Sanitization.Enabled); ok {
 			outputDir = resumable
 			seq = resumableSeq
 		} else {
@@ -301,19 +296,18 @@ func runDump(args []string) (err error) {
 		}
 	}
 
-	opts, err := buildDumpOptions(flags, cfg)
-	if err != nil {
-		return err
-	}
 	if len(schemas) > 0 {
 		opts = append(opts, dump.WithSchemas(schemas))
 	}
 	opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
+	sanitizationEnabled := cfg.Sanitization.Enabled
 	opts = append(opts, dump.WithProvenance(dump.Provenance{
-		Seq:            seq,
-		BaseDir:        out,
-		SourceDatabase: databaseFromDSN(dsn),
-		Schemas:        append([]string(nil), schemas...),
+		Seq:             seq,
+		BaseDir:         out,
+		SourceDatabase:  databaseFromDSN(dsn),
+		SourceSignature: sourceSignatureFromDSN(dsn),
+		Schemas:         append([]string(nil), schemas...),
+		Sanitized:       &sanitizationEnabled,
 	}))
 
 	opts = append(opts, dump.WithProgress(func(ev dump.ProgressEvent) {
@@ -378,13 +372,30 @@ func databaseFromDSN(dsn string) string {
 	return strings.TrimPrefix(u.Path, "/")
 }
 
+// sourceSignatureFromDSN returns a stable resume identity without credentials.
+func sourceSignatureFromDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	port := u.Port()
+	if port == "" {
+		port = "5432"
+	}
+	user := ""
+	if u.User != nil {
+		user = u.User.Username()
+	}
+	return fmt.Sprintf("postgres://%s@%s/%s", user, net.JoinHostPort(strings.ToLower(u.Hostname()), port), databaseFromDSN(dsn))
+}
+
 // findResumableSlowDumpDir returns the latest numbered dump directory under
 // baseDir that looks like an interrupted slow-connection dump: it contains
 // slow checkpoint/temp artifacts, no final metadata.json, and its
-// metadata.json.tmp provenance matches the current source database and schemas.
+// metadata.json.tmp provenance matches source, schemas, and sanitization mode.
 // Normal dumps are unaffected because this helper is only consulted for
 // --slow-connection.
-func findResumableSlowDumpDir(baseDir, sourceDB string, schemas []string) (string, int, bool) {
+func findResumableSlowDumpDir(baseDir, sourceSignature string, schemas []string, sanitizationEnabled bool) (string, int, bool) {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		return "", 0, false
@@ -419,10 +430,13 @@ func findResumableSlowDumpDir(baseDir, sourceDB string, schemas []string) (strin
 		if meta.Provenance == nil {
 			continue
 		}
-		if meta.Provenance.SourceDatabase != sourceDB {
+		if meta.Provenance.SourceSignature == "" || meta.Provenance.SourceSignature != sourceSignature {
 			continue
 		}
 		if !schemasEqual(meta.Provenance.Schemas, schemas) {
+			continue
+		}
+		if meta.Provenance.Sanitized == nil || *meta.Provenance.Sanitized != sanitizationEnabled {
 			continue
 		}
 		return dir, n, true

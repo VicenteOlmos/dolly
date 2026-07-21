@@ -32,12 +32,15 @@ jobs:
     env:
       DOLLY_TEST_PG_DSN: postgres://dolly:dolly@127.0.0.1:5433/dolly?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install PostgreSQL 16 client tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
 
       - name: Resolve release version
         id: version
@@ -79,9 +82,23 @@ jobs:
           done
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 7
 
-      - name: Publish GitHub release
+      - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          tag="${{ steps.version.outputs.tag }}"
-          gh release create "$tag" dist/* --verify-tag --title "$tag" --generate-notes
+          gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
+
+      - name: Upload and verify release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          test "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" -eq 7
+
+      - name: Publish verified GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

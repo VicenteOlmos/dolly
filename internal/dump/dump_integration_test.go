@@ -53,16 +53,13 @@ func TestIntegrationDumpArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{
-		"metadata.json",
-		"departments.ndjson",
-		"tbl_a.ndjson",
-		"projects.ndjson",
-		"project_members.ndjson",
-		"empty_audit.ndjson",
-	} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Fatalf("missing %s: %v", name, err)
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"departments", "tbl_a", "projects", "project_members", "empty_audit"} {
+		if _, err := os.Stat(tableDataPath(dir, metadataTable(t, meta, name))); err != nil {
+			t.Fatalf("missing data for %s: %v", name, err)
 		}
 	}
 }
@@ -102,7 +99,7 @@ func TestIntegrationDumpMetadataAndRows(t *testing.T) {
 		}
 	}
 
-	lines, err := readNDJSONLines(filepath.Join(dir, "tbl_a.ndjson"))
+	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "tbl_a")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +127,11 @@ func TestIntegrationDumpEmptyTableFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lines, err := readNDJSONLines(filepath.Join(dir, "empty_audit.ndjson"))
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "empty_audit")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +220,20 @@ func readNDJSONLines(path string) ([]string, error) {
 	return lines, sc.Err()
 }
 
+func metadataTable(t *testing.T, meta Metadata, name string) db.Table {
+	t.Helper()
+	for _, table := range meta.Tables {
+		if table.Name == name {
+			if table.DataFile == nil {
+				t.Fatalf("metadata table %q missing data_file", name)
+			}
+			return table
+		}
+	}
+	t.Fatalf("metadata missing table %q", name)
+	return db.Table{}
+}
+
 func TestIntegrationSubsetDumpTableSeed(t *testing.T) {
 	conn := openIntegrationDB(t)
 	dir := t.TempDir()
@@ -259,21 +274,18 @@ func TestIntegrationSubsetDumpTableSeed(t *testing.T) {
 		t.Fatal("empty_audit should not be in subset closure")
 	}
 
-	for _, name := range []string{"metadata.json", "departments.ndjson", "tbl_a.ndjson"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Fatalf("missing %s: %v", name, err)
+	for _, name := range []string{"departments", "tbl_a"} {
+		if _, err := os.Stat(tableDataPath(dir, metadataTable(t, meta, name))); err != nil {
+			t.Fatalf("missing data for %s: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "empty_audit.ndjson")); !os.IsNotExist(err) {
-		t.Fatal("empty_audit.ndjson should not be in subset closure")
-	}
 	if tableSet["projects"] {
-		if _, err := os.Stat(filepath.Join(dir, "projects.ndjson")); err != nil {
-			t.Fatalf("missing projects.ndjson: %v", err)
+		if _, err := os.Stat(tableDataPath(dir, metadataTable(t, meta, "projects"))); err != nil {
+			t.Fatalf("missing data for projects: %v", err)
 		}
 	}
 
-	lines, err := readNDJSONLines(filepath.Join(dir, "tbl_a.ndjson"))
+	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "tbl_a")))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,6 +54,24 @@ func TestRunPropagatesSchemasToCloneOptions(t *testing.T) {
 	}
 }
 
+func TestRunPropagatesConfiguredTargetDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"clone":{"target_dir":"/data/clone"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error { got = opts; return nil }
+	if err := Run(context.Background(), Params{SourceDSN: "postgres://u:p@h/src", Schemas: []string{"public"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetDir != "/data/clone" {
+		t.Fatalf("TargetDir = %q, want /data/clone", got.TargetDir)
+	}
+}
+
 func TestRunWiresSanitizationWhenEnabled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"sanitization":{"enabled":true}}`), 0o644); err != nil {

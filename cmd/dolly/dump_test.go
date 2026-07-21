@@ -752,8 +752,10 @@ func TestRunDumpSlowConnectionResumesInterruptedDir(t *testing.T) {
   "schema": "public",
   "tables": [],
   "provenance": {
-    "source_database": "db",
-    "schemas": []
+	"source_database": "db",
+	"schemas": []
+	,"source_signature": "postgres://@h:5432/db",
+	"sanitization_enabled": false
   }
 }`
 	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
@@ -883,7 +885,9 @@ func TestFindResumableSlowDumpDirSkipsNewerNonResumable(t *testing.T) {
   "tables": [],
   "provenance": {
     "source_database": "db",
-    "schemas": ["app"]
+    "source_signature": "postgres://@h:5432/db",
+    "schemas": ["app"],
+    "sanitization_enabled": false
   }
 }`
 	if err := os.WriteFile(filepath.Join(older, "metadata.json.tmp"), []byte(olderMeta), 0o644); err != nil {
@@ -895,7 +899,7 @@ func TestFindResumableSlowDumpDirSkipsNewerNonResumable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, seq, ok := findResumableSlowDumpDir(base, "db", []string{"app"})
+	got, seq, ok := findResumableSlowDumpDir(base, "postgres://@h:5432/db", []string{"app"}, false)
 	if !ok {
 		t.Fatal("expected resumable dir")
 	}
@@ -909,34 +913,52 @@ func TestFindResumableSlowDumpDirSkipsNewerNonResumable(t *testing.T) {
 
 func TestFindResumableSlowDumpDirRequiresMatchingProvenance(t *testing.T) {
 	tests := []struct {
-		name     string
-		sourceDB string
-		schemas  []string
-		wantOk   bool
+		name            string
+		sourceSignature string
+		schemas         []string
+		wantOk          bool
 	}{
 		{
-			name:     "matching database and schemas",
-			sourceDB: "db",
-			schemas:  []string{"app", "billing"},
-			wantOk:   true,
+			name:            "matching database and schemas",
+			sourceSignature: "postgres://u@h:5432/db",
+			schemas:         []string{"app", "billing"},
+			wantOk:          true,
 		},
 		{
-			name:     "different database",
-			sourceDB: "otherdb",
-			schemas:  []string{"app", "billing"},
-			wantOk:   false,
+			name:            "different database",
+			sourceSignature: "postgres://u@other:5432/db",
+			schemas:         []string{"app", "billing"},
+			wantOk:          false,
 		},
 		{
-			name:     "different schemas",
-			sourceDB: "db",
-			schemas:  []string{"billing"},
-			wantOk:   false,
+			name:            "different host",
+			sourceSignature: "postgres://u@other-host:5432/db",
+			schemas:         []string{"app", "billing"},
+			wantOk:          false,
 		},
 		{
-			name:     "schema order ignored",
-			sourceDB: "db",
-			schemas:  []string{"billing", "app"},
-			wantOk:   true,
+			name:            "different port",
+			sourceSignature: "postgres://u@h:5433/db",
+			schemas:         []string{"app", "billing"},
+			wantOk:          false,
+		},
+		{
+			name:            "different user",
+			sourceSignature: "postgres://other@h:5432/db",
+			schemas:         []string{"app", "billing"},
+			wantOk:          false,
+		},
+		{
+			name:            "different schemas",
+			sourceSignature: "postgres://u@h:5432/db",
+			schemas:         []string{"billing"},
+			wantOk:          false,
+		},
+		{
+			name:            "schema order ignored",
+			sourceSignature: "postgres://u@h:5432/db",
+			schemas:         []string{"billing", "app"},
+			wantOk:          true,
 		},
 	}
 
@@ -956,18 +978,56 @@ func TestFindResumableSlowDumpDirRequiresMatchingProvenance(t *testing.T) {
   "tables": [],
   "provenance": {
     "source_database": "db",
-    "schemas": ["app", "billing"]
+    "source_signature": "postgres://u@h:5432/db",
+    "schemas": ["app", "billing"],
+    "sanitization_enabled": false
   }
 }`
 			if err := os.WriteFile(filepath.Join(dir, "metadata.json.tmp"), []byte(meta), 0o644); err != nil {
 				t.Fatal(err)
 			}
 
-			_, _, ok := findResumableSlowDumpDir(base, tt.sourceDB, tt.schemas)
+			_, _, ok := findResumableSlowDumpDir(base, tt.sourceSignature, tt.schemas, false)
 			if ok != tt.wantOk {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOk)
 			}
 		})
+	}
+}
+
+func TestFindResumableSlowDumpDirRequiresMatchingSanitization(t *testing.T) {
+	enabled, disabled := true, false
+	base, dir := t.TempDir(), ""
+	dir = filepath.Join(base, "1")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "users.ckpt.json"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write := func(sanitized *bool) {
+		meta, err := json.Marshal(dump.Metadata{Schema: "public", Provenance: &dump.Provenance{SourceSignature: "postgres://u@h:5432/db", Sanitized: sanitized}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "metadata.json.tmp"), meta, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(&enabled)
+	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, true); !ok {
+		t.Fatal("matching sanitization did not resume")
+	}
+	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, false); ok {
+		t.Fatal("enabled dump resumed with sanitization disabled")
+	}
+	write(&disabled)
+	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, true); ok {
+		t.Fatal("disabled dump resumed with sanitization enabled")
+	}
+	write(nil)
+	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, false); ok {
+		t.Fatal("legacy dump resumed without sanitization provenance")
 	}
 }
 
@@ -1056,6 +1116,45 @@ func TestBuildDumpOptionsInvalidSeedFilePropagatesError(t *testing.T) {
 	_, err := buildDumpOptions(flags, config.DefaultConfig())
 	if err == nil {
 		t.Fatal("expected error for invalid seed file")
+	}
+}
+
+func TestRunDumpInvalidOptionsLeaveOutputEmpty(t *testing.T) {
+	out := t.TempDir()
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", out, "--percent", "101"})
+	if err == nil || !strings.Contains(err.Error(), "between 1 and 100") {
+		t.Fatalf("err = %v, want percent validation error", err)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("invalid dump allocated output: %v", entries)
+	}
+}
+
+func TestRunDumpNegativePercentLeavesOutputEmpty(t *testing.T) {
+	out := t.TempDir()
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", out, "--percent", "-1"})
+	if err == nil || !strings.Contains(err.Error(), "between 1 and 100") {
+		t.Fatalf("err = %v, want percent validation error", err)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("negative percent allocated output: %v", entries)
+	}
+}
+
+func TestBuildDumpOptionsNegativeConfigPercent(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Subset.Percent = -1
+	_, err := buildDumpOptions(dumpFlags{}, cfg)
+	if err == nil || !strings.Contains(err.Error(), "between 1 and 100") {
+		t.Fatalf("err = %v, want percent validation error", err)
 	}
 }
 

@@ -526,3 +526,33 @@ func TestRunRestoreJSONReplaceValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestRunRestoreReplaceYesTargetInfo(t *testing.T) {
+	origResolve := resolveLoadDotEnv
+	origLoad := restoreLoadConfig
+	origPing := restorePingContext
+	origRestore := restoreRestore
+	t.Cleanup(func() {
+		resolveLoadDotEnv = origResolve
+		restoreLoadConfig = origLoad
+		restorePingContext = origPing
+		restoreRestore = origRestore
+	})
+
+	inputDir := t.TempDir()
+	resolveLoadDotEnv = func(string, config.EnvVarNames) (string, error) {
+		return "postgres://u:p@h/target_db", nil
+	}
+	restoreLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	restorePingContext = func(*sql.DB, context.Context) error { return nil }
+	restoreRestore = func(context.Context, *sql.DB, string, ...restore.Option) error { return nil }
+
+	stderr := captureStderr(func() {
+		if err := runRestore([]string{"--dsn", "postgres://u:p@h/target_db", "--input", inputDir, "--replace", "--yes"}); err != nil {
+			t.Fatalf("runRestore: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "info: target database: target_db") {
+		t.Fatalf("stderr = %q, want target database info", stderr)
+	}
+}

@@ -4,6 +4,15 @@ $ErrorActionPreference = "Stop"
 $script_dir = Split-Path $MyInvocation.MyCommand.Path -Parent
 $install_ps1 = Join-Path $script_dir "..\install.ps1" -Resolve
 
+if (-not ((Get-Content $install_ps1 -Raw) -match 'TimeoutSec \$DOLLY_DOWNLOAD_TIMEOUT')) {
+    throw "FAIL stalled download: PowerShell timeout missing"
+}
+Write-Host "PASS stalled download: PowerShell timeout configured" -ForegroundColor Green
+if (-not ((Get-Content $install_ps1 -Raw) -match 'Remove-Item -Force \$tmp_target')) {
+    throw "FAIL replacement cleanup: PowerShell temp cleanup missing"
+}
+Write-Host "PASS replacement cleanup: PowerShell temp cleanup configured" -ForegroundColor Green
+
 $tmpdir = Join-Path ([System.IO.Path]::GetTempPath()) "dolly-ps-test-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force $tmpdir | Out-Null
 $original_user_path = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -107,9 +116,16 @@ $Env:DOLLY_INSTALL_DIR       = Join-Path $tmpdir "install_dir_3"
 $Env:DOLLY_MOCK_DOWNLOAD_DIR = $mock_corrupt
 $Env:DOLLY_VERSION           = "latest"
 $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
+New-Item -ItemType Directory -Force $Env:DOLLY_INSTALL_DIR | Out-Null
+"old binary" | Out-File -Encoding ascii (Join-Path $Env:DOLLY_INSTALL_DIR "dolly.exe")
 try { & $install_ps1 2>&1 | Out-Null; $rc = 0 } catch { Write-Host $_; $rc = 1 }
 if ($rc -eq 0) {
     Write-Host "FAIL checksum-mismatch: expected failure on corrupt checksum even with DOLLY_ALLOW_UNVERIFIED=1, but install succeeded" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+if ((Get-Content (Join-Path $Env:DOLLY_INSTALL_DIR "dolly.exe") -Raw).Trim() -ne "old binary") {
+    Write-Host "FAIL checksum-mismatch: existing target changed" -ForegroundColor Red
     [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
     exit 1
 }

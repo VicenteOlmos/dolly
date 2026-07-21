@@ -243,6 +243,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	}
 
 	sorted := SortTables(tables)
+	assignDataFiles(sorted)
 
 	var sequences []SequenceState
 	if !cfg.skipSequences {
@@ -372,6 +373,7 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 	for _, name := range plan.tableOrder {
 		included = append(included, byName[name])
 	}
+	assignDataFiles(included)
 
 	manifest := &SubsetManifest{
 		Seeds:        subCfg.Seeds,

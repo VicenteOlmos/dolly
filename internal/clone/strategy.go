@@ -2,7 +2,6 @@ package clone
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -11,10 +10,6 @@ type Strategy interface {
 	Execute(ctx context.Context, opts Options) error
 	Name() string
 }
-
-// ErrStrategyGuided is returned when a strategy intentionally defers execution
-// and provides guidance instead (e.g. physical-backup replication).
-var ErrStrategyGuided = errors.New("strategy requires manual setup; see guidance message")
 
 // Resolve returns the concrete Strategy for a strategy name.
 // An empty string resolves to the default "schema-replay" strategy.

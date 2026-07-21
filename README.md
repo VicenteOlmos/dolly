@@ -1,242 +1,193 @@
-# Dolly
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="720" alt="Two identical cute Dolly sheep each hugging a large database marked DB beneath the Dolly name, with a sparkling duplication arc between them.">
+</p>
 
-Dolly is a local-first PostgreSQL CLI for dumping, restoring, and cloning database data. It can run as a command-line tool or as an interactive TUI, with optional saved connections for repeated work.
+<h1 align="center">Dolly</h1>
 
-> Dolly is a local-first PostgreSQL CLI. The public module path is `github.com/VicenteOlmos/dolly`. Build locally or use the curl installer below.
+<p align="center">
+  Local-first PostgreSQL CLI and TUI for dumping, restoring, and cloning databases.<br>
+  <a href="README.es.md">Español</a>
+</p>
 
-## Quickstart
+Choose your path:
 
-Start the development PostgreSQL database:
+| If you want to… | Start here |
+|---|---|
+| Work interactively | `dolly tui` — connect, inspect schemas, dump, and clone from a real terminal. |
+| Script a workflow | `dolly dump`, `dolly restore`, and `dolly clone` — use a DSN or saved connection. |
 
-```bash
-docker compose up -d
-export DOLLY_TEST_PG_DSN='postgres://dolly:dolly@127.0.0.1:5433/dolly?sslmode=disable'
-```
-
-Build and try a dump/restore round trip:
-
-```bash
-go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
-./bin/dolly dump --dsn "$DOLLY_TEST_PG_DSN" --output ./dolly_dump
-./bin/dolly dump list --output ./dolly_dump
-./bin/dolly restore --dsn "$DOLLY_TEST_PG_DSN" --input ./dolly_dump/1 --on-conflict skip
-```
-
-Reset the dev database when you need clean fixture data:
-
-```bash
-docker compose down -v
-docker compose up -d
-```
+`dolly tui` has no flags, requires a TTY, and reads `config.jsonc` from the current directory.
 
 ## Install
 
-### Linux / macOS
+Installers download the matching GitHub Release asset and verify it against that release's `checksums.txt` before installing it.
 
-Install the latest release:
+### Linux / macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | sh
 ```
 
-Installer commands require published release assets and `checksums.txt`. From a
-source checkout, use `go install ./cmd/dolly` or `make build-cli`.
-
-Install a specific version by setting `DOLLY_VERSION` with or without a leading `v`:
+Pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_REPO=VicenteOlmos/dolly DOLLY_VERSION=0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.1 sh
 ```
 
-### Windows
+Default install path: `/usr/local/bin`. Set `DOLLY_INSTALL_DIR` to install elsewhere.
 
-Install the latest release from PowerShell:
+### Windows (PowerShell)
 
 ```powershell
 irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
-Install a specific version:
+Pin a release:
 
 ```powershell
-$env:DOLLY_VERSION="0.1.0"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
-Installer expectations:
+Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it to your user `PATH`.
 
-- Requires a public GitHub repo and release assets.
-- Downloads `dolly_<os>_<arch>.tar.gz` from GitHub Releases (Linux/macOS) or `dolly_windows_<arch>.zip` (Windows).
-- Supports Linux, macOS, and Windows on `x86_64` and `arm64`.
-- Linux/macOS installs to `/usr/local/bin` by default; Windows installs to `%LOCALAPPDATA%\Programs\dolly\bin` and adds that directory to your user `PATH`.
-- Override install directory with `DOLLY_INSTALL_DIR`.
-- Verifies `checksums.txt` when the release publishes a matching entry.
-- Checksum verification is required even for the `latest` release. Set `DOLLY_ALLOW_UNVERIFIED=1` to bypass it (use with care).
-- Defaults to `VicenteOlmos/dolly`; override with `DOLLY_REPO` if needed.
+### From source
 
-## Commands
+```bash
+go install github.com/VicenteOlmos/dolly/cmd/dolly@latest
+# or from a checkout:
+go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
+```
 
-| Command | Use it for | Example |
-|---------|------------|---------|
-| `dolly tui` | Interactive terminal cockpit for connecting, dumping, and cloning. | `./bin/dolly tui` |
-| `dolly dump` | Export PostgreSQL data to numbered NDJSON dump directories. | `./bin/dolly dump --dsn "$DOLLY_TEST_PG_DSN" --output ./dolly_dump` |
-| `dolly dump --percent N` | Subset dump: recent root-table rows, then FK-closure related rows; output can exceed N%. | `./bin/dolly dump --dsn "$DOLLY_TEST_PG_DSN" --output ./dolly_dump --percent 10` |
-| `dolly dump list` | List local dump history without connecting to a database. | `./bin/dolly dump list --output ./dolly_dump` |
-| `dolly restore` | Load a dump into PostgreSQL. | `./bin/dolly restore --dsn "$DOLLY_TEST_PG_DSN" --input ./dolly_dump/1` |
-| `dolly clone` | Clone from a configured or prompted source using a selected strategy. | `./bin/dolly clone --help` |
-| `dolly config` | Create or inspect `config.jsonc`. | `./bin/dolly config init` / `./bin/dolly config show` |
-| `dolly version` | Print build version metadata. | `./bin/dolly version` |
+## First workflow
+
+Create optional local configuration, then choose the interactive or scriptable route.
+
+```bash
+dolly config init
+dolly tui
+```
+
+For a CLI workflow, pass a PostgreSQL DSN:
+
+```bash
+export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
+dolly dump --dsn "$DB" --output ./dolly_dump
+dolly dump list --output ./dolly_dump
+dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
+```
+
+## What Dolly can do
+
+| Command | Purpose |
+|---|---|
+| `dolly tui` | Interactive cockpit for connecting, dumping, and cloning. |
+| `dolly dump` | Export data to numbered NDJSON dump directories. |
+| `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. |
+| `dolly dump list` | List local dump history without a database connection. |
+| `dolly restore` | Load a Dolly dump into PostgreSQL. |
+| `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. |
+| `dolly config` | Create or inspect `config.jsonc` with `init` and `show`. |
+| `dolly version` | Print build version. |
 
 Run `dolly <command> --help` for command-specific flags.
 
-`schema.sql` is captured when `pg_dump` is available and sanitized for cross-version restore compatibility before Dolly applies it.
+**TUI and CLI restore differ:** the TUI restores from Dolly dump history. To restore an arbitrary directory, use `dolly restore --input <dir>`.
 
-## Common recipes
+When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility.
 
-### Small dev dump
+## Common workflows and limits
 
-Use a recent, FK-closed subset when you need realistic local data without a full production-sized dump:
+### Smaller local dump
 
 ```bash
 dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1000
 ```
 
-`--percent` samples recent root-table rows first, then adds required related rows through FK closure. It conflicts with `--seed-file` and `--slow-connection`.
+`--percent` conflicts with `--seed-file` and `--slow-connection`. FK closure can make a subset dump larger than the requested percentage.
 
-### Advanced bulk restore
+### Faster bulk restore — advanced
 
-Default restore is atomic. For trusted clean targets or very large restores, opt in to per-table commits; when the DSN and conflict policy permit, restore uses PostgreSQL COPY for faster bulk loads:
+Default restore runs in one transaction. For trusted empty targets or very large loads:
 
 ```bash
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 ```
 
-If failure recovery matters, keep the default transaction mode. `--no-transaction` is explicit opt-in because it can leave partial per-table progress.
+This mode can leave partial progress if it fails mid-way. Prefer the default when you need atomic rollback.
 
-### TUI restore scope
+### Clone strategies
 
-The TUI restores dumps from Dolly's dump history. To restore an arbitrary directory, use CLI `restore --input <dir>`.
+| Strategy | When | Sanitization |
+|---|---|---|
+| `schema-replay` | Default cross-server or development clone | Supported |
+| `template` | Same PostgreSQL instance; fastest | No |
+| `logical-stream` | Large cross-server logical copy | No |
+| `physical-backup` | Whole cluster directory copy | No |
 
-### Clone strategy quick guide
+`physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory rather than one database. Read [physical backup](docs/physical-backup.md) before using it.
 
-| Strategy | Use when | Notes |
-|----------|----------|-------|
-| `schema-replay` | Default cross-server/dev clone | Supports sanitization; uses dump/restore path. |
-| `template` | Same Postgres instance, fastest copy | Unsanitized; requires source DB to allow template clone. |
-| `logical-stream` | Large cross-server logical copy | Unsanitized; streams table data. |
-| `physical-backup` | Cluster-level physical replica | Unsanitized; copies the whole cluster directory. |
+## Safety
 
-## Configuration and saved connections
+Treat Dolly like a database administration tool:
 
-Dolly reads `config.jsonc` from the current project. Create the default file with:
+- `restore --replace` truncates target tables before insert.
+- `restore --no-transaction --yes` can leave partial table state.
+- Sanitization is pattern-based and only applies to `dump` and `schema-replay`; it is not a compliance guarantee.
+- `template`, `logical-stream`, and `physical-backup` copy unsanitized row data.
 
-```bash
-./bin/dolly config init
-```
+Before using production or production-like data, use a least-privilege role, keep DSNs and dumps out of Git, confirm destructive targets are disposable, validate sanitization manually, and rehearse in staging. See [security](docs/security.md) and [physical backup](docs/physical-backup.md).
 
-Saved connections are disabled by default. To enable them, set:
+## Configuration and automation
+
+`dolly config init` writes `config.jsonc`. See [config.example.jsonc](config.example.jsonc) for the complete template.
+
+Saved connections are off by default. Enable them explicitly:
 
 ```jsonc
 {
   "save_connections": true,
   "connections": {
-    "scope": "xdg",
-    "encrypt": true
+    "scope": "xdg",   // or "project"
+    "encrypt": true    // set DOLLY_CONNECTIONS_KEY (32-byte standard base64)
   }
 }
 ```
 
-Connection storage options:
+Then CLI commands can use `--connection <name>` instead of `--dsn`. Project-scoped stores are convenient but easier to commit by accident; encrypted stores need `DOLLY_CONNECTIONS_KEY`, and losing that key loses access to encrypted profiles.
 
-- `scope: "project"` stores profiles in the project directory.
-- `scope: "xdg"` stores profiles under `$XDG_CONFIG_HOME/dolly/`.
-- `connections.path` overrides the store path.
-- `connections.encrypt: true` encrypts the store with AES-256-GCM; set `DOLLY_CONNECTIONS_KEY` to a 32-byte standard base64 key.
+`dump`, `restore`, `clone`, and `version` accept `--json`:
 
-With saved connections enabled, `dump`, `restore`, and fast-forward `clone` can use `--connection <name>` instead of `--dsn`.
-
-## Agent / machine-readable mode
-
-Commands `dump`, `restore`, `clone`, and `version` accept `--json` for machine-readable output.
-
-**Contract**:
-- Exit 0 → success JSON result on **stdout**.
-- Exit 1 → error JSON object on **stderr**, exit code 1.
-- `--help` short-circuits before `--json` — no JSON emitted.
-- Progress rendering is suppressed when `--json` is active.
-
-**Success shapes**:
-
-| Command    | Fields |
-|------------|--------|
-| `dump`     | `ok`, `command`, `output_dir`, `seq`, `source_database`, `schemas`, `table_count` |
-| `restore`  | `ok`, `command`, `input_dir`, `target_database`, `schemas`, `table_count` |
-| `clone`    | `ok`, `command`, `source_database`, `clone_name`, `strategy`, `target_dir`, `schemas` (requires `-ff`) |
-| `version`  | `ok`, `command`, `version`, `commit`, `date` |
-
-`schemas` is always a JSON array (never `null`).
-
-**Error shape** (stderr, exit 1):
-
-```json
-{"ok": false, "command": "<cmd>", "error": "<message>"}
-```
-
-**Notes**:
-- `clone --json` requires `-ff` (non-interactive fast-forward mode).
-- `dump list --json` predates this contract and uses a different shape (JSON array of history records).
-
-**Example for agents**:
+- Exit 0: success JSON on **stdout**.
+- Exit 1: `{"ok":false,"command":"...","error":"..."}` on **stderr**.
+- `clone --json` requires `-ff` for non-interactive use.
+- `dump list --json` returns an array of history records instead of the command envelope.
 
 ```bash
-result=$(dolly dump --dsn "$DB" --output ./out --json 2>err.json)
-if [ $? -ne 0 ]; then
-    # parse err.json for {"ok":false,"command":"dump","error":"..."}
-    cat err.json
-    exit 1
-fi
-# success: $result is the JSON object
-echo "$result" | jq .
+result=$(dolly dump --dsn "$DB" --output ./out --json 2>err.json) || { cat err.json; exit 1; }
+echo "$result"
 ```
-
-## Safety notes
-
-Dolly works with real database credentials and can perform destructive operations. Treat it like a database admin tool, not a toy.
-
-- `restore --replace` truncates target tables before inserting data.
-- `restore --no-transaction --yes` is advanced opt-in for per-table commits; default restore is atomic.
-- Sanitization is pattern-based and only applies to dump/schema-replay paths; it is not a compliance guarantee.
-- `template` and `physical-backup` clone strategies copy unsanitized data. `physical-backup` copies the full cluster directory.
-
-Read the safety docs before production use:
-
-- [Security and database safety](docs/security.md)
-- [Physical backup clone strategies](docs/physical-backup.md)
-- [Local release readiness](docs/release.md)
 
 ## Development
 
-Useful local commands:
+Run a local PostgreSQL round trip from a source checkout:
+
+```bash
+docker compose up -d
+export DOLLY_TEST_PG_DSN='postgres://dolly:dolly@127.0.0.1:5433/dolly?sslmode=disable'
+go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
+./bin/dolly dump --dsn "$DOLLY_TEST_PG_DSN" --output ./dolly_dump
+./bin/dolly restore --dsn "$DOLLY_TEST_PG_DSN" --input ./dolly_dump/1 --on-conflict skip
+```
 
 ```bash
 go test ./...
 go vet ./...
-go build -buildvcs=false ./cmd/dolly
 make preflight
-make build-versioned VERSION=0.0.0-local
+make test-integration   # needs DOLLY_TEST_PG_DSN
 ```
 
-Optional integration tests require the Docker dev database and `DOLLY_TEST_PG_DSN`:
-
-```bash
-make test-integration
-```
-
-Restore package coverage baseline:
-
-```bash
-make test-cover-restore
-```
+Release notes: [docs/release.md](docs/release.md) · [CHANGELOG.md](CHANGELOG.md)
 
 ## License
 
-Dolly is available under the [MIT License](LICENSE).
+[MIT](LICENSE)

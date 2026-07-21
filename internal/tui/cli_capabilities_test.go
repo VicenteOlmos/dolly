@@ -46,15 +46,26 @@ func TestRenderCapabilitiesStripWidths(t *testing.T) {
 func TestRenderCLIHelpRequiredAndSubsetLabels(t *testing.T) {
 	dump := CLICatalog()[0]
 	got := stripANSI(RenderCLIHelp(dump, 80))
-	if !strings.Contains(got, "--dsn*") || !strings.Contains(got, "--output*") {
-		t.Fatalf("missing required markers: %s", got)
+	if strings.Contains(got, "--dsn*") || strings.Contains(got, "--output*") {
+		t.Fatalf("dump alternatives must not be marked required: %s", got)
 	}
-	if !strings.Contains(got, "CLI-only with --seed-f") {
+	if !strings.Contains(got, "config dump.output_dir") || !strings.Contains(got, "--connection") {
+		t.Fatalf("missing dump alternative guidance: %s", got)
+	}
+	if !strings.Contains(got, "CLI-only with --seed-f") || !strings.Contains(got, "--percent") {
 		t.Fatalf("missing subset-only label: %s", got)
+	}
+	for _, flag := range []string{"--slow-connection", "--chunk-size", "--retry-max", "--retry-base"} {
+		if !strings.Contains(got, flag) {
+			t.Fatalf("missing slow connection flag %q: %s", flag, got)
+		}
 	}
 
 	restore := CLICatalog()[1]
 	gotRestore := stripANSI(RenderCLIHelp(restore, 80))
+	if strings.Contains(gotRestore, "--dsn*") {
+		t.Fatalf("restore dsn alternative must not be marked required: %s", gotRestore)
+	}
 	if !strings.Contains(gotRestore, "TUI history restore") {
 		t.Fatalf("restore should mention TUI history restore: %s", gotRestore)
 	}
@@ -114,7 +125,7 @@ func TestHelpPageCountAndBindingsPage(t *testing.T) {
 
 func TestFlagNamesDump(t *testing.T) {
 	names := FlagNames("dump")
-	want := []string{"dsn", "connection", "output", "no-transaction", "seed-file", "percent", "max-depth", "max-tables", "max-rows", "max-rows-per-table", "max-in-list-size", "json"}
+	want := []string{"dsn", "connection", "output", "no-transaction", "seed-file", "percent", "slow-connection", "chunk-size", "retry-max", "retry-base", "max-depth", "max-tables", "max-rows", "max-rows-per-table", "max-in-list-size", "json"}
 	if len(names) != len(want) {
 		t.Fatalf("got %v, want %v", names, want)
 	}
