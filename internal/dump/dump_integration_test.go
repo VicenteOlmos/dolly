@@ -263,7 +263,7 @@ func TestIntegrationSubsetDumpTableSeed(t *testing.T) {
 
 	tableSet := map[string]bool{}
 	for _, name := range meta.Subset.Tables {
-		tableSet[name] = true
+		tableSet[strings.TrimPrefix(name, "public\x00")] = true
 	}
 	for _, want := range []string{"departments", "tbl_a"} {
 		if !tableSet[want] {
