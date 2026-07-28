@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -201,7 +203,7 @@ func TestParseDumpFlags(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("got %+v, want %+v", got, tt.want)
 			}
 		})
@@ -1645,5 +1647,271 @@ func TestBuildDumpOptionsConfigSeedFileSlowConnectionConflict(t *testing.T) {
 	_, err := buildDumpOptions(flags, cfg)
 	if err == nil || !strings.Contains(err.Error(), "incompatible") {
 		t.Fatalf("expected incompat error for slow-connection + config seed_file, got %v", err)
+	}
+}
+
+func TestParseDumpFlagsTableSelection(t *testing.T) {
+	got, err := parseDumpFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--output", "/tmp/out",
+		"--include-table", "public.users",
+		"--include-table", "public.orders",
+		"--exclude-table", "public.audit_log",
+		"--include-table-file", "/tmp/include.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.IncludeTables) != 2 || got.IncludeTables[0] != "public.users" {
+		t.Fatalf("include tables = %v", got.IncludeTables)
+	}
+	if len(got.ExcludeTables) != 1 || got.ExcludeTables[0] != "public.audit_log" {
+		t.Fatalf("exclude tables = %v", got.ExcludeTables)
+	}
+	if len(got.IncludeTableFiles) != 1 {
+		t.Fatalf("include files = %v", got.IncludeTableFiles)
+	}
+}
+
+func TestBuildDumpOptionsTableSelectionCLIReplacesConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.IncludeTables = []string{"public.config_only"}
+	cfg.Dump.ExcludeTables = []string{"public.config_exclude"}
+
+	flags := dumpFlags{
+		DSN:           "postgres://h-a/db_a",
+		Output:        t.TempDir(),
+		IncludeTables: []string{"public.cli_only"},
+	}
+
+	opts, err := buildDumpOptions(flags, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := dump.InspectTableSelection(opts...)
+	if policy == nil || len(policy.Includes) != 1 {
+		t.Fatalf("policy = %+v", policy)
+	}
+	if policy.Includes[0].Table != (dump.QualifiedTable{Schema: "public", Name: "cli_only"}) {
+		t.Fatalf("include = %+v", policy.Includes[0].Table)
+	}
+	if len(policy.Excludes) != 1 || policy.Excludes[0].Table.Name != "config_exclude" {
+		t.Fatalf("expected config excludes to remain when CLI only replaces include category, got %+v", policy.Excludes)
+	}
+}
+
+func TestBuildDumpOptionsTableSelectionConfigDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.IncludeTables = []string{"public.users"}
+	cfg.Dump.ExcludeTables = []string{"public.audit_log"}
+
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:    "postgres://h-a/db_a",
+		Output: t.TempDir(),
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := dump.InspectTableSelection(opts...)
+	if policy == nil || len(policy.Includes) != 1 || len(policy.Excludes) != 1 {
+		t.Fatalf("policy = %+v", policy)
+	}
+	if policy.Includes[0].Source.Name != "dump.include_tables" {
+		t.Fatalf("include source = %+v", policy.Includes[0].Source)
+	}
+}
+
+func TestBuildDumpOptionsTableSelectionInvalidSelector(t *testing.T) {
+	_, err := buildDumpOptions(dumpFlags{
+		DSN:           "postgres://h-a/db_a",
+		Output:        t.TempDir(),
+		IncludeTables: []string{"users"},
+	}, config.DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "unqualified") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildDumpOptionsTableSelectionCombinesDirectAndFile(t *testing.T) {
+	includeFile := filepath.Join(t.TempDir(), "include.txt")
+	if err := os.WriteFile(includeFile, []byte("public.orders\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:               "postgres://h-a/db_a",
+		Output:            t.TempDir(),
+		IncludeTables:     []string{"public.users"},
+		IncludeTableFiles: []string{includeFile},
+	}, config.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := dump.InspectTableSelection(opts...)
+	if policy == nil || len(policy.Includes) != 2 {
+		t.Fatalf("policy = %+v", policy)
+	}
+}
+
+func TestRemoveFreshEmptyDumpDir(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	if err := os.Mkdir(empty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeFreshEmptyDumpDir(empty); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Fatal("expected empty dir removed")
+	}
+
+	nonEmpty := filepath.Join(dir, "nonempty")
+	if err := os.Mkdir(nonEmpty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nonEmpty, "metadata.json.tmp"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeFreshEmptyDumpDir(nonEmpty); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(nonEmpty); err != nil {
+		t.Fatalf("non-empty dir should remain: %v", err)
+	}
+}
+
+func TestRunDumpSelectionErrorRemovesFreshEmptyDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, _ ...dump.Option) error {
+		return fmt.Errorf("%w: include table %q not found in database", dump.ErrTableSelection, "public.missing")
+	}
+
+	baseDir := t.TempDir()
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir, "--include-table", "public.missing"})
+	if err == nil {
+		t.Fatal("expected selection error")
+	}
+	if !dump.IsTableSelectionError(err) {
+		t.Fatalf("error = %v, want table selection", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, "1")); !os.IsNotExist(statErr) {
+		t.Fatalf("fresh empty dump dir should be removed, stat err = %v", statErr)
+	}
+}
+
+func TestRunDumpNonSelectionErrorPreservesFreshDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, _ ...dump.Option) error {
+		return errors.New("stream table failed")
+	}
+
+	baseDir := t.TempDir()
+	if err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir}); err == nil {
+		t.Fatal("expected dump error")
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, "1")); statErr != nil {
+		t.Fatalf("fresh dir should remain on non-selection error: %v", statErr)
+	}
+}
+
+func TestRunDumpSelectionErrorPreservesNonEmptyDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
+		if err := os.WriteFile(filepath.Join(out, "users.ndjson.tmp"), []byte(`{"id":1}`+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Errorf("%w: include table %q not found in database", dump.ErrTableSelection, "public.missing")
+	}
+
+	baseDir := t.TempDir()
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir, "--include-table", "public.missing"})
+	if err == nil {
+		t.Fatal("expected selection error")
+	}
+	dir := filepath.Join(baseDir, "1")
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Fatalf("non-empty dir should remain: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "users.ndjson.tmp")); statErr != nil {
+		t.Fatalf("partial artifact should remain: %v", statErr)
+	}
+}
+
+func TestRunDumpResumedSlowDirNotRemovedOnSelectionError(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, _ ...dump.Option) error {
+		return fmt.Errorf("%w: table selection matched no tables", dump.ErrTableSelection)
+	}
+
+	baseDir := t.TempDir()
+	interruptedDir := filepath.Join(baseDir, "1")
+	if err := os.MkdirAll(interruptedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "users.ckpt.json"), []byte(`{"table":"users"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmpMeta := `{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [],
+  "provenance": {
+    "source_database": "db",
+    "schemas": [],
+    "source_signature": "postgres://@h:5432/db",
+    "sanitization_enabled": false
+  }
+}`
+	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir, "--slow-connection", "--include-table", "public.missing"})
+	if err == nil {
+		t.Fatal("expected selection error")
+	}
+	if _, statErr := os.Stat(interruptedDir); statErr != nil {
+		t.Fatalf("resumable slow dir should remain: %v", statErr)
 	}
 }

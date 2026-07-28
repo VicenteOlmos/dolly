@@ -36,22 +36,26 @@ var (
 )
 
 type dumpFlags struct {
-	DSN             string
-	Connection      string
-	Output          string
-	NoTransaction   bool
-	SlowConnection  bool
-	ChunkSize       int
-	RetryMax        int
-	RetryBase       string
-	SeedFile        string
-	Percent         int
-	MaxDepth        int
-	MaxTables       int
-	MaxRows         int
-	MaxRowsPerTable int
-	MaxInListSize   int
-	JSON            bool
+	DSN               string
+	Connection        string
+	Output            string
+	NoTransaction     bool
+	SlowConnection    bool
+	ChunkSize         int
+	RetryMax          int
+	RetryBase         string
+	SeedFile          string
+	Percent           int
+	MaxDepth          int
+	MaxTables         int
+	MaxRows           int
+	MaxRowsPerTable   int
+	MaxInListSize     int
+	IncludeTables     []string
+	ExcludeTables     []string
+	IncludeTableFiles []string
+	ExcludeTableFiles []string
+	JSON              bool
 }
 
 func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
@@ -72,6 +76,22 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	fs.IntVar(&flags.MaxRows, "max-rows", 0, "subset max rows read during planning (default 100000)")
 	fs.IntVar(&flags.MaxRowsPerTable, "max-rows-per-table", 0, "subset max rows exported per table (0 = unlimited)")
 	fs.IntVar(&flags.MaxInListSize, "max-in-list-size", 0, "subset max values per IN/ANY batch (default 500)")
+	fs.Func("include-table", "exact qualified table to include (repeatable; narrows dump; no globs or CSV)", func(s string) error {
+		flags.IncludeTables = append(flags.IncludeTables, s)
+		return nil
+	})
+	fs.Func("exclude-table", "exact qualified table to exclude (repeatable; wins over include; no globs or CSV)", func(s string) error {
+		flags.ExcludeTables = append(flags.ExcludeTables, s)
+		return nil
+	})
+	fs.Func("include-table-file", "newline-delimited include table file (repeatable; # comments and blank lines ignored)", func(s string) error {
+		flags.IncludeTableFiles = append(flags.IncludeTableFiles, s)
+		return nil
+	})
+	fs.Func("exclude-table-file", "newline-delimited exclude table file (repeatable; # comments and blank lines ignored)", func(s string) error {
+		flags.ExcludeTableFiles = append(flags.ExcludeTableFiles, s)
+		return nil
+	})
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	return fs
 }
@@ -205,7 +225,38 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 		opts = append(opts, dump.WithSubset(subCfg))
 	}
 
+	if policy, ignored, err := resolveTableSelection(flags, cfg); err != nil {
+		return nil, err
+	} else if policy != nil {
+		opts = append(opts, dump.WithTableSelection(*policy, ignored))
+	}
+
 	return opts, nil
+}
+
+func resolveTableSelection(flags dumpFlags, cfg *config.Config) (*dump.SelectionPolicy, []dump.IgnoredFileLine, error) {
+	includeDirect := cfg.Dump.IncludeTables
+	includeFiles := cfg.Dump.IncludeTableFiles
+	excludeDirect := cfg.Dump.ExcludeTables
+	excludeFiles := cfg.Dump.ExcludeTableFiles
+	includeKind, includeName := "config", "dump.include_tables"
+	excludeKind, excludeName := "config", "dump.exclude_tables"
+
+	if len(flags.IncludeTables) > 0 || len(flags.IncludeTableFiles) > 0 {
+		includeDirect = flags.IncludeTables
+		includeFiles = flags.IncludeTableFiles
+		includeKind, includeName = "flag", "--include-table"
+	}
+	if len(flags.ExcludeTables) > 0 || len(flags.ExcludeTableFiles) > 0 {
+		excludeDirect = flags.ExcludeTables
+		excludeFiles = flags.ExcludeTableFiles
+		excludeKind, excludeName = "flag", "--exclude-table"
+	}
+
+	return dump.BuildSelectionPolicyWithSources(
+		includeDirect, includeFiles, excludeDirect, excludeFiles,
+		includeKind, includeName, excludeKind, excludeName,
+	)
 }
 
 func runDump(args []string) (err error) {
@@ -279,6 +330,7 @@ func runDump(args []string) (err error) {
 
 	var outputDir string
 	var seq int
+	freshAllocated := false
 	if flags.SlowConnection {
 		if resumable, resumableSeq, ok := findResumableSlowDumpDir(out, sourceSignatureFromDSN(dsn), schemas, cfg.Sanitization.Enabled); ok {
 			outputDir = resumable
@@ -288,12 +340,14 @@ func runDump(args []string) (err error) {
 			if err != nil {
 				return fmt.Errorf("allocate dump directory: %w", err)
 			}
+			freshAllocated = true
 		}
 	} else {
 		outputDir, seq, err = dumphistory.AllocateDir(out, store)
 		if err != nil {
 			return fmt.Errorf("allocate dump directory: %w", err)
 		}
+		freshAllocated = true
 	}
 
 	if len(schemas) > 0 {
@@ -318,6 +372,9 @@ func runDump(args []string) (err error) {
 	}))
 
 	if err := dumpRun(ctx, db, outputDir, opts...); err != nil {
+		if freshAllocated && dump.IsTableSelectionError(err) {
+			_ = removeFreshEmptyDumpDir(outputDir)
+		}
 		return fmt.Errorf("dump: %w", err)
 	}
 	fmt.Fprintln(os.Stderr, "dump complete")
@@ -362,6 +419,19 @@ func runDump(args []string) (err error) {
 	}
 
 	return nil
+}
+
+// removeFreshEmptyDumpDir deletes dir only when it contains no entries.
+// Uses os.Remove, never RemoveAll. Skips non-empty dirs (partial/resumable dumps).
+func removeFreshEmptyDumpDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return nil
+	}
+	return os.Remove(dir)
 }
 
 func databaseFromDSN(dsn string) string {

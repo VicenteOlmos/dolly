@@ -50,10 +50,14 @@ type Config struct {
 		MaxRowsPerTable  int `json:"max_rows_per_table"`
 	} `json:"subset"`
 	Dump struct {
-		OutputDir      string `json:"output_dir"`
-		SlowChunkSize  int    `json:"slow_chunk_size"`
-		SlowRetryMax   int    `json:"slow_retry_max"`
-		SlowRetryBase  string `json:"slow_retry_base"`
+		OutputDir         string   `json:"output_dir"`
+		SlowChunkSize     int      `json:"slow_chunk_size"`
+		SlowRetryMax      int      `json:"slow_retry_max"`
+		SlowRetryBase     string   `json:"slow_retry_base"`
+		IncludeTables     []string `json:"include_tables"`
+		ExcludeTables     []string `json:"exclude_tables"`
+		IncludeTableFiles []string `json:"include_table_files"`
+		ExcludeTableFiles []string `json:"exclude_table_files"`
 	} `json:"dump"`
 	SaveConnections bool `json:"save_connections"`
 	DB              struct {
@@ -106,6 +110,10 @@ func DefaultConfig() *Config {
 	cfg.Dump.OutputDir = "dolly_dump"
 	cfg.Dump.SlowChunkSize = 1000
 	cfg.Dump.SlowRetryBase = "500ms"
+	cfg.Dump.IncludeTables = []string{}
+	cfg.Dump.ExcludeTables = []string{}
+	cfg.Dump.IncludeTableFiles = []string{}
+	cfg.Dump.ExcludeTableFiles = []string{}
 	cfg.DB.MaxOpenConns = 5
 	cfg.DB.StatementTimeout = "5min"
 	cfg.TUI.SectionEntry = "inside"

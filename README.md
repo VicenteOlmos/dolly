@@ -121,6 +121,14 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 `--percent` conflicts with `--seed-file` and `--slow-connection`. FK closure can make a subset dump larger than the requested percentage.
 
+### Select tables
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump --include-table public.users --exclude-table public.audit_log
+```
+
+Use exact `schema.table` names only. Repeat `--include-table` / `--exclude-table` or point at newline-delimited files with `--include-table-file` / `--exclude-table-file` (`#` comments and blank lines are ignored). Includes narrow the dump; excludes win. Globs, CSV, and unqualified names are rejected. Unmatched includes fail before output; unmatched excludes become warnings in metadata provenance.
+
 ### Faster bulk restore — advanced
 
 Default restore runs in one transaction. For trusted empty targets or very large loads:
