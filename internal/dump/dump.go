@@ -32,6 +32,8 @@ type config struct {
 	skipSequences      bool
 	rowTransform       RowTransform
 	provenance         *Provenance
+	selection          *SelectionPolicy
+	selectionIgnored   []IgnoredFileLine
 }
 
 type slowRetryConfig struct {
@@ -171,6 +173,26 @@ func WithProvenance(p Provenance) Option {
 	}
 }
 
+// WithTableSelection limits dump to exact qualified tables using include/exclude policy.
+func WithTableSelection(policy SelectionPolicy, ignored []IgnoredFileLine) Option {
+	return func(c *config) {
+		cp := policy
+		c.selection = &cp
+		if len(ignored) > 0 {
+			c.selectionIgnored = append([]IgnoredFileLine(nil), ignored...)
+		}
+	}
+}
+
+// InspectTableSelection returns the selection policy captured from opts, or nil.
+func InspectTableSelection(opts ...Option) *SelectionPolicy {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.selection
+}
+
 // WithoutSequences skips sequence state capture during Dump.
 // Use in tests where pg_sequences cannot be queried (mock databases).
 func WithoutSequences() Option {
@@ -238,6 +260,20 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		return fmt.Errorf("load schema: %w", err)
 	}
 
+	if cfg.selection != nil {
+		filtered, selProv, err := PlanTableSelection(tables, cfg.selection, cfg.selectionIgnored)
+		if err != nil {
+			return err
+		}
+		tables = filtered
+		if cfg.provenance != nil {
+			cfg.provenance.TableSelection = &selProv
+		}
+		for _, w := range selProv.Warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		}
+	}
+
 	if cfg.subset != nil {
 		return dumpSubset(ctx, q, tx, tables, outputDir, &cfg)
 	}
@@ -250,9 +286,14 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	}
 	assignDataFiles(sorted)
 
+	seqSchemas := cfg.schemas
+	if cfg.selection != nil && (len(cfg.selection.Includes) > 0 || len(cfg.selection.Excludes) > 0) {
+		seqSchemas = schemasFromTables(tables)
+	}
+
 	var sequences []SequenceState
 	if !cfg.skipSequences {
-		seqs, err := captureSequences(ctx, q, cfg.schemas)
+		seqs, err := captureSequences(ctx, q, seqSchemas)
 		if err != nil {
 			// ponytail: non-fatal — pg_sequences is a system view that works with
 			// real PostgreSQL but not with test mocks. Carry on without sequence state.

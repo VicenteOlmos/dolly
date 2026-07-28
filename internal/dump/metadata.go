@@ -63,6 +63,7 @@ type Provenance struct {
 	Sanitized        *bool    `json:"sanitization_enabled,omitempty"`
 	TableCount       int      `json:"table_count"`
 	TotalRowEstimate int64    `json:"total_row_estimate,omitempty"`
+	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {
