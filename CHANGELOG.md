@@ -4,7 +4,30 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
-- **Docs** public-release readiness: release-first publication ordering (private tag/assets before visibility), SemVer/latest-only support policy, immutable published assets, private security reporting, pre-public vs post-public recovery (no force-push rollback), and contributor preflight expectations in README, CONTRIBUTING, SECURITY, and `docs/release.md`.
+- **Docs** recognition-first operator workflows in README (mode decision table, six copyable recipes) and pending `0.2.0` release notes below.
+
+## 0.2.0
+
+Pending — not tagged or published yet. Merge the docs PR, complete SDD archive, then tag protected `main` as `v0.2.0` per [docs/release.md](docs/release.md).
+
+### Added
+
+- **Exact table selection** — repeatable `--include-table` / `--exclude-table` and newline-delimited `--include-table-file` / `--exclude-table-file` selectors; include-narrow/exclude-win planning; credential-free provenance in `metadata.json` (#25, #27, #29).
+- **Selective keyset chunking** — `--chunk-table` / `--chunk-table-file` stream named tables with PK-based checkpoints and resume; provenance-safe directory reuse (#31, #32).
+- **Parallel table dump** — `--workers` / `dump.workers` (default `1`, max `16`) export tables from one read-only repeatable-read snapshot; metadata published last on success only (#34, #35).
+- **Parallel table restore** — `--workers` / `restore.workers` (default `1`, max `16`) restore FK dependency levels concurrently; sequences synchronize after table data (#37, #38, #39).
+
+### Safety
+
+- Chunk and slow-connection modes reject parallel dump workers (`workers > 1`).
+- Parallel dump rejects `--no-transaction`, subset modes, and chunk/slow policies; requires `db.max_open_conns >= workers+1`.
+- Parallel restore requires `--no-transaction --yes --ack-partial-state`, conflict policy `error`, and rejects `--replace`, `--trust-schema-sql`, and skip/upsert.
+- Parallel restore is non-atomic (per-table commits); `.dolly-restore-partial-state.json` is retained on failure and removed only after full success.
+- Parallel dump coordinator monitors snapshot exporter liveness and cancels workers on coordinator failure (#41).
+
+### Verification
+
+- PG16 integration coverage for exact selection, chunk/resume, shared-snapshot parallel dump, and acknowledged parallel restore.
 
 ## 0.1.1 — 2026-07-20
 

@@ -86,6 +86,18 @@ dolly dump list --output ./dolly_dump
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
 ```
 
+### Choose a mode
+
+| If you need… | Use | Do not use when |
+|---|---|---|
+| An exact table subset | `--include-table` / `--exclude-table` (or selector files) | You need FK-closure percent sampling (`--percent` / `--seed-file`) |
+| Resumable export of large named tables | `--chunk-table` with `workers=1` | The table has no primary key, or you need parallel dump workers |
+| A consistent parallel export | `--workers N` (shared snapshot) | `--no-transaction`, chunk/slow modes, or subset policies |
+| Faster acknowledged restore | `--workers N` with `--no-transaction --yes --ack-partial-state` | You need atomic rollback, `--replace`, skip/upsert, or `--trust-schema-sql` |
+| Atomic rollback on restore failure | Default serial restore (`workers=1`) | You need FK-level concurrency |
+
+Copyable recipes for each mode are in [Common workflows and limits](#common-workflows-and-limits). Full flag catalogs: `dolly dump --help`, `dolly restore --help`, and [config.example.jsonc](config.example.jsonc).
+
 ## What Dolly can do
 
 | Command | Purpose |
@@ -113,6 +125,108 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --trust-schema-sql --no-transac
 
 ## Common workflows and limits
 
+Six copyable recipes below. Each uses the same scan pattern: **Use when**, **Command**, **Result/artifacts**, and **Constraint/warning**. See also the [mode decision table](#choose-a-mode), `dolly dump --help`, `dolly restore --help`, and [config.example.jsonc](config.example.jsonc).
+
+### Direct exact selectors
+
+**Use when** you need a narrow dump of specific tables by exact `schema.table` name.
+
+**Command**
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump \
+  --include-table public.users --exclude-table public.audit_log
+```
+
+**Result/artifacts** numbered `{output}/{n}/` with NDJSON per table, `metadata.json` selection provenance (credential-free), and optional `schema.sql` when `pg_dump` is on `PATH`.
+
+**Constraint/warning** includes narrow scope; excludes win over includes. Globs, CSV, and unqualified names are rejected. Unmatched includes fail before output; unmatched excludes become warnings in metadata. Subset modes (`--percent`, `--seed-file`) are incompatible on the same run. Shared-snapshot parallel dump (`--workers N`) can export included tables when chunk/slow/subset/`--no-transaction` are off.
+
+### Selector files
+
+**Use when** the same include/exclude list is reused across runs or is too long for repeated flags.
+
+**Command**
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump \
+  --include-table-file tables.include.txt \
+  --exclude-table-file tables.exclude.txt
+```
+
+**Result/artifacts** same numbered dump layout and `metadata.json` provenance as direct selectors.
+
+**Constraint/warning** files are newline-delimited; `#` comments and blank lines are ignored. Same exact `schema.table` grammar, include-narrow/exclude-win precedence, and validation rules as direct flags. Config equivalents: `dump.include_table_files` / `dump.exclude_table_files` (CLI flags replace config when set).
+
+### Selective keyset chunk and resume
+
+**Use when** named tables are large or the connection is unstable and you need checkpointed, resumable streaming.
+
+**Command**
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump \
+  --chunk-table public.orders --chunk-table public.events
+```
+
+**Result/artifacts** numbered `{output}/{n}/` with per-table NDJSON, `metadata.json` chunk provenance, transient checkpoint files under the run directory during export, and final metadata published only after completion.
+
+**Constraint/warning** chunk tables require a primary key; unmatched chunk selectors fail before output; PK-less tables fail during planning. Resume requires the same source, selection, and chunk policy. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` chunks every selected table with the same resumable behavior.
+
+### Shared-snapshot parallel dump
+
+**Use when** you need faster full or selected-table export with point-in-time consistency across tables.
+
+**Command**
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump --workers 4
+```
+
+**Result/artifacts** tables export concurrently from one read-only repeatable-read snapshot into numbered `{output}/{n}/`; `metadata.json` is written last on success only.
+
+**Constraint/warning** `--workers` (or `dump.workers`, default `1`, max `16`) requires `db.max_open_conns >= workers+1`. Rejects `--no-transaction`, `--slow-connection`, chunk selectors, and subset modes. Unpublished run artifacts are cleaned on failure; coordinator monitors snapshot liveness during parallel export.
+
+### Acknowledged parallel restore
+
+**Use when** you accept non-atomic, FK-level concurrency for faster restore into a trusted or disposable target.
+
+**Command**
+
+```bash
+dolly restore --dsn "$DB" --input ./dolly_dump/1 \
+  --workers 4 --no-transaction --yes --ack-partial-state
+```
+
+**Result/artifacts** tables restore by FK dependency level with bounded workers; sequences synchronize after all table data commits. On full success, `.dolly-restore-partial-state.json` is removed from the input directory.
+
+**Constraint/warning** non-atomic: each table commits independently; no global rollback. `--workers` (or `restore.workers`, default `1`, max `16`) requires `--no-transaction`, `--yes`, `--ack-partial-state`, conflict policy `error` (default), and a resolvable DSN. Rejects `--replace`, `--trust-schema-sql`, and skip/upsert. Manifest defaults to `{input_dir}/.dolly-restore-partial-state.json` (override with `--partial-state-file` or `restore.partial_state_file`); retained on failure for inspection. Acknowledgement is CLI-only and never stored in config. Not available from TUI history without these CLI flags.
+
+### Safe end-to-end combinations
+
+**Use when** you need a documented path from selective dump through restore without mixing incompatible modes.
+
+**Command** (exact selection + optional chunk, then default atomic restore)
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump \
+  --include-table public.users --include-table public.orders \
+  --chunk-table public.orders
+dolly restore --dsn "$DB" --input ./dolly_dump/1
+```
+
+**Command** (snapshot-parallel dump, then explicit parallel restore)
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump --workers 4
+dolly restore --dsn "$DB" --input ./dolly_dump/1 \
+  --workers 4 --no-transaction --yes --ack-partial-state
+```
+
+**Result/artifacts** dump writes `{output}/{n}/` with `metadata.json`, NDJSON, optional `schema.sql`, and checkpoint state only while chunk/slow export is in progress. Parallel restore may leave `.dolly-restore-partial-state.json` until full success.
+
+**Constraint/warning** keep `workers=1` for chunk/selective dumps; use default serial restore when atomic rollback matters. When includes narrow scope, each `--chunk-table` must name a table in the include set. Do not combine parallel dump with chunk/slow/subset/`--no-transaction`. Do not combine parallel restore with replace, trusted schema, or skip/upsert policies.
+
 ### Smaller local dump
 
 ```bash
@@ -120,41 +234,6 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 ```
 
 `--percent` conflicts with `--seed-file` and `--slow-connection`. FK closure can make a subset dump larger than the requested percentage.
-
-### Select tables
-
-```bash
-dolly dump --dsn "$DB" --output ./dolly_dump --include-table public.users --exclude-table public.audit_log
-```
-
-Use exact `schema.table` names only. Repeat `--include-table` / `--exclude-table` or point at newline-delimited files with `--include-table-file` / `--exclude-table-file` (`#` comments and blank lines are ignored). Includes narrow the dump; excludes win. Globs, CSV, and unqualified names are rejected. Unmatched includes fail before output; unmatched excludes become warnings in metadata provenance.
-
-### Chunk large tables
-
-```bash
-dolly dump --dsn "$DB" --output ./dolly_dump --chunk-table public.orders --chunk-table public.events
-```
-
-`--chunk-table` / `--chunk-table-file` use the same exact `schema.table` grammar as include/exclude selectors. Only named tables stream with keyset pagination and checkpoint/resume; other selected tables use the normal single-query path. Unmatched chunk selectors fail before output; chunk tables without a primary key fail during planning. `--slow-connection` chunks every selected table and keeps the existing resumable dump-dir behavior. Chunk and slow modes reject parallel workers (`workers > 1`).
-
-### Parallel table dump
-
-```bash
-dolly dump --dsn "$DB" --output ./dolly_dump --workers 4
-```
-
-`--workers` (or config `dump.workers`, default `1`) dumps tables concurrently from one PostgreSQL snapshot. Values above `1` require `db.max_open_conns >= workers+1` and reject `--no-transaction`, subset modes (`--seed-file` / `--percent`), and chunk or slow-connection policies.
-
-### Parallel table restore — advanced
-
-Parallel restore loads independent FK levels concurrently and writes a durable partial-state manifest when `workers > 1`. It requires explicit acknowledgement and cannot run from the TUI history flow without the CLI safety flags.
-
-```bash
-dolly restore --dsn "$DB" --input ./dolly_dump/1 \
-  --workers 4 --no-transaction --yes --ack-partial-state
-```
-
-`--workers` (or config `restore.workers`, default `1`) restores tables concurrently by FK level. Values above `1` require `--no-transaction`, `--yes`, `--ack-partial-state`, conflict policy `error`, a resolvable DSN, and reject `--replace`, `--trust-schema-sql`, and skip/upsert policies. The partial-state manifest path defaults to `{input_dir}/.dolly-restore-partial-state.json` unless overridden by `--partial-state-file` or config `restore.partial_state_file`. Acknowledgement is CLI-only and is never stored in config.
 
 ### Faster bulk restore — advanced
 
