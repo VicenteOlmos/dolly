@@ -2,6 +2,7 @@ package dump
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -849,5 +850,213 @@ func TestDumpWithoutTableSelectionUnchanged(t *testing.T) {
 	}
 	if meta.Provenance != nil && meta.Provenance.TableSelection != nil {
 		t.Fatal("no-flag dump should not record table_selection provenance")
+	}
+}
+
+func TestDumpChunkDispatchUsesSlowOnlyForNamedTables(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(2)).
+		AddRow("public", "orders", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true).
+		AddRow("public", "orders", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "users"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil || meta.Provenance.ChunkTables == nil {
+		t.Fatal("expected chunk_tables provenance")
+	}
+	if len(meta.Provenance.ChunkTables.Chunked) != 1 || meta.Provenance.ChunkTables.Chunked[0] != "public.users" {
+		t.Fatalf("chunked = %v", meta.Provenance.ChunkTables.Chunked)
+	}
+}
+
+func TestDumpChunkMissFailsBeforeMetadata(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "missing"}}))
+	if err == nil || !IsChunkPolicyError(err) {
+		t.Fatalf("error = %v, want chunk policy", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist on chunk planning failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json.tmp")); statErr == nil {
+		t.Fatal("metadata.json.tmp should not exist on chunk planning failure")
+	}
+}
+
+func TestDumpWorkersWithChunkRejected(t *testing.T) {
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	err = Dump(context.Background(), sqlDB, t.TempDir(), WithoutSequences(), WithoutTransaction(),
+		WithWorkers(2),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "users"}}))
+	if err == nil || !strings.Contains(err.Error(), "parallel dump workers") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDumpChunkWithSubsetRejected(t *testing.T) {
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	err = Dump(context.Background(), sqlDB, t.TempDir(), WithoutSequences(), WithoutTransaction(),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "users"}}),
+		WithSubset(SubsetConfig{
+			Seeds: []RowPredicate{{Table: "users", Column: "id", Op: "=", Value: "1"}},
+		}))
+	if err == nil || !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDumpChunkTableResumeNoDuplicates(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	const chunkSize = 2
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(5))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true).
+		AddRow("public", "users", "name", "text", "NO", 2, false)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	rows1 := sqlmock.NewRows([]string{"id", "name"})
+	for i := 1; i <= chunkSize; i++ {
+		rows1.AddRow(i, fmt.Sprintf("v%d", i))
+	}
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(rows1)
+
+	failingRows := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(chunkSize+1, fmt.Sprintf("v%d", chunkSize+1)).
+		RowError(0, fmt.Errorf("simulate mid-chunk failure"))
+	mock.ExpectQuery("SELECT .* FROM .* WHERE .* > .* ORDER BY .* LIMIT").
+		WithArgs(int64(chunkSize)).
+		WillReturnRows(failingRows)
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+		WithSlowChunkSize(chunkSize),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "users"}}))
+	if err == nil {
+		t.Fatal("expected interrupted chunk dump error")
+	}
+
+	resumeRows := sqlmock.NewRows([]string{"id", "name"})
+	for i := chunkSize + 1; i <= chunkSize+1; i++ {
+		resumeRows.AddRow(i, fmt.Sprintf("v%d", i))
+	}
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+			AddRow("public", "users", int64(5)))
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true).
+		AddRow("public", "users", "name", "text", "NO", 2, false))
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
+	mock.ExpectQuery("SELECT .* FROM .* WHERE .* > .* ORDER BY .* LIMIT").
+		WithArgs(int64(chunkSize)).
+		WillReturnRows(resumeRows)
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+		WithSlowChunkSize(chunkSize),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "users"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	finalPath := tableDataPath(dir, db.Table{Schema: "public", Name: "users"})
+	// assignDataFiles runs during Dump; resolve path from metadata.
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tables) != 1 {
+		t.Fatalf("tables = %d, want 1", len(meta.Tables))
+	}
+	finalPath = tableDataPath(dir, meta.Tables[0])
+	data, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotLines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(gotLines) != chunkSize+1 {
+		t.Fatalf("got %d lines, want %d", len(gotLines), chunkSize+1)
 	}
 }

@@ -34,6 +34,9 @@ type config struct {
 	provenance         *Provenance
 	selection          *SelectionPolicy
 	selectionIgnored   []IgnoredFileLine
+	chunkPolicy        *ChunkPolicy
+	chunkIgnored       []IgnoredFileLine
+	workers            int
 }
 
 type slowRetryConfig struct {
@@ -139,6 +142,15 @@ func InspectSlowConnection(opts ...Option) bool {
 	return c.slowConnection
 }
 
+// InspectWithoutTransaction reports whether opts skip the read-only transaction wrapper.
+func InspectWithoutTransaction(opts ...Option) bool {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.withoutTransaction
+}
+
 // InspectSlowChunkSizeEquals reports whether opts set slow chunk size to n.
 func InspectSlowChunkSizeEquals(n int, opts ...Option) bool {
 	var c config
@@ -182,6 +194,67 @@ func WithTableSelection(policy SelectionPolicy, ignored []IgnoredFileLine) Optio
 			c.selectionIgnored = append([]IgnoredFileLine(nil), ignored...)
 		}
 	}
+}
+
+// WithChunkTables marks exact qualified tables for keyset-chunked streaming.
+func WithChunkTables(tables []QualifiedTable) Option {
+	if len(tables) == 0 {
+		return func(c *config) {}
+	}
+	requests := make([]SelectorEntry, len(tables))
+	for i, t := range tables {
+		requests[i] = SelectorEntry{
+			Table: t,
+			Raw:   t.Normalized(),
+			Source: SelectorSource{
+				Kind: "programmatic",
+				Name: "WithChunkTables",
+			},
+		}
+	}
+	return WithChunkTablePolicy(ChunkPolicy{Requests: requests}, nil)
+}
+
+// WithChunkTablePolicy sets chunk-table selectors with full provenance sources.
+// Active chunk selectors force WithoutTransaction so per-chunk retries and
+// checkpoint resume are not tied to a single aborted read-only transaction.
+func WithChunkTablePolicy(policy ChunkPolicy, ignored []IgnoredFileLine) Option {
+	return func(c *config) {
+		cp := policy
+		c.chunkPolicy = &cp
+		if len(cp.Requests) > 0 {
+			c.withoutTransaction = true
+		}
+		if len(ignored) > 0 {
+			c.chunkIgnored = append([]IgnoredFileLine(nil), ignored...)
+		}
+	}
+}
+
+// WithWorkers sets parallel dump worker count. Values above one are rejected when
+// chunk or slow-connection policy is active. The CLI flag is added in a later phase.
+func WithWorkers(n int) Option {
+	return func(c *config) {
+		c.workers = n
+	}
+}
+
+// InspectChunkPolicy returns the chunk policy captured from opts, or nil.
+func InspectChunkPolicy(opts ...Option) *ChunkPolicy {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.chunkPolicy
+}
+
+// InspectWorkers returns the worker count captured from opts (0 means unset/default 1).
+func InspectWorkers(opts ...Option) int {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.workers
 }
 
 // InspectTableSelection returns the selection policy captured from opts, or nil.
@@ -228,6 +301,9 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if cfg.slowChunkSize <= 0 {
 		cfg.slowChunkSize = DefaultSlowChunkSize
 	}
+	if err := validateDumpOptions(&cfg); err != nil {
+		return err
+	}
 
 	startedAt := time.Now()
 
@@ -254,6 +330,9 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if cfg.slowConnection && cfg.subset != nil {
 		return fmt.Errorf("slow connection mode and subset dump are incompatible")
 	}
+	if hasChunkPolicy(&cfg) && cfg.subset != nil {
+		return fmt.Errorf("chunk-table selectors and subset dump are incompatible")
+	}
 
 	tables, err := db.LoadPostgresSchemas(ctx, q, cfg.schemas)
 	if err != nil {
@@ -274,14 +353,29 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		}
 	}
 
+	chunkSet, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)
+	if err != nil {
+		return err
+	}
+	if cfg.provenance != nil && len(chunkProv.Requested) > 0 {
+		cfg.provenance.ChunkTables = &chunkProv
+	}
+
 	if cfg.subset != nil {
 		return dumpSubset(ctx, q, tx, tables, outputDir, &cfg)
 	}
 
 	sorted := SortTables(tables)
-	if cfg.slowConnection {
+	if cfg.slowConnection || len(chunkSet) > 0 {
 		if err := rejectAmbiguousLegacySlowArtifacts(outputDir, sorted); err != nil {
 			return err
+		}
+	}
+	if cfg.slowConnection {
+		for _, table := range sorted {
+			if _, err := primaryKeysColumns(table); err != nil {
+				return fmt.Errorf("slow-connection mode: %w", err)
+			}
 		}
 	}
 	assignDataFiles(sorted)
@@ -317,7 +411,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Elapsed: time.Since(startedAt),
 		})
 		var streamErr error
-		if cfg.slowConnection {
+		if usesResilientStreaming(&cfg, chunkSet, table) {
 			streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
 		} else {
 			streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
@@ -344,6 +438,29 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		}
 	}
 
+	return nil
+}
+
+func hasChunkPolicy(cfg *config) bool {
+	return cfg.chunkPolicy != nil && len(cfg.chunkPolicy.Requests) > 0
+}
+
+func usesResilientStreaming(cfg *config, chunkSet map[string]struct{}, table db.Table) bool {
+	if cfg.slowConnection {
+		return true
+	}
+	_, ok := chunkSet[tableKey(table.Schema, table.Name)]
+	return ok
+}
+
+func validateDumpOptions(cfg *config) error {
+	workers := cfg.workers
+	if workers <= 0 {
+		workers = 1
+	}
+	if workers > 1 && (cfg.slowConnection || hasChunkPolicy(cfg)) {
+		return fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")
+	}
 	return nil
 }
 

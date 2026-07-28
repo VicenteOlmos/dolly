@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/testutil/pgintegration"
@@ -341,5 +342,113 @@ func TestIntegrationDumpMetadataMatchesSchema(t *testing.T) {
 
 	if len(meta.Tables) != len(schema) {
 		t.Fatalf("metadata tables %d, schema %d", len(meta.Tables), len(schema))
+	}
+}
+
+func TestIntegrationDumpChunkTableNoPKFailsBeforeOutput(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	tableName := fmt.Sprintf("chunk_nopk_%d", time.Now().UnixNano())
+
+	_, err := conn.ExecContext(ctx, fmt.Sprintf(
+		`CREATE TABLE %s (note TEXT NOT NULL)`, tableName,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
+	})
+
+	dir := t.TempDir()
+	err = Dump(ctx, conn, dir, WithChunkTables([]QualifiedTable{{Schema: "public", Name: tableName}}))
+	if err == nil || !IsChunkPolicyError(err) {
+		t.Fatalf("error = %v, want chunk policy failure", err)
+	}
+	if !strings.Contains(err.Error(), "no primary key") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist when chunk preflight fails")
+	}
+}
+
+func TestIntegrationDumpChunkTableResumeNoDuplicates(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	const chunkSize = 2
+	const resumeAfter = 3
+
+	policy := SelectionPolicy{
+		Includes: []SelectorEntry{{Table: QualifiedTable{Schema: "public", Name: "tbl_a"}}},
+	}
+	opts := []Option{
+		WithSlowChunkSize(chunkSize),
+		WithTableSelection(policy, nil),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "tbl_a"}}),
+		WithoutSequences(),
+	}
+
+	refDir := t.TempDir()
+	if err := Dump(ctx, conn, refDir, opts...); err != nil {
+		t.Fatal(err)
+	}
+	refMeta, err := ReadMetadata(refDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refLines, err := readNDJSONLines(tableDataPath(refDir, metadataTable(t, refMeta, "tbl_a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refLines) <= resumeAfter {
+		t.Fatalf("fixture tbl_a has %d rows, need > %d for resume test", len(refLines), resumeAfter)
+	}
+
+	var lastRow map[string]any
+	if err := json.Unmarshal([]byte(refLines[resumeAfter-1]), &lastRow); err != nil {
+		t.Fatal(err)
+	}
+	lastID, ok := lastRow["id"].(float64)
+	if !ok {
+		t.Fatalf("checkpoint id type %T", lastRow["id"])
+	}
+
+	dir := t.TempDir()
+	partial := strings.Join(refLines[:resumeAfter], "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "tbl_a.ndjson.tmp"), []byte(partial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table := metadataTable(t, refMeta, "tbl_a")
+	if err := saveSlowCheckpoint(checkpointPath(dir, "tbl_a"), table, []string{"id"}, []any{int64(lastID)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Dump(ctx, conn, dir, opts...); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "tbl_a")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != len(refLines) {
+		t.Fatalf("resumed row count = %d, want %d", len(lines), len(refLines))
+	}
+	seen := make(map[string]struct{})
+	for _, line := range lines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		id := fmt.Sprint(row["id"])
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate row id %s after resumed chunk dump", id)
+		}
+		seen[id] = struct{}{}
 	}
 }
