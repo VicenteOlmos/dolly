@@ -538,6 +538,30 @@ func TestLoadConfigDumpTableSelectionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDumpChunkTablesRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+
+	orig := DefaultConfig()
+	orig.Dump.ChunkTables = []string{"public.orders", "public.events"}
+	orig.Dump.ChunkTableFiles = []string{"tables/chunk.txt"}
+
+	if err := SaveConfig(orig, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !reflect.DeepEqual(orig.Dump.ChunkTables, got.Dump.ChunkTables) {
+		t.Fatalf("ChunkTables = %v, want %v", got.Dump.ChunkTables, orig.Dump.ChunkTables)
+	}
+	if !reflect.DeepEqual(orig.Dump.ChunkTableFiles, got.Dump.ChunkTableFiles) {
+		t.Fatalf("ChunkTableFiles = %v, want %v", got.Dump.ChunkTableFiles, orig.Dump.ChunkTableFiles)
+	}
+}
+
 func TestDriftGuard(t *testing.T) {
 	// The embedded template and the committed config.jsonc at repo root must be identical.
 	// This test is intentionally skipped when the repo root file is absent (e.g. in sub-tree builds).

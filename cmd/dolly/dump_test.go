@@ -29,6 +29,14 @@ func writeStubDumpMetadata(dir string) error {
 	return os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(stubDumpMetadataJSON), 0o644)
 }
 
+func slowResumeExpect(sig string, schemas []string, sanitized bool) resumableDumpExpectation {
+	return resumableDumpExpectation{
+		sourceSignature:     sig,
+		schemas:             schemas,
+		sanitizationEnabled: sanitized,
+	}
+}
+
 func TestParseDumpFlags(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -901,7 +909,7 @@ func TestFindResumableSlowDumpDirSkipsNewerNonResumable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, seq, ok := findResumableSlowDumpDir(base, "postgres://@h:5432/db", []string{"app"}, false)
+	got, seq, ok := findResumableDumpDir(base, slowResumeExpect("postgres://@h:5432/db", []string{"app"}, false))
 	if !ok {
 		t.Fatal("expected resumable dir")
 	}
@@ -989,7 +997,7 @@ func TestFindResumableSlowDumpDirRequiresMatchingProvenance(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, _, ok := findResumableSlowDumpDir(base, tt.sourceSignature, tt.schemas, false)
+			_, _, ok := findResumableDumpDir(base, slowResumeExpect(tt.sourceSignature, tt.schemas, false))
 			if ok != tt.wantOk {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOk)
 			}
@@ -1017,18 +1025,18 @@ func TestFindResumableSlowDumpDirRequiresMatchingSanitization(t *testing.T) {
 		}
 	}
 	write(&enabled)
-	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, true); !ok {
+	if _, _, ok := findResumableDumpDir(base, slowResumeExpect("postgres://u@h:5432/db", nil, true)); !ok {
 		t.Fatal("matching sanitization did not resume")
 	}
-	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, false); ok {
+	if _, _, ok := findResumableDumpDir(base, slowResumeExpect("postgres://u@h:5432/db", nil, false)); ok {
 		t.Fatal("enabled dump resumed with sanitization disabled")
 	}
 	write(&disabled)
-	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, true); ok {
+	if _, _, ok := findResumableDumpDir(base, slowResumeExpect("postgres://u@h:5432/db", nil, true)); ok {
 		t.Fatal("disabled dump resumed with sanitization enabled")
 	}
 	write(nil)
-	if _, _, ok := findResumableSlowDumpDir(base, "postgres://u@h:5432/db", nil, false); ok {
+	if _, _, ok := findResumableDumpDir(base, slowResumeExpect("postgres://u@h:5432/db", nil, false)); ok {
 		t.Fatal("legacy dump resumed without sanitization provenance")
 	}
 }
@@ -1913,5 +1921,484 @@ func TestRunDumpResumedSlowDirNotRemovedOnSelectionError(t *testing.T) {
 	}
 	if _, statErr := os.Stat(interruptedDir); statErr != nil {
 		t.Fatalf("resumable slow dir should remain: %v", statErr)
+	}
+}
+
+func TestParseDumpFlagsChunkTables(t *testing.T) {
+	got, err := parseDumpFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--output", "/tmp/out",
+		"--chunk-table", "public.orders",
+		"--chunk-table-file", "/tmp/chunk.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ChunkTables) != 1 || got.ChunkTables[0] != "public.orders" {
+		t.Fatalf("chunk tables = %v", got.ChunkTables)
+	}
+	if len(got.ChunkTableFiles) != 1 {
+		t.Fatalf("chunk files = %v", got.ChunkTableFiles)
+	}
+}
+
+func TestBuildDumpOptionsChunkCLIReplacesConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.ChunkTables = []string{"public.config_only"}
+
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:         "postgres://h-a/db_a",
+		Output:      t.TempDir(),
+		ChunkTables: []string{"public.cli_only"},
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := dump.InspectChunkPolicy(opts...)
+	if policy == nil || len(policy.Requests) != 1 {
+		t.Fatalf("policy = %+v", policy)
+	}
+	if policy.Requests[0].Table.Name != "cli_only" {
+		t.Fatalf("chunk table = %+v", policy.Requests[0].Table)
+	}
+}
+
+func TestBuildDumpOptionsChunkInvalidSelector(t *testing.T) {
+	_, err := buildDumpOptions(dumpFlags{
+		DSN:         "postgres://h-a/db_a",
+		Output:      t.TempDir(),
+		ChunkTables: []string{"orders"},
+	}, config.DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "unqualified") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildDumpOptionsChunkSubsetConflict(t *testing.T) {
+	seedFile := filepath.Join(t.TempDir(), "seeds.json")
+	if err := os.WriteFile(seedFile, []byte(`{"seeds":[{"table":"tbl_a","column":"id","op":"eq","value":1}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := buildDumpOptions(dumpFlags{
+		DSN:         "postgres://h-a/db_a",
+		Output:      t.TempDir(),
+		SeedFile:    seedFile,
+		ChunkTables: []string{"public.users"},
+	}, config.DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "incompatible") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRunDumpChunkPolicyErrorRemovesFreshEmptyDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, _ ...dump.Option) error {
+		return fmt.Errorf("%w: chunk table %q not found in selected tables", dump.ErrChunkPolicy, "public.missing")
+	}
+
+	baseDir := t.TempDir()
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir, "--chunk-table", "public.missing"})
+	if err == nil {
+		t.Fatal("expected chunk policy error")
+	}
+	if !dump.IsChunkPolicyError(err) {
+		t.Fatalf("error = %v, want chunk policy", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, "1")); !os.IsNotExist(statErr) {
+		t.Fatalf("fresh empty dump dir should be removed, stat err = %v", statErr)
+	}
+}
+
+func TestBuildDumpOptionsChunkForcesNoTransaction(t *testing.T) {
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:         "postgres://h-a/db_a",
+		Output:      t.TempDir(),
+		ChunkTables: []string{"public.users"},
+	}, config.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dump.InspectWithoutTransaction(opts...) {
+		t.Fatal("chunk policy should force without-transaction mode")
+	}
+}
+
+func TestRunDumpChunkTableResumesInterruptedDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+
+	var capturedOutput string
+	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
+		capturedOutput = out
+		return writeStubDumpMetadata(out)
+	}
+
+	baseDir := t.TempDir()
+	interruptedDir := filepath.Join(baseDir, "1")
+	if err := os.MkdirAll(interruptedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "users.ckpt.json"), []byte(`{"table":"users","pk_column":"id","last_pk":5}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "users.ndjson.tmp"), []byte(`{"id":1}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmpMeta := `{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [],
+  "provenance": {
+    "source_database": "db",
+    "source_signature": "postgres://@h:5432/db",
+    "schemas": [],
+    "sanitization_enabled": false,
+    "chunk_tables": {
+      "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir, "--chunk-table", "public.users"}); err != nil {
+		t.Fatalf("runDump: %v", err)
+	}
+	if capturedOutput != interruptedDir {
+		t.Fatalf("output = %q, want %q", capturedOutput, interruptedDir)
+	}
+}
+
+func TestRunDumpChunkConfigResumesInterruptedDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Dump.ChunkTables = []string{"public.orders"}
+	dumpLoadConfig = func(string) (*config.Config, error) { return cfg, nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+
+	var capturedOutput string
+	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
+		capturedOutput = out
+		return writeStubDumpMetadata(out)
+	}
+
+	baseDir := t.TempDir()
+	interruptedDir := filepath.Join(baseDir, "1")
+	if err := os.MkdirAll(interruptedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "orders.ckpt.json"), []byte(`{"table":"orders","pk_column":"id","last_pk":2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "orders.ndjson.tmp"), []byte(`{"id":1}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmpMeta := `{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [],
+  "provenance": {
+    "source_database": "db",
+    "source_signature": "postgres://@h:5432/db",
+    "schemas": [],
+    "sanitization_enabled": false,
+    "chunk_tables": {
+      "requested": [{"normalized": "public.orders", "source": "config: dump.chunk_tables"}]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir}); err != nil {
+		t.Fatalf("runDump: %v", err)
+	}
+	if capturedOutput != interruptedDir {
+		t.Fatalf("output = %q, want %q", capturedOutput, interruptedDir)
+	}
+}
+
+func TestFindResumableDumpDirRejectsMismatchedChunkPolicy(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "users.ckpt.json"), []byte(`{"table":"users"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [],
+  "provenance": {
+    "source_signature": "postgres://u@h:5432/db",
+    "sanitization_enabled": false,
+    "chunk_tables": {
+      "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json.tmp"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exp := resumableDumpExpectation{
+		sourceSignature:     "postgres://u@h:5432/db",
+		sanitizationEnabled: false,
+		chunkFingerprint: &dump.ChunkTableProvenance{
+			Requested: []dump.SelectorRecord{{Normalized: "public.orders", Source: "flag: --chunk-table"}},
+		},
+	}
+	if _, _, ok := findResumableDumpDir(base, exp); ok {
+		t.Fatal("mismatched chunk policy should not resume")
+	}
+}
+
+func TestRunDumpDefaultDoesNotResumeChunkInterruptedDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+
+	var capturedOutput string
+	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
+		capturedOutput = out
+		return writeStubDumpMetadata(out)
+	}
+
+	baseDir := t.TempDir()
+	interruptedDir := filepath.Join(baseDir, "1")
+	if err := os.MkdirAll(interruptedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "users.ckpt.json"), []byte(`{"table":"users"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmpMeta := `{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [],
+  "provenance": {
+    "source_signature": "postgres://@h:5432/db",
+    "sanitization_enabled": false,
+    "chunk_tables": {
+      "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir}); err != nil {
+		t.Fatalf("runDump: %v", err)
+	}
+	if capturedOutput == interruptedDir {
+		t.Fatalf("default dump should allocate fresh dir, got resumed %q", capturedOutput)
+	}
+}
+
+func TestBuildDumpOptionsConfigChunkSubsetConflict(t *testing.T) {
+	t.Run("config chunk + config percent", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Dump.ChunkTables = []string{"public.users"}
+		cfg.Subset.Percent = 50
+		_, err := buildDumpOptions(dumpFlags{
+			DSN:    "postgres://h-a/db_a",
+			Output: t.TempDir(),
+		}, cfg)
+		if err == nil || !strings.Contains(err.Error(), "incompatible") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("config chunk + CLI seed-file", func(t *testing.T) {
+		seedFile := filepath.Join(t.TempDir(), "seeds.json")
+		if err := os.WriteFile(seedFile, []byte(`{"seeds":[{"table":"tbl_a","column":"id","op":"eq","value":1}]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := config.DefaultConfig()
+		cfg.Dump.ChunkTables = []string{"public.users"}
+		_, err := buildDumpOptions(dumpFlags{
+			DSN:      "postgres://h-a/db_a",
+			Output:   t.TempDir(),
+			SeedFile: seedFile,
+		}, cfg)
+		if err == nil || !strings.Contains(err.Error(), "incompatible") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("config chunk + config seed-file", func(t *testing.T) {
+		seedFile := filepath.Join(t.TempDir(), "seeds.json")
+		if err := os.WriteFile(seedFile, []byte(`{"seeds":[{"table":"tbl_a","column":"id","op":"eq","value":1}]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg := config.DefaultConfig()
+		cfg.Dump.ChunkTables = []string{"public.users"}
+		cfg.Subset.SeedFile = seedFile
+		_, err := buildDumpOptions(dumpFlags{
+			DSN:    "postgres://h-a/db_a",
+			Output: t.TempDir(),
+		}, cfg)
+		if err == nil || !strings.Contains(err.Error(), "incompatible") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+func TestProvenanceMatchesResumableChunkFingerprint(t *testing.T) {
+	usersChunk := &dump.ChunkTableProvenance{
+		Requested: []dump.SelectorRecord{{Normalized: "public.users", Source: "flag: --chunk-table"}},
+	}
+	ordersChunk := &dump.ChunkTableProvenance{
+		Requested: []dump.SelectorRecord{{Normalized: "public.orders", Source: "flag: --chunk-table"}},
+	}
+
+	tests := []struct {
+		name    string
+		meta    *dump.Provenance
+		exp     resumableDumpExpectation
+		wantOK  bool
+	}{
+		{
+			name: "slow without explicit chunk matches nil metadata chunk provenance",
+			meta: &dump.Provenance{ChunkTables: nil},
+			exp:  slowResumeExpect("postgres://@h:5432/db", nil, false),
+			wantOK: true,
+		},
+		{
+			name: "slow+chunk matches same chunk policy",
+			meta: &dump.Provenance{ChunkTables: usersChunk},
+			exp: resumableDumpExpectation{
+				sourceSignature:     "postgres://@h:5432/db",
+				sanitizationEnabled: false,
+				chunkFingerprint:    usersChunk,
+			},
+			wantOK: true,
+		},
+		{
+			name: "changed chunk policy refuses unsafe reuse",
+			meta: &dump.Provenance{ChunkTables: usersChunk},
+			exp: resumableDumpExpectation{
+				sourceSignature:     "postgres://@h:5432/db",
+				sanitizationEnabled: false,
+				chunkFingerprint:    ordersChunk,
+			},
+			wantOK: false,
+		},
+		{
+			name: "removed chunk policy refuses metadata with chunk provenance",
+			meta: &dump.Provenance{ChunkTables: usersChunk},
+			exp:  slowResumeExpect("postgres://@h:5432/db", nil, false),
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := provenanceMatchesResumable(tt.meta, tt.exp)
+			if got != tt.wantOK {
+				t.Fatalf("provenanceMatchesResumable() = %v, want %v", got, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestRunDumpSlowConnectionWithChunkTableResumesInterruptedDir(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+
+	var capturedOutput string
+	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
+		capturedOutput = out
+		return writeStubDumpMetadata(out)
+	}
+
+	baseDir := t.TempDir()
+	interruptedDir := filepath.Join(baseDir, "1")
+	if err := os.MkdirAll(interruptedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "users.ckpt.json"), []byte(`{"table":"users","pk_column":"id","last_pk":5}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interruptedDir, "users.ndjson.tmp"), []byte(`{"id":1}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tmpMeta := `{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [],
+  "provenance": {
+    "source_database": "db",
+    "source_signature": "postgres://@h:5432/db",
+    "schemas": [],
+    "sanitization_enabled": false,
+    "chunk_tables": {
+      "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runDump([]string{
+		"--dsn", "postgres://h/db",
+		"--output", baseDir,
+		"--slow-connection",
+		"--chunk-table", "public.users",
+	}); err != nil {
+		t.Fatalf("runDump: %v", err)
+	}
+	if capturedOutput != interruptedDir {
+		t.Fatalf("output = %q, want %q", capturedOutput, interruptedDir)
 	}
 }

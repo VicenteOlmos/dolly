@@ -349,6 +349,63 @@ func BuildSelectionPolicyWithSources(
 	return &SelectionPolicy{Includes: includes, Excludes: excludes}, ignored, nil
 }
 
+// SelectionPolicyResumeFingerprint records include/exclude inputs for resumable dump matching.
+func SelectionPolicyResumeFingerprint(policy *SelectionPolicy) *TableSelectionProvenance {
+	if policy == nil || (len(policy.Includes) == 0 && len(policy.Excludes) == 0) {
+		return nil
+	}
+	prov := &TableSelectionProvenance{}
+	for _, req := range policy.Includes {
+		prov.RequestedIncludes = append(prov.RequestedIncludes, SelectorRecord{
+			Normalized: req.Table.Normalized(),
+			Source:     formatSelectorSource(req.Source),
+		})
+	}
+	for _, req := range policy.Excludes {
+		prov.RequestedExcludes = append(prov.RequestedExcludes, SelectorRecord{
+			Normalized: req.Table.Normalized(),
+			Source:     formatSelectorSource(req.Source),
+		})
+	}
+	sort.Slice(prov.RequestedIncludes, func(i, j int) bool {
+		if prov.RequestedIncludes[i].Normalized != prov.RequestedIncludes[j].Normalized {
+			return prov.RequestedIncludes[i].Normalized < prov.RequestedIncludes[j].Normalized
+		}
+		return prov.RequestedIncludes[i].Source < prov.RequestedIncludes[j].Source
+	})
+	sort.Slice(prov.RequestedExcludes, func(i, j int) bool {
+		if prov.RequestedExcludes[i].Normalized != prov.RequestedExcludes[j].Normalized {
+			return prov.RequestedExcludes[i].Normalized < prov.RequestedExcludes[j].Normalized
+		}
+		return prov.RequestedExcludes[i].Source < prov.RequestedExcludes[j].Source
+	})
+	return prov
+}
+
+// SelectionResumeProvenanceMatches reports whether interrupted and current selection policies match.
+func SelectionResumeProvenanceMatches(expect, got *TableSelectionProvenance) bool {
+	if expect == nil && (got == nil || (len(got.RequestedIncludes) == 0 && len(got.RequestedExcludes) == 0)) {
+		return true
+	}
+	if expect == nil || got == nil {
+		return false
+	}
+	return selectorRecordsEqual(expect.RequestedIncludes, got.RequestedIncludes) &&
+		selectorRecordsEqual(expect.RequestedExcludes, got.RequestedExcludes)
+}
+
+func selectorRecordsEqual(a, b []SelectorRecord) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Normalized != b[i].Normalized {
+			return false
+		}
+	}
+	return true
+}
+
 // PlanTableSelection filters introspected tables using include-narrow/exclude-win semantics.
 func PlanTableSelection(tables []db.Table, policy *SelectionPolicy, ignored []IgnoredFileLine) ([]db.Table, TableSelectionProvenance, error) {
 	prov := TableSelectionProvenance{IgnoredFileLines: ignored}

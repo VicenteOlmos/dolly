@@ -93,3 +93,43 @@ func PlanChunkStreaming(tables []db.Table, policy *ChunkPolicy, ignored []Ignore
 	sort.Strings(prov.Chunked)
 	return chunked, prov, nil
 }
+
+// ChunkPolicyResumeFingerprint records chunk selector inputs for resumable dump matching.
+func ChunkPolicyResumeFingerprint(policy *ChunkPolicy) *ChunkTableProvenance {
+	if policy == nil || len(policy.Requests) == 0 {
+		return nil
+	}
+	prov := &ChunkTableProvenance{}
+	for _, req := range policy.Requests {
+		prov.Requested = append(prov.Requested, SelectorRecord{
+			Normalized: req.Table.Normalized(),
+			Source:     formatSelectorSource(req.Source),
+		})
+	}
+	sort.Slice(prov.Requested, func(i, j int) bool {
+		if prov.Requested[i].Normalized != prov.Requested[j].Normalized {
+			return prov.Requested[i].Normalized < prov.Requested[j].Normalized
+		}
+		return prov.Requested[i].Source < prov.Requested[j].Source
+	})
+	return prov
+}
+
+// ChunkResumeProvenanceMatches reports whether interrupted and current chunk policies match.
+func ChunkResumeProvenanceMatches(expect, got *ChunkTableProvenance) bool {
+	if expect == nil && (got == nil || len(got.Requested) == 0) {
+		return true
+	}
+	if expect == nil || got == nil || len(expect.Requested) == 0 || len(got.Requested) == 0 {
+		return false
+	}
+	if len(expect.Requested) != len(got.Requested) {
+		return false
+	}
+	for i := range expect.Requested {
+		if expect.Requested[i].Normalized != got.Requested[i].Normalized {
+			return false
+		}
+	}
+	return true
+}
