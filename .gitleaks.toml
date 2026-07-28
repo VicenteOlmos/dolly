@@ -1,0 +1,29 @@
+# Dolly public-release secret scan configuration.
+#
+# Allowlists only documented fixture/example credentials by exact content.
+# Path-wide allowlists are intentionally absent so arbitrary secrets in docs,
+# workflows, and AGENTS cannot be suppressed.
+
+title = "dolly public release"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented local integration-test fixture credentials (exact content only)"
+regexes = [
+  '''postgres://dolly:dolly@127\.0\.0\.1:5433/dolly\?sslmode=disable''',
+  '''DOLLY_TEST_PG_DSN=['"]?postgres://dolly:dolly@127\.0\.0\.1:5433/dolly\?sslmode=disable['"]?''',
+  '''POSTGRES_PASSWORD: dolly''',
+  '''POSTGRES_USER: dolly''',
+  '''pg_isready -U dolly -d dolly''',
+]
+
+[[allowlists]]
+description = "TUI keybinding identifier false positive (path + exact line)"
+paths = [
+  '''internal/tui/keys\.go$''',
+]
+regexes = [
+  '''Key: "Ctrl\+Shift\+Tab"''',
+]
