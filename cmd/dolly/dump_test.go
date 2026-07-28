@@ -2293,15 +2293,15 @@ func TestProvenanceMatchesResumableChunkFingerprint(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		meta    *dump.Provenance
-		exp     resumableDumpExpectation
-		wantOK  bool
+		name   string
+		meta   *dump.Provenance
+		exp    resumableDumpExpectation
+		wantOK bool
 	}{
 		{
-			name: "slow without explicit chunk matches nil metadata chunk provenance",
-			meta: &dump.Provenance{ChunkTables: nil},
-			exp:  slowResumeExpect("postgres://@h:5432/db", nil, false),
+			name:   "slow without explicit chunk matches nil metadata chunk provenance",
+			meta:   &dump.Provenance{ChunkTables: nil},
+			exp:    slowResumeExpect("postgres://@h:5432/db", nil, false),
 			wantOK: true,
 		},
 		{
@@ -2325,9 +2325,9 @@ func TestProvenanceMatchesResumableChunkFingerprint(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name: "removed chunk policy refuses metadata with chunk provenance",
-			meta: &dump.Provenance{ChunkTables: usersChunk},
-			exp:  slowResumeExpect("postgres://@h:5432/db", nil, false),
+			name:   "removed chunk policy refuses metadata with chunk provenance",
+			meta:   &dump.Provenance{ChunkTables: usersChunk},
+			exp:    slowResumeExpect("postgres://@h:5432/db", nil, false),
 			wantOK: false,
 		},
 	}

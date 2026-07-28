@@ -90,37 +90,37 @@ func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas [
 	// Batch all per-table queries (4 queries total, not 4N).
 	// Only run when there are tables to avoid unnecessary queries.
 	if len(sorted) > 0 {
-	schemaCols, err := loadAllSchemaColumns(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-	uniqueMap, err := loadAllUniqueConstraints(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-	checkMap, err := loadAllCheckConstraints(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-	fkMap, err := loadAllForeignKeyConstraints(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-
-	for _, table := range sorted {
-		key := table.Schema + "." + table.Name
-		cols := schemaCols[key]
-		if err := createTable(ctx, tgtDB, table, cols, uniqueMap[key], checkMap[key]); err != nil {
+		schemaCols, err := loadAllSchemaColumns(ctx, srcDB, schemas)
+		if err != nil {
 			return err
 		}
-	}
-
-	for _, table := range sorted {
-		key := table.Schema + "." + table.Name
-		if err := applyForeignKeyConstraints(ctx, tgtDB, table.Schema, table.Name, fkMap[key]); err != nil {
+		uniqueMap, err := loadAllUniqueConstraints(ctx, srcDB, schemas)
+		if err != nil {
 			return err
 		}
-	}
+		checkMap, err := loadAllCheckConstraints(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		fkMap, err := loadAllForeignKeyConstraints(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+
+		for _, table := range sorted {
+			key := table.Schema + "." + table.Name
+			cols := schemaCols[key]
+			if err := createTable(ctx, tgtDB, table, cols, uniqueMap[key], checkMap[key]); err != nil {
+				return err
+			}
+		}
+
+		for _, table := range sorted {
+			key := table.Schema + "." + table.Name
+			if err := applyForeignKeyConstraints(ctx, tgtDB, table.Schema, table.Name, fkMap[key]); err != nil {
+				return err
+			}
+		}
 	} // end if len(sorted) > 0
 
 	indexes, err := loadIndexes(ctx, srcDB, schemas)

@@ -3,6 +3,7 @@ package dump
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"os"
 	"path/filepath"
@@ -272,7 +273,137 @@ func (stubQuerier) QueryContext(context.Context, string, ...any) (*sql.Rows, err
 }
 
 var errParallelTestFailure = errors.New("parallel test failure")
+var errParallelTestWorkerClose = errors.New("parallel test worker close failure")
+var errParallelTestCoordinatorClose = errors.New("parallel test coordinator close failure")
 
 func fmtTable(i int) string { return "t" + strconv.Itoa(i) }
 
 func strPtr(s string) *string { return &s }
+
+func withManualMonitorTicks(t *testing.T) chan struct{} {
+	t.Helper()
+	ch := make(chan struct{}, 8)
+	old := parallelSnapshotMonitorTicks
+	parallelSnapshotMonitorTicks = func(ctx context.Context) <-chan struct{} {
+		out := make(chan struct{})
+		go func() {
+			defer close(out)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ch:
+					select {
+					case out <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+		return out
+	}
+	t.Cleanup(func() { parallelSnapshotMonitorTicks = old })
+	return ch
+}
+
+func TestSnapshotMonitorLivenessCheckSurfacesBadConn(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT pg_export_snapshot").WillReturnRows(sqlmock.NewRows([]string{"snapshot"}).AddRow("1-2-3"))
+	coordinator, err := newSnapshotCoordinator(context.Background(), sqlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery("SELECT 1").WillReturnError(driver.ErrBadConn)
+	err = parallelSnapshotLivenessCheck(context.Background(), coordinator)
+	if err == nil || !errors.Is(err, driver.ErrBadConn) {
+		t.Fatalf("error = %v, want ErrBadConn", err)
+	}
+}
+
+func TestSnapshotLifecycleFailureCancelsActiveWorkers(t *testing.T) {
+	tables := []db.Table{{Schema: "public", Name: "blocked"}}
+	assignDataFiles(tables)
+	dir, staging := mustStaging(t)
+	metaTmp := filepath.Join(dir, "metadata.json.tmp")
+	if err := os.WriteFile(metaTmp, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tickCh := withManualMonitorTicks(t)
+	startedCh := make(chan struct{})
+	withParallelStream(t, func(ctx context.Context, _ querier, _ db.Table, _ string, _ RowTransform) error {
+		close(startedCh)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	withTestWorkerSessions(t, stubQuerier{})
+	oldCheck := parallelSnapshotLivenessCheck
+	parallelSnapshotLivenessCheck = func(ctx context.Context, c *snapshotCoordinator) error {
+		return errParallelTestCoordinatorClose
+	}
+	t.Cleanup(func() { parallelSnapshotLivenessCheck = oldCheck })
+
+	plan := &ParallelPlan{
+		cfg:         config{},
+		outputDir:   dir,
+		tables:      tables,
+		stagingDir:  staging,
+		metaTmpPath: metaTmp,
+		startedAt:   time.Now(),
+		coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runParallelDump(context.Background(), plan, 1)
+	}()
+	<-startedCh
+	tickCh <- struct{}{}
+	err := <-errCh
+	if !errors.Is(err, errParallelTestCoordinatorClose) {
+		t.Fatalf("error = %v, want coordinator lifecycle failure", err)
+	}
+	cleanupParallelArtifacts(plan.outputDir, plan.stagingDir, plan.metaTmpPath, plan.tables)
+	for _, path := range []string{metaTmp, filepath.Join(dir, "metadata.json")} {
+		if _, statErr := os.Stat(path); statErr == nil {
+			t.Fatalf("expected %q removed", path)
+		}
+	}
+}
+
+func TestParallelDumpJoinsWorkerCloseAndCoordinatorCloseErrors(t *testing.T) {
+	tables := []db.Table{{Schema: "public", Name: "fail"}}
+	assignDataFiles(tables)
+	dir, staging := mustStaging(t)
+	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) error {
+		return errParallelTestFailure
+	})
+	oldOpener := parallelWorkerSessionOpener
+	parallelWorkerSessionOpener = func(context.Context, *sql.DB, string) (querier, func() error, error) {
+		return stubQuerier{}, func() error { return errParallelTestWorkerClose }, nil
+	}
+	t.Cleanup(func() { parallelWorkerSessionOpener = oldOpener })
+
+	plan := &ParallelPlan{
+		cfg:         config{},
+		outputDir:   dir,
+		tables:      tables,
+		stagingDir:  staging,
+		startedAt:   time.Now(),
+		coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	err := runParallelDump(context.Background(), plan, 1)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errParallelTestFailure) {
+		t.Fatalf("primary error missing: %v", err)
+	}
+	if !errors.Is(err, errParallelTestWorkerClose) {
+		t.Fatalf("worker close error missing: %v", err)
+	}
+}

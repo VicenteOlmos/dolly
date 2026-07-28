@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
 func streamTableSlowDefault(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) error {

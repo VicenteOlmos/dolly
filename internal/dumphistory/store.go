@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"time"
-
 )
 
 // Record tracks one completed dump for history and restore.
@@ -214,5 +213,3 @@ func normalizePath(p string) string {
 	}
 	return clean
 }
-
-

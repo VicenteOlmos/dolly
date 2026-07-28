@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
 func TestLoadTableContextCancellation(t *testing.T) {

@@ -237,6 +237,6 @@ func fetchAllForeignKeys(ctx context.Context, q queryer, schemas []string) (map[
 	return out, nil
 }
 
-	// fetchColumns and fetchForeignKeys (per-table) were removed.
-	// LoadPostgresSchemas delegates to batched queries (fetchAllColumns +
-	// fetchAllForeignKeys). The per-table functions were dead code.
+// fetchColumns and fetchForeignKeys (per-table) were removed.
+// LoadPostgresSchemas delegates to batched queries (fetchAllColumns +
+// fetchAllForeignKeys). The per-table functions were dead code.
