@@ -19,6 +19,12 @@ done
 
 grep -F "github/codeql-action/init@$codeql_action # v3" "$codeql" >/dev/null
 grep -F "github/codeql-action/analyze@$codeql_action # v3" "$codeql" >/dev/null
+grep -F 'if: github.event.repository.private == false' "$codeql" >/dev/null
+grep -F 'workflow_dispatch:' "$codeql" >/dev/null
+grep -F 'security-events: write' "$codeql" >/dev/null
+grep -F 'pull_request:' "$codeql" >/dev/null
+grep -F 'schedule:' "$codeql" >/dev/null
+grep -F 'branches: [main]' "$codeql" >/dev/null
 grep -F "actions/upload-artifact@$upload_artifact # v4" "$release" >/dev/null
 grep -F "actions/download-artifact@$download_artifact # v4" "$release" >/dev/null
 
