@@ -16,7 +16,8 @@ import (
 type ProgressEvent struct {
 	Phase   string
 	Table   string
-	Current int           // 1-based table index
+	Worker  int           // parallel worker id; zero in serial dumps
+	Current int           // 1-based table index or completed count in parallel dumps
 	Total   int           // total number of tables scheduled
 	Elapsed time.Duration // since Dump() entered
 }
@@ -304,6 +305,18 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if err := validateDumpOptions(&cfg); err != nil {
 		return err
 	}
+	workers := effectiveWorkers(cfg.workers)
+	if workers > 1 {
+		if err := validateParallelDumpOptions(&cfg, dbConn, workers); err != nil {
+			return err
+		}
+		plan, err := Prepare(ctx, dbConn, outputDir, opts...)
+		if err != nil {
+			return err
+		}
+		defer plan.Close()
+		return plan.Run(ctx)
+	}
 
 	startedAt := time.Now()
 
@@ -454,12 +467,18 @@ func usesResilientStreaming(cfg *config, chunkSet map[string]struct{}, table db.
 }
 
 func validateDumpOptions(cfg *config) error {
-	workers := cfg.workers
-	if workers <= 0 {
-		workers = 1
+	workers := effectiveWorkers(cfg.workers)
+	if workers > maxParallelWorkers {
+		return fmt.Errorf("parallel dump workers must be between 1 and %d", maxParallelWorkers)
 	}
 	if workers > 1 && (cfg.slowConnection || hasChunkPolicy(cfg)) {
 		return fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")
+	}
+	if workers > 1 && cfg.withoutTransaction {
+		return fmt.Errorf("parallel dump workers require a read-only transaction snapshot")
+	}
+	if workers > 1 && cfg.subset != nil {
+		return fmt.Errorf("parallel dump workers are incompatible with subset dump")
 	}
 	return nil
 }
