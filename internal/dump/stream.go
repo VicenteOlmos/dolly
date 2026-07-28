@@ -299,6 +299,21 @@ func preserveColumnSet(table db.Table, original, transformed map[string]any) map
 }
 
 func streamTable(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) error {
+	finalPath := tableDataPath(dir, table)
+	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+	tmpPath := finalPath + ".tmp"
+	if err := streamTableToPath(ctx, q, table, tmpPath, rowTransform); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return fmt.Errorf("rename table %q: %w", table.Name, err)
+	}
+	return nil
+}
+
+func streamTableToPath(ctx context.Context, q querier, table db.Table, path string, rowTransform RowTransform) error {
 	if err := ValidateTableName(table.Name); err != nil {
 		return err
 	}
@@ -316,12 +331,10 @@ func streamTable(ctx context.Context, q querier, table db.Table, dir string, row
 	}
 	defer rows.Close()
 
-	finalPath := tableDataPath(dir, table)
-	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	tmpPath := finalPath + ".tmp"
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("create file for table %q: %w", table.Name, err)
 	}
@@ -330,7 +343,7 @@ func streamTable(ctx context.Context, q querier, table db.Table, dir string, row
 	succeeded := false
 	defer func() {
 		if !succeeded {
-			os.Remove(tmpPath)
+			os.Remove(path)
 		}
 	}()
 
@@ -390,9 +403,6 @@ func streamTable(ctx context.Context, q querier, table db.Table, dir string, row
 		return fmt.Errorf("close file for table %q: %w", table.Name, err)
 	}
 
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("rename table %q: %w", table.Name, err)
-	}
 	succeeded = true
 
 	return nil
