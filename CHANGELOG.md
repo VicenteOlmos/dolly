@@ -4,14 +4,13 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
-- **Docs** recognition-first operator workflows in README (mode decision table, six copyable recipes) and pending `0.2.0` release notes below.
+_No unreleased changes._
 
-## 0.2.0
-
-Pending — not tagged or published yet. Merge the docs PR, complete SDD archive, then tag protected `main` as `v0.2.0` per [docs/release.md](docs/release.md).
+## [0.2.0](https://github.com/VicenteOlmos/dolly/releases/tag/v0.2.0) — 2026-07-28
 
 ### Added
 
+- **Operator documentation** — README recognition-first mode decision table and six copyable recipes (exact selectors, selector files, keyset chunk/resume, shared-snapshot parallel dump, acknowledged parallel restore, safe end-to-end combinations) with expected artifacts (`metadata.json`, checkpoints, optional `schema.sql`, partial-state manifest), compatibility boundaries, and safety warnings.
 - **Exact table selection** — repeatable `--include-table` / `--exclude-table` and newline-delimited `--include-table-file` / `--exclude-table-file` selectors; include-narrow/exclude-win planning; credential-free provenance in `metadata.json` (#25, #27, #29).
 - **Selective keyset chunking** — `--chunk-table` / `--chunk-table-file` stream named tables with PK-based checkpoints and resume; provenance-safe directory reuse (#31, #32).
 - **Parallel table dump** — `--workers` / `dump.workers` (default `1`, max `16`) export tables from one read-only repeatable-read snapshot; metadata published last on success only (#34, #35).
