@@ -487,6 +487,57 @@ func TestLoadConfigDumpRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDumpTableSelectionRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+
+	orig := DefaultConfig()
+	orig.Dump.IncludeTables = []string{"public.users", "app.events"}
+	orig.Dump.ExcludeTables = []string{"public.audit_log"}
+	orig.Dump.IncludeTableFiles = []string{"tables/include.txt"}
+	orig.Dump.ExcludeTableFiles = []string{"tables/exclude.txt", "tables/more-exclude.txt"}
+
+	if err := SaveConfig(orig, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !reflect.DeepEqual(orig.Dump.IncludeTables, got.Dump.IncludeTables) {
+		t.Fatalf("IncludeTables = %v, want %v", got.Dump.IncludeTables, orig.Dump.IncludeTables)
+	}
+	if !reflect.DeepEqual(orig.Dump.ExcludeTables, got.Dump.ExcludeTables) {
+		t.Fatalf("ExcludeTables = %v, want %v", got.Dump.ExcludeTables, orig.Dump.ExcludeTables)
+	}
+	if !reflect.DeepEqual(orig.Dump.IncludeTableFiles, got.Dump.IncludeTableFiles) {
+		t.Fatalf("IncludeTableFiles = %v, want %v", got.Dump.IncludeTableFiles, orig.Dump.IncludeTableFiles)
+	}
+	if !reflect.DeepEqual(orig.Dump.ExcludeTableFiles, got.Dump.ExcludeTableFiles) {
+		t.Fatalf("ExcludeTableFiles = %v, want %v", got.Dump.ExcludeTableFiles, orig.Dump.ExcludeTableFiles)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved config: %v", err)
+	}
+	for _, want := range []string{
+		`"include_tables": [`,
+		`"public.users"`,
+		`"exclude_tables": [`,
+		`"public.audit_log"`,
+		`"include_table_files": [`,
+		`"tables/include.txt"`,
+		`"exclude_table_files": [`,
+		`"tables/more-exclude.txt"`,
+	} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Fatalf("saved config missing %q in:\n%s", want, raw)
+		}
+	}
+}
+
 func TestDriftGuard(t *testing.T) {
 	// The embedded template and the committed config.jsonc at repo root must be identical.
 	// This test is intentionally skipped when the repo root file is absent (e.g. in sub-tree builds).

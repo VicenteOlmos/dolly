@@ -95,7 +95,14 @@
     // Max query retries per chunk when --slow-connection is set (0 = disabled).
     "slow_retry_max": 0,
     // Base backoff between slow-connection query retries (default "500ms").
-    "slow_retry_base": "500ms"
+    "slow_retry_base": "500ms",
+
+    // Exact qualified tables to include or exclude (schema.table; no globs or CSV).
+    // CLI --include-table/--exclude-table flags replace these lists when present.
+    "include_tables": [],
+    "exclude_tables": [],
+    "include_table_files": [],
+    "exclude_table_files": []
   },
 
   // ── Database pool ────────────────────────────────────────────────────────
