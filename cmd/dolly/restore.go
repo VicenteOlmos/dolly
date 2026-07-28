@@ -27,15 +27,20 @@ var (
 )
 
 type restoreFlags struct {
-	DSN            string
-	Connection     string
-	Input          string
-	OnConflict     string
-	Replace        bool
-	NoTransaction  bool
-	Yes            bool
-	JSON           bool
-	TrustSchemaSQL bool
+	DSN                 string
+	Connection          string
+	Input               string
+	OnConflict          string
+	Replace             bool
+	NoTransaction       bool
+	Yes                 bool
+	JSON                bool
+	TrustSchemaSQL      bool
+	Workers             int
+	WorkersSet          bool
+	AckPartialState     bool
+	PartialStateFile    string
+	PartialStateFileSet bool
 }
 
 func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
@@ -50,6 +55,9 @@ func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
 	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive or advanced operations (required with --replace, --no-transaction, or --trust-schema-sql)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	fs.BoolVar(&flags.TrustSchemaSQL, "trust-schema-sql", false, "replay reviewed schema.sql when target tables are missing (requires --no-transaction --yes)")
+	fs.IntVar(&flags.Workers, "workers", 0, "parallel table restore workers (default: config restore.workers or 1; max 16)")
+	fs.BoolVar(&flags.AckPartialState, "ack-partial-state", false, "acknowledge partial-state risk for parallel restore (required when workers > 1)")
+	fs.StringVar(&flags.PartialStateFile, "partial-state-file", "", "partial-state manifest path (default: config restore.partial_state_file or input/.dolly-restore-partial-state.json)")
 	return fs
 }
 
@@ -66,6 +74,14 @@ func parseRestoreFlags(args []string) (restoreFlags, error) {
 	if err := fs.Parse(args); err != nil {
 		return flags, mapFlagHelp(err)
 	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "workers":
+			flags.WorkersSet = true
+		case "partial-state-file":
+			flags.PartialStateFileSet = true
+		}
+	})
 	if err := validateDSNOrConnection(flags.Connection, flags.DSN); err != nil {
 		return flags, err
 	}
@@ -88,6 +104,59 @@ func parseRestoreFlags(args []string) (restoreFlags, error) {
 		return flags, errors.New("--no-transaction commits per table with no global rollback; pass --yes to confirm (default restore is atomic)")
 	}
 	return flags, nil
+}
+
+func resolveRestoreWorkers(flags restoreFlags, cfg *config.Config) int {
+	if flags.WorkersSet {
+		return flags.Workers
+	}
+	workers := cfg.Restore.Workers
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers
+}
+
+func validateRestoreWorkers(workers int) error {
+	if workers < 1 || workers > restore.MaxParallelRestoreWorkers() {
+		return fmt.Errorf("--workers must be between 1 and %d, got %d", restore.MaxParallelRestoreWorkers(), workers)
+	}
+	return nil
+}
+
+func resolveRestorePartialStatePath(flags restoreFlags, cfg *config.Config, inputDir string) string {
+	if flags.PartialStateFileSet {
+		return flags.PartialStateFile
+	}
+	if cfg.Restore.PartialStateFile != "" {
+		return cfg.Restore.PartialStateFile
+	}
+	return restore.DefaultPartialStatePath(inputDir)
+}
+
+func validateParallelRestoreCLI(flags restoreFlags, workers int, policy restore.ConflictPolicy) error {
+	if workers <= 1 {
+		return nil
+	}
+	if !flags.NoTransaction {
+		return errors.New("parallel restore requires --no-transaction")
+	}
+	if !flags.Yes {
+		return errors.New("parallel restore requires --yes to confirm")
+	}
+	if !flags.AckPartialState {
+		return errors.New("parallel restore requires --ack-partial-state")
+	}
+	if flags.Replace {
+		return errors.New("parallel restore is incompatible with --replace")
+	}
+	if flags.TrustSchemaSQL {
+		return errors.New("parallel restore is incompatible with --trust-schema-sql")
+	}
+	if policy != restore.ConflictError {
+		return fmt.Errorf("parallel restore requires --on-conflict error, got %q", flags.OnConflict)
+	}
+	return nil
 }
 
 func runRestore(args []string) (err error) {
@@ -116,6 +185,20 @@ func runRestore(args []string) (err error) {
 	cfg, err := restoreLoadConfig(config.ResolveConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	workers := resolveRestoreWorkers(flags, cfg)
+	if err := validateRestoreWorkers(workers); err != nil {
+		return err
+	}
+	if err := validateParallelRestoreCLI(flags, workers, policy); err != nil {
+		return err
+	}
+	partialStatePath := resolveRestorePartialStatePath(flags, cfg, flags.Input)
+	if workers > 1 {
+		if err := restore.ValidatePartialStatePath(partialStatePath); err != nil {
+			return err
+		}
 	}
 
 	dsn, schemas, err := resolveDataSource(cfg, ".", flags.Connection, flags.DSN)
@@ -162,6 +245,12 @@ func runRestore(args []string) (err error) {
 		opts = append(opts, restore.WithSchemas(schemas))
 	}
 	opts = append(opts, restore.WithDSN(dsn))
+	if workers > 1 || flags.WorkersSet || cfg.Restore.Workers > 1 {
+		opts = append(opts, restore.WithWorkers(workers))
+	}
+	if workers > 1 {
+		opts = append(opts, restore.WithPartialStateManifest(partialStatePath))
+	}
 
 	if flags.TrustSchemaSQL {
 		opts = append(opts, restore.WithTrustedSchemaSQL())

@@ -143,7 +143,18 @@ dolly dump --dsn "$DB" --output ./dolly_dump --chunk-table public.orders --chunk
 dolly dump --dsn "$DB" --output ./dolly_dump --workers 4
 ```
 
-`--workers` (or config `dump.workers`, default `1`) dumps tables concurrently from one PostgreSQL snapshot. Values above `1` require `db.max_open_conns >= workers+1` and reject `--no-transaction`, subset modes (`--seed-file` / `--percent`), and chunk or slow-connection policies. Restore parallel workers are not exposed yet.
+`--workers` (or config `dump.workers`, default `1`) dumps tables concurrently from one PostgreSQL snapshot. Values above `1` require `db.max_open_conns >= workers+1` and reject `--no-transaction`, subset modes (`--seed-file` / `--percent`), and chunk or slow-connection policies.
+
+### Parallel table restore — advanced
+
+Parallel restore loads independent FK levels concurrently and writes a durable partial-state manifest when `workers > 1`. It requires explicit acknowledgement and cannot run from the TUI history flow without the CLI safety flags.
+
+```bash
+dolly restore --dsn "$DB" --input ./dolly_dump/1 \
+  --workers 4 --no-transaction --yes --ack-partial-state
+```
+
+`--workers` (or config `restore.workers`, default `1`) restores tables concurrently by FK level. Values above `1` require `--no-transaction`, `--yes`, `--ack-partial-state`, conflict policy `error`, a resolvable DSN, and reject `--replace`, `--trust-schema-sql`, and skip/upsert policies. The partial-state manifest path defaults to `{input_dir}/.dolly-restore-partial-state.json` unless overridden by `--partial-state-file` or config `restore.partial_state_file`. Acknowledgement is CLI-only and is never stored in config.
 
 ### Faster bulk restore — advanced
 
@@ -153,7 +164,7 @@ Default restore runs in one transaction. For trusted empty targets or very large
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 ```
 
-This mode can leave partial progress if it fails mid-way. Prefer the default when you need atomic rollback.
+Serial `--no-transaction` mode can leave partial progress if it fails mid-way. Parallel restore (`--workers > 1`) always requires `--ack-partial-state` and writes a manifest until full success. Prefer the default when you need atomic rollback.
 
 ### Clone strategies
 

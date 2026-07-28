@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -554,5 +555,243 @@ func TestRunRestoreReplaceYesTargetInfo(t *testing.T) {
 	})
 	if !strings.Contains(stderr, "info: target database: target_db") {
 		t.Fatalf("stderr = %q, want target database info", stderr)
+	}
+}
+
+func TestParseRestoreFlagsWorkersExplicitInvalid(t *testing.T) {
+	for _, workers := range []int{0, -1, 17} {
+		t.Run(fmt.Sprintf("%d", workers), func(t *testing.T) {
+			_, err := parseRestoreFlags([]string{
+				"--dsn", "postgres://h/db",
+				"--input", t.TempDir(),
+				"--workers", fmt.Sprintf("%d", workers),
+			})
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			cfg := config.DefaultConfig()
+			if err := validateRestoreWorkers(resolveRestoreWorkers(restoreFlags{Workers: workers, WorkersSet: true}, cfg)); err == nil {
+				t.Fatalf("workers=%d should be rejected", workers)
+			}
+		})
+	}
+}
+
+func TestResolveRestoreWorkersPrecedence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.Workers = 3
+
+	got := resolveRestoreWorkers(restoreFlags{WorkersSet: false}, cfg)
+	if got != 3 {
+		t.Fatalf("config workers = %d, want 3", got)
+	}
+
+	got = resolveRestoreWorkers(restoreFlags{Workers: 5, WorkersSet: true}, cfg)
+	if got != 5 {
+		t.Fatalf("explicit workers = %d, want 5", got)
+	}
+}
+
+func TestResolveRestorePartialStatePathPrecedence(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.PartialStateFile = "/cfg/state.json"
+	input := t.TempDir()
+
+	got := resolveRestorePartialStatePath(restoreFlags{}, cfg, input)
+	if got != "/cfg/state.json" {
+		t.Fatalf("config path = %q", got)
+	}
+
+	got = resolveRestorePartialStatePath(restoreFlags{PartialStateFile: "/cli/state.json", PartialStateFileSet: true}, cfg, input)
+	if got != "/cli/state.json" {
+		t.Fatalf("cli path = %q", got)
+	}
+
+	cfg.Restore.PartialStateFile = ""
+	want := restore.DefaultPartialStatePath(input)
+	got = resolveRestorePartialStatePath(restoreFlags{}, cfg, input)
+	if got != want {
+		t.Fatalf("default path = %q, want %q", got, want)
+	}
+}
+
+func TestValidateParallelRestoreCLIMatrix(t *testing.T) {
+	base := restoreFlags{
+		NoTransaction:   true,
+		Yes:             true,
+		AckPartialState: true,
+		OnConflict:      "error",
+	}
+	if err := validateParallelRestoreCLI(base, 2, restore.ConflictError); err != nil {
+		t.Fatalf("valid parallel flags: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		flags restoreFlags
+		want  string
+	}{
+		{name: "no-tx", flags: func() restoreFlags { f := base; f.NoTransaction = false; return f }(), want: "--no-transaction"},
+		{name: "yes", flags: func() restoreFlags { f := base; f.Yes = false; return f }(), want: "--yes"},
+		{name: "ack", flags: func() restoreFlags { f := base; f.AckPartialState = false; return f }(), want: "--ack-partial-state"},
+		{name: "replace", flags: func() restoreFlags { f := base; f.Replace = true; return f }(), want: "--replace"},
+		{name: "trust", flags: func() restoreFlags { f := base; f.TrustSchemaSQL = true; return f }(), want: "--trust-schema-sql"},
+		{name: "skip", flags: func() restoreFlags { f := base; f.OnConflict = "skip"; return f }(), want: "--on-conflict error"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := restore.ParseConflictPolicy(tc.flags.OnConflict)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = validateParallelRestoreCLI(tc.flags, 2, policy)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunRestoreParallelRejectsBeforeDB(t *testing.T) {
+	origLoad := restoreLoadConfig
+	origPing := restorePingContext
+	origRestore := restoreRestore
+	t.Cleanup(func() {
+		restoreLoadConfig = origLoad
+		restorePingContext = origPing
+		restoreRestore = origRestore
+	})
+
+	restoreLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	pinged := false
+	restorePingContext = func(*sql.DB, context.Context) error {
+		pinged = true
+		return nil
+	}
+	restored := false
+	restoreRestore = func(context.Context, *sql.DB, string, ...restore.Option) error {
+		restored = true
+		return nil
+	}
+
+	inputDir := t.TempDir()
+	err := runRestore([]string{
+		"--dsn", "postgres://u:p@h/db",
+		"--input", inputDir,
+		"--workers", "2",
+		"--no-transaction", "--yes",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--ack-partial-state") {
+		t.Fatalf("err = %v", err)
+	}
+	if pinged || restored {
+		t.Fatalf("pinged=%v restored=%v, want no DB activity", pinged, restored)
+	}
+}
+
+func TestRunRestoreParallelPassesOptions(t *testing.T) {
+	origLoad := restoreLoadConfig
+	origPing := restorePingContext
+	origRestore := restoreRestore
+	t.Cleanup(func() {
+		restoreLoadConfig = origLoad
+		restorePingContext = origPing
+		restoreRestore = origRestore
+	})
+
+	cfg := config.DefaultConfig()
+	cfg.Restore.PartialStateFile = ""
+	restoreLoadConfig = func(string) (*config.Config, error) { return cfg, nil }
+	restorePingContext = func(*sql.DB, context.Context) error { return nil }
+
+	inputDir := t.TempDir()
+	manifestPath := filepath.Join(inputDir, "custom-state.json")
+	var captured []restore.Option
+	restoreRestore = func(_ context.Context, _ *sql.DB, _ string, opts ...restore.Option) error {
+		captured = append([]restore.Option(nil), opts...)
+		return errors.New("stop")
+	}
+
+	err := runRestore([]string{
+		"--dsn", "postgres://u:p@h/db",
+		"--input", inputDir,
+		"--workers", "2",
+		"--no-transaction", "--yes", "--ack-partial-state",
+		"--partial-state-file", manifestPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "stop") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := restore.InspectWorkers(captured...); got != 2 {
+		t.Fatalf("workers = %d, want 2", got)
+	}
+	if got := restore.InspectPartialStateManifest(captured...); got != manifestPath {
+		t.Fatalf("manifest = %q, want %q", got, manifestPath)
+	}
+}
+
+func TestRunRestoreSerialWorkersDefaultRegression(t *testing.T) {
+	origLoad := restoreLoadConfig
+	origPing := restorePingContext
+	origRestore := restoreRestore
+	t.Cleanup(func() {
+		restoreLoadConfig = origLoad
+		restorePingContext = origPing
+		restoreRestore = origRestore
+	})
+
+	restoreLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	restorePingContext = func(*sql.DB, context.Context) error { return nil }
+	var captured []restore.Option
+	restoreRestore = func(_ context.Context, _ *sql.DB, _ string, opts ...restore.Option) error {
+		captured = opts
+		return nil
+	}
+
+	inputDir := t.TempDir()
+	if err := runRestore([]string{
+		"--dsn", "postgres://u:p@h/db",
+		"--input", inputDir,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := restore.InspectWorkers(captured...); got != 0 {
+		t.Fatalf("serial workers = %d, want unset/0", got)
+	}
+	if got := restore.InspectPartialStateManifest(captured...); got != "" {
+		t.Fatalf("manifest = %q, want empty", got)
+	}
+}
+
+func TestRunRestoreParallelRejectsTraversalPathBeforeDB(t *testing.T) {
+	origLoad := restoreLoadConfig
+	origPing := restorePingContext
+	origRestore := restoreRestore
+	t.Cleanup(func() {
+		restoreLoadConfig = origLoad
+		restorePingContext = origPing
+		restoreRestore = origRestore
+	})
+
+	restoreLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	pinged := false
+	restorePingContext = func(*sql.DB, context.Context) error {
+		pinged = true
+		return nil
+	}
+	restoreRestore = func(context.Context, *sql.DB, string, ...restore.Option) error { return nil }
+
+	err := runRestore([]string{
+		"--dsn", "postgres://u:p@h/db",
+		"--input", t.TempDir(),
+		"--workers", "2",
+		"--no-transaction", "--yes", "--ack-partial-state",
+		"--partial-state-file", "../escape.json",
+	})
+	if err == nil || !strings.Contains(err.Error(), "partial state manifest path") {
+		t.Fatalf("err = %v", err)
+	}
+	if pinged {
+		t.Fatal("ping should not run on invalid manifest path")
 	}
 }
