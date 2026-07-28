@@ -37,6 +37,8 @@ type config struct {
 	onProgress         func(ProgressEvent)
 	dsn                string // pgx connection string for COPY path
 	schemaSQL          bool   // auto-apply schema.sql when target tables missing
+	workers            int
+	partialStatePath   string
 }
 
 // Option configures Restore behavior.
@@ -107,6 +109,7 @@ var runPSQLSchema = func(ctx context.Context, args []string, env []string, stder
 type ProgressEvent struct {
 	Phase   string
 	Table   string
+	Worker  int // parallel worker id; zero in serial restore
 	Current int
 	Total   int
 	Elapsed time.Duration
@@ -168,6 +171,19 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 		insertPolicy = ConflictError
 	}
 
+	workers := effectiveRestoreWorkers(cfg.workers)
+	var parallelLevels []RestoreLevel
+	if workers > 1 {
+		if err := validateParallelRestoreOptions(&cfg); err != nil {
+			return err
+		}
+		var err error
+		parallelLevels, err = BuildRestoreLevels(meta.Tables)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Schema validation (outside transaction — schema.sql may need psql).
 	schemaFilter := cfg.schemas
 	if len(schemaFilter) == 0 {
@@ -214,6 +230,10 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 		if err := truncateTables(ctx, q, meta.Tables); err != nil {
 			return err
 		}
+	}
+
+	if workers > 1 {
+		return runParallelRestore(ctx, &cfg, dbConn, meta, dataPaths, parallelLevels, schemaFilter, workers, startedAt)
 	}
 
 	if len(meta.Tables) == 0 {
