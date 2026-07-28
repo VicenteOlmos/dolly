@@ -50,6 +50,16 @@ $env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/d
 
 Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it to your user `PATH`.
 
+### Pinning and support policy
+
+| Topic | Detail |
+|---|---|
+| Latest release | Installers default to the latest [GitHub Release](https://github.com/VicenteOlmos/dolly/releases). |
+| Pin a version | Set `DOLLY_VERSION` (for example `0.1.1`) in the install command above. |
+| SemVer tags | Release tags follow `vX.Y.Z`. Only the **latest release** receives security fixes. |
+| Immutable assets | Tags and release archives are never overwritten — use a new patch tag for fixes. |
+| Checksums | Each release ships `checksums.txt`; installers verify archives before install. |
+
 ### From source
 
 ```bash
@@ -175,6 +185,8 @@ echo "$result"
 
 ## Development
 
+Requires Go 1.26.3+ (match `go.mod`) and PostgreSQL 16 client tools on `PATH` for schema capture and clone strategies.
+
 Run a local PostgreSQL round trip from a source checkout:
 
 ```bash
@@ -193,6 +205,8 @@ make test-integration   # needs DOLLY_TEST_PG_DSN
 ```
 
 Release notes: [docs/release.md](docs/release.md) · [CHANGELOG.md](CHANGELOG.md)
+
+Report security issues privately via [GitHub private vulnerability reporting](https://github.com/VicenteOlmos/dolly/security/advisories/new) — see [SECURITY.md](SECURITY.md).
 
 ## License
 

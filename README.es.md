@@ -50,6 +50,16 @@ $env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/d
 
 Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el instalador la agrega al `PATH` del usuario.
 
+### Fijación de versión y política de soporte
+
+| Tema | Detalle |
+|---|---|
+| Última versión | Los instaladores usan por defecto la última [GitHub Release](https://github.com/VicenteOlmos/dolly/releases). |
+| Fijar una versión | Defina `DOLLY_VERSION` (por ejemplo `0.1.1`) en el comando de instalación anterior. |
+| Etiquetas SemVer | Las etiquetas de versión siguen `vX.Y.Z`. Solo la **última versión** recibe correcciones de seguridad. |
+| Activos inmutables | Las etiquetas y los archivos de versión no se sobrescriben; use una nueva etiqueta de parche para correcciones. |
+| Sumas de verificación | Cada versión incluye `checksums.txt`; los instaladores verifican los archivos antes de instalar. |
+
 ### Desde el código fuente
 
 ```bash
@@ -175,6 +185,8 @@ echo "$result"
 
 ## Desarrollo
 
+Requiere Go 1.26.3+ (coincidir con `go.mod`) y herramientas cliente de PostgreSQL 16 en el `PATH` para captura de esquema y estrategias de clonación.
+
 Ejecute un recorrido completo con PostgreSQL local desde un checkout del código fuente:
 
 ```bash
@@ -193,6 +205,8 @@ make test-integration   # needs DOLLY_TEST_PG_DSN
 ```
 
 Notas de la versión: [docs/release.md](docs/release.md) · [CHANGELOG.md](CHANGELOG.md)
+
+Reporte problemas de seguridad en privado mediante [reporte privado de vulnerabilidades de GitHub](https://github.com/VicenteOlmos/dolly/security/advisories/new) — consulte [SECURITY.md](SECURITY.md).
 
 ## Licencia
 

@@ -2,6 +2,14 @@
 
 Dolly is a PostgreSQL CLI/TUI for dump, restore, and clone operations.
 
+## Before you open a PR
+
+- Run `make preflight` (install-script checks, unit tests, `go vet`, build).
+- Match the Go toolchain in `go.mod`.
+- Integration tests need PostgreSQL 16 and `DOLLY_TEST_PG_DSN` (`docker compose up -d` — see below).
+- Report **security vulnerabilities privately** via [GitHub private vulnerability reporting](https://github.com/VicenteOlmos/dolly/security/advisories/new) — not public issues. See [SECURITY.md](SECURITY.md).
+- Release and publication policy: [docs/release.md](docs/release.md) (SemVer tags, latest-only security support, immutable release assets).
+
 ## Getting started
 
 ```bash
@@ -46,4 +54,4 @@ that assert the contract.
 
 ## Pull requests
 
-Run `make preflight` before submitting.
+Run `make preflight` before submitting. Include test evidence in the PR template when behavior changes.

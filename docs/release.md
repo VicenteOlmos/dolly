@@ -1,6 +1,15 @@
-# Local release readiness
+# Release policy and readiness
 
-The public module path is `github.com/VicenteOlmos/dolly`. The repository and Go module path are already chosen. This project is ready for local release-style builds; follow the public release steps below for distribution.
+The public module path is `github.com/VicenteOlmos/dolly`. Releases use [SemVer](https://semver.org/) tags (`vX.Y.Z`), publish immutable assets to [GitHub Releases](https://github.com/VicenteOlmos/dolly/releases), and support **only the latest release** for security fixes. Report vulnerabilities privately via [GitHub private vulnerability reporting](https://github.com/VicenteOlmos/dolly/security/advisories/new) — not public issues.
+
+| Requirement | Detail |
+|---|---|
+| Go toolchain | Match `go.mod` (currently Go 1.26.3+) |
+| PostgreSQL | 16 for integration tests and recommended operator targets |
+| Platforms | Linux, macOS, Windows (`x86_64` and `arm64`) |
+| Release assets | Seven release assets (six archives plus `checksums.txt`); never overwrite an existing tag or asset |
+
+Use this checklist for local release-style builds and maintainer publication gates.
 
 ## Preflight
 
@@ -51,16 +60,19 @@ Before the first local commit:
 
 ## Public release steps
 
-The repo is `VicenteOlmos/dolly`; all decisions below are finalized.
+The repo is `VicenteOlmos/dolly`. Use **release-first** ordering: build and verify the release while the repository stays private, then change visibility only after every gate passes.
 
-1. Push `main` to the public remote.
-2. Tag the first release only after CI passes on the public remote.
-3. Push an annotated tag `vX.Y.Z` (for example `v0.1.1`). The `Release` workflow runs vet, race tests, installer behavior tests, and Postgres integration before publishing assets to GitHub Releases.
-4. Optional local rebuild: `scripts/build-release-assets.sh dist` (override metadata with `VERSION`, `COMMIT`, `DATE` env vars).
+1. Merge green changes to protected `main` on the remote. CI must pass on that exact commit SHA.
+2. Apply the GitHub safeguard checklist (Unit D): repository metadata, pinned Actions policy, `release` environment, Dependabot alerts, secret scanning/push protection, and private vulnerability reporting. CodeQL analysis runs after the repo is public (task 4.5).
+3. While the repository remains **private**, push an annotated tag `vX.Y.Z` (for example `v0.1.1`) from the green protected `main` tip. Do not overwrite an existing tag.
+4. Let the `Release` workflow build and publish assets to GitHub Releases. Verify all seven release assets (six archives plus `checksums.txt`), archive contents (`dolly` / `dolly.exe`), and `dolly version` match the tag — still private.
+5. Complete the maintainer pre-public checklist (branch/tag rulesets, first-time fork approval policy, and remaining Unit D gates from tasks 4.1–4.4).
+6. Change repository visibility from **Private** to **Public** only after every prior gate is green.
+7. Run anonymous post-public verification: clone, raw installer URLs, release downloads/checksums, public CI on a pull request, and security reporting links (task 4.5).
 
-The release workflow is tag-only on purpose. If a release job needs a rebuild,
-delete the broken release/tag and push a new patch tag instead of overwriting
-assets under the same version.
+Optional local rebuild before tagging: `scripts/build-release-assets.sh dist` (override metadata with `VERSION`, `COMMIT`, `DATE` env vars).
+
+The release workflow is tag-only on purpose. Tags and release assets are **immutable** once observers may rely on them. After the repository is public, never overwrite a published `vX.Y.Z` tag or its archives; publish a new patch tag (for example `v0.1.2`) from a fixed commit on protected `main`.
 
 ### Release assets
 
@@ -109,18 +121,21 @@ $env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/d
 
 ## Bad release recovery
 
-If a release is broken after publishing:
+**Never force-push `main`** to undo a release or disclosed secret.
 
-### Rollback (undo the release)
+### Pre-public failure (repository still private)
 
-1. Delete the GitHub Release and the associated tag (`git push --delete origin vX.Y.Z`).
-2. If the release branch replaced the default branch content, force-push the previous good commit to `main`.
-3. Remove the release archives and `checksums.txt` from the release page.
-4. Verify `curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_REPO=VicenteOlmos/dolly sh` no longer installs the bad version.
+No public consumer has observed the release yet. You may stop, remove the newly created private GitHub Release, delete the bad annotated tag (`git push --delete origin vX.Y.Z`), and revert preparatory settings or drafts. Fix the issue on a branch from protected `main`, merge through the normal PR process, and restart the release-first checklist from a clean gate.
 
-### Fix-forward (patch)
+### Post-public failure (repository public or assets observed)
 
-1. Fix the issue on a branch off `main`.
-2. Tag a new patch version (e.g. `v0.1.1`).
-3. Push the tag; the `Release` workflow builds and uploads release assets.
-4. The installer picks up the new latest automatically.
+Published tags and release assets are **immutable**. Do **not** delete, overwrite, or reuse a published `vX.Y.Z` tag as rollback — mirrors, caches, and installers may already hold the bad artifacts.
+
+1. Contain impact: restrict visibility or Actions if needed; revoke or delist unsafe assets where GitHub allows.
+2. Fix the issue on a branch from protected `main` and merge through the normal PR process.
+3. Rotate any exposed credentials and record impact.
+4. Tag a new patch version (for example `v0.1.2`) from the green protected `main` tip.
+5. Push the annotated tag; the `Release` workflow publishes fresh immutable assets.
+6. Verify installers pin or resolve the new release and that `checksums.txt` matches downloaded archives.
+
+Clones, caches, and mirrors cannot be fully recalled; rotation, impact recording, and forward fixes are the supported recovery path. See [SECURITY.md](../SECURITY.md) for incident reporting.
