@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -450,5 +451,176 @@ func TestIntegrationDumpChunkTableResumeNoDuplicates(t *testing.T) {
 			t.Fatalf("duplicate row id %s after resumed chunk dump", id)
 		}
 		seen[id] = struct{}{}
+	}
+}
+
+func TestIntegrationParallelDumpSharedSnapshot(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	conn.SetMaxOpenConns(10)
+
+	suffix := time.Now().UnixNano()
+	tableA := fmt.Sprintf("parallel_snap_a_%d", suffix)
+	tableB := fmt.Sprintf("parallel_snap_b_%d", suffix)
+	for _, name := range []string{tableA, tableB} {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+			`CREATE TABLE %s (id BIGINT PRIMARY KEY, name TEXT NOT NULL)`, name,
+		)); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_, _ = conn.ExecContext(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS %s`, name))
+		})
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+			`INSERT INTO %s (id, name) VALUES (1, 'before'), (2, 'before')`, name,
+		)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const markerA int64 = 900_000_001
+	const markerB int64 = 900_000_002
+
+	policy := SelectionPolicy{
+		Includes: []SelectorEntry{
+			{Table: QualifiedTable{Schema: "public", Name: tableA}},
+			{Table: QualifiedTable{Schema: "public", Name: tableB}},
+		},
+	}
+
+	snapReady := make(chan struct{})
+	parallelTestHooks.onSnapshotExported = func() { close(snapReady) }
+	t.Cleanup(func() { parallelTestHooks.onSnapshotExported = nil })
+
+	dir := t.TempDir()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Dump(ctx, conn, dir, WithoutSequences(), WithWorkers(2), WithTableSelection(policy, nil))
+	}()
+
+	<-snapReady
+
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+		`INSERT INTO %s (id, name) VALUES ($1, 'after-snapshot')`, tableA,
+	), markerA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+		`INSERT INTO %s (id, name) VALUES ($1, 'after-snapshot')`, tableB,
+	), markerB); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tableName := range []string{tableA, tableB} {
+		lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, tableName)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(lines) != 2 {
+			t.Fatalf("%s row count = %d, want 2 pre-snapshot rows", tableName, len(lines))
+		}
+		seen := make(map[int64]struct{})
+		for _, line := range lines {
+			var row map[string]any
+			if err := json.Unmarshal([]byte(line), &row); err != nil {
+				t.Fatal(err)
+			}
+			id, ok := row["id"].(float64)
+			if !ok {
+				t.Fatalf("%s id type %T", tableName, row["id"])
+			}
+			rowID := int64(id)
+			if rowID == markerA || rowID == markerB {
+				t.Fatalf("%s included post-snapshot row id %d", tableName, rowID)
+			}
+			seen[rowID] = struct{}{}
+		}
+		for _, want := range []int64{1, 2} {
+			if _, ok := seen[want]; !ok {
+				t.Fatalf("%s missing pre-snapshot row id %d", tableName, want)
+			}
+		}
+	}
+}
+
+func TestIntegrationParallelDumpCancelCleanup(t *testing.T) {
+	conn := openIntegrationDB(t)
+	conn.SetMaxOpenConns(10)
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	var startOnce sync.Once
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Dump(ctx, conn, dir,
+			WithoutSequences(),
+			WithWorkers(2),
+			WithProgress(func(ev ProgressEvent) {
+				if ev.Phase != "table_start" {
+					return
+				}
+				startOnce.Do(func() {
+					close(started)
+					cancel()
+				})
+			}),
+		)
+	}()
+
+	<-started
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected cancelled parallel dump error")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist after cancelled dump")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".ndjson") {
+			t.Fatalf("final table file should not exist after cancel: %s", e.Name())
+		}
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, parallelStagingPrefix+"*")); len(matches) > 0 {
+		t.Fatal("parallel staging should not remain after cancelled dump")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if conn.Stats().InUse == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pool in-use = %d after cancel cleanup", conn.Stats().InUse)
+}
+
+func TestIntegrationParallelDumpDefaultSerialRegression(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	if err := Dump(ctx, conn, dir, WithoutSequences()); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tables) == 0 {
+		t.Fatal("expected tables in metadata")
 	}
 }

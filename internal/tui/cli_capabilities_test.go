@@ -125,7 +125,7 @@ func TestHelpPageCountAndBindingsPage(t *testing.T) {
 
 func TestFlagNamesDump(t *testing.T) {
 	names := FlagNames("dump")
-	want := []string{"dsn", "connection", "output", "no-transaction", "seed-file", "percent", "slow-connection", "chunk-size", "retry-max", "retry-base", "max-depth", "max-tables", "max-rows", "max-rows-per-table", "max-in-list-size", "include-table", "exclude-table", "include-table-file", "exclude-table-file", "chunk-table", "chunk-table-file", "json"}
+	want := []string{"dsn", "connection", "output", "no-transaction", "seed-file", "percent", "slow-connection", "chunk-size", "retry-max", "retry-base", "max-depth", "max-tables", "max-rows", "max-rows-per-table", "max-in-list-size", "include-table", "exclude-table", "include-table-file", "exclude-table-file", "chunk-table", "chunk-table-file", "workers", "json"}
 	if len(names) != len(want) {
 		t.Fatalf("got %v, want %v", names, want)
 	}

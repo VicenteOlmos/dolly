@@ -233,7 +233,7 @@ func WithChunkTablePolicy(policy ChunkPolicy, ignored []IgnoredFileLine) Option 
 }
 
 // WithWorkers sets parallel dump worker count. Values above one are rejected when
-// chunk or slow-connection policy is active. The CLI flag is added in a later phase.
+// chunk or slow-connection policy is active.
 func WithWorkers(n int) Option {
 	return func(c *config) {
 		c.workers = n

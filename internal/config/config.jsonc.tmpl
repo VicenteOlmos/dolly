@@ -90,6 +90,9 @@
     // Default base directory for `dolly dump`. Each run writes to {output_dir}/{n}/.
     // Overridden by --output flag at runtime (still treated as base; numbered subdirs used).
     "output_dir": "dolly_dump",
+    // Parallel table dump workers (default 1 = serial). CLI --workers overrides when set.
+    // Values above 1 require db.max_open_conns >= workers+1 and reject chunk/slow/subset modes.
+    "workers": 1,
     // Rows per keyset-pagination chunk in --slow-connection mode (default 1000).
     "slow_chunk_size": 1000,
     // Max query retries per chunk when --slow-connection is set (0 = disabled).

@@ -18,6 +18,23 @@ import (
 
 const maxParallelWorkers = 16
 
+// MaxParallelWorkers returns the upper bound for parallel dump worker count.
+func MaxParallelWorkers() int {
+	return maxParallelWorkers
+}
+
+// ValidateWorkerPoolHeadroom ensures max_open_conns can support parallel dump workers.
+func ValidateWorkerPoolHeadroom(workers, maxOpenConns int) error {
+	workers = effectiveWorkers(workers)
+	if workers <= 1 {
+		return nil
+	}
+	if maxOpenConns > 0 && maxOpenConns < workers+1 {
+		return fmt.Errorf("parallel dump requires db max_open_conns >= %d (got %d)", workers+1, maxOpenConns)
+	}
+	return nil
+}
+
 const parallelStagingPrefix = ".parallel-staging-"
 
 var snapshotIDPattern = regexp.MustCompile(`^[0-9A-F]+-[0-9A-F]+-[0-9]+$`)

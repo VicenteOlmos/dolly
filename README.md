@@ -137,6 +137,14 @@ dolly dump --dsn "$DB" --output ./dolly_dump --chunk-table public.orders --chunk
 
 `--chunk-table` / `--chunk-table-file` use the same exact `schema.table` grammar as include/exclude selectors. Only named tables stream with keyset pagination and checkpoint/resume; other selected tables use the normal single-query path. Unmatched chunk selectors fail before output; chunk tables without a primary key fail during planning. `--slow-connection` chunks every selected table and keeps the existing resumable dump-dir behavior. Chunk and slow modes reject parallel workers (`workers > 1`).
 
+### Parallel table dump
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump --workers 4
+```
+
+`--workers` (or config `dump.workers`, default `1`) dumps tables concurrently from one PostgreSQL snapshot. Values above `1` require `db.max_open_conns >= workers+1` and reject `--no-transaction`, subset modes (`--seed-file` / `--percent`), and chunk or slow-connection policies. Restore parallel workers are not exposed yet.
+
 ### Faster bulk restore — advanced
 
 Default restore runs in one transaction. For trusted empty targets or very large loads:

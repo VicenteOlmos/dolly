@@ -51,6 +51,7 @@ type Config struct {
 	} `json:"subset"`
 	Dump struct {
 		OutputDir         string   `json:"output_dir"`
+		Workers           int      `json:"workers"`
 		SlowChunkSize     int      `json:"slow_chunk_size"`
 		SlowRetryMax      int      `json:"slow_retry_max"`
 		SlowRetryBase     string   `json:"slow_retry_base"`
@@ -110,6 +111,7 @@ func DefaultConfig() *Config {
 	cfg.Clone.Preflight.CachePermissionsTTL = "24h"
 	cfg.Connections.Scope = "project"
 	cfg.Dump.OutputDir = "dolly_dump"
+	cfg.Dump.Workers = 1
 	cfg.Dump.SlowChunkSize = 1000
 	cfg.Dump.SlowRetryBase = "500ms"
 	cfg.Dump.IncludeTables = []string{}
