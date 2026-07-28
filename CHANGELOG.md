@@ -4,6 +4,8 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+- **Docs** public-release readiness: release-first publication ordering (private tag/assets before visibility), SemVer/latest-only support policy, immutable published assets, private security reporting, pre-public vs post-public recovery (no force-push rollback), and contributor preflight expectations in README, CONTRIBUTING, SECURITY, and `docs/release.md`.
+
 ## 0.1.1 — 2026-07-20
 
 - **Fixed** release workflow action pinning and shell-safe release tags.
