@@ -2402,3 +2402,260 @@ func TestRunDumpSlowConnectionWithChunkTableResumesInterruptedDir(t *testing.T) 
 		t.Fatalf("output = %q, want %q", capturedOutput, interruptedDir)
 	}
 }
+
+func TestParseDumpFlagsWorkers(t *testing.T) {
+	got, err := parseDumpFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--output", "/tmp/out",
+		"--workers", "4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Workers != 4 {
+		t.Fatalf("Workers = %d, want 4", got.Workers)
+	}
+	if !got.WorkersSet {
+		t.Fatal("WorkersSet = false, want true")
+	}
+}
+
+func TestParseDumpFlagsWorkersExplicitZeroReject(t *testing.T) {
+	flags, err := parseDumpFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--output", "/tmp/out",
+		"--workers", "0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !flags.WorkersSet {
+		t.Fatal("WorkersSet = false, want true")
+	}
+	_, err = buildDumpOptions(flags, config.DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "--workers must be between 1 and 16") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseDumpFlagsWorkersExplicitNegativeReject(t *testing.T) {
+	flags, err := parseDumpFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--output", "/tmp/out",
+		"--workers", "-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !flags.WorkersSet {
+		t.Fatal("WorkersSet = false, want true")
+	}
+	_, err = buildDumpOptions(flags, config.DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "--workers must be between 1 and 16") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildDumpOptionsWorkersAbsentUsesConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.Workers = 5
+
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:    "postgres://h-a/db_a",
+		Output: t.TempDir(),
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dump.InspectWorkers(opts...); got != 5 {
+		t.Fatalf("workers = %d, want 5 from config when flag absent", got)
+	}
+}
+
+func TestBuildDumpOptionsWorkersResolution(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.Workers = 2
+
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:        "postgres://h-a/db_a",
+		Output:     t.TempDir(),
+		Workers:    4,
+		WorkersSet: true,
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dump.InspectWorkers(opts...); got != 4 {
+		t.Fatalf("workers = %d, want 4 from CLI override", got)
+	}
+}
+
+func TestBuildDumpOptionsWorkersConfigDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.Workers = 3
+
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:    "postgres://h-a/db_a",
+		Output: t.TempDir(),
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dump.InspectWorkers(opts...); got != 3 {
+		t.Fatalf("workers = %d, want 3 from config", got)
+	}
+}
+
+func TestBuildDumpOptionsWorkersSerialDefault(t *testing.T) {
+	opts, err := buildDumpOptions(dumpFlags{
+		DSN:    "postgres://h-a/db_a",
+		Output: t.TempDir(),
+	}, config.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dump.InspectWorkers(opts...); got != 1 {
+		t.Fatalf("workers = %d, want default 1", got)
+	}
+}
+
+func TestBuildDumpOptionsWorkersMaxReject(t *testing.T) {
+	_, err := buildDumpOptions(dumpFlags{
+		DSN:        "postgres://h-a/db_a",
+		Output:     t.TempDir(),
+		Workers:    17,
+		WorkersSet: true,
+	}, config.DefaultConfig())
+	if err == nil || !strings.Contains(err.Error(), "16") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBuildDumpOptionsWorkersConflicts(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags dumpFlags
+		cfg   func() *config.Config
+		want  string
+	}{
+		{
+			name: "slow connection",
+			flags: dumpFlags{
+				DSN:            "postgres://h-a/db_a",
+				Output:         t.TempDir(),
+				Workers:        2,
+				WorkersSet:     true,
+				SlowConnection: true,
+			},
+			cfg:  config.DefaultConfig,
+			want: "slow-connection",
+		},
+		{
+			name: "chunk flag",
+			flags: dumpFlags{
+				DSN:         "postgres://h-a/db_a",
+				Output:      t.TempDir(),
+				Workers:     2,
+				WorkersSet:  true,
+				ChunkTables: []string{"public.users"},
+			},
+			cfg:  config.DefaultConfig,
+			want: "chunk",
+		},
+		{
+			name: "config chunk",
+			flags: dumpFlags{
+				DSN:        "postgres://h-a/db_a",
+				Output:     t.TempDir(),
+				Workers:    2,
+				WorkersSet: true,
+			},
+			cfg: func() *config.Config {
+				cfg := config.DefaultConfig()
+				cfg.Dump.ChunkTables = []string{"public.users"}
+				return cfg
+			},
+			want: "chunk",
+		},
+		{
+			name: "subset seed",
+			flags: dumpFlags{
+				DSN:        "postgres://h-a/db_a",
+				Output:     t.TempDir(),
+				Workers:    2,
+				WorkersSet: true,
+				SeedFile:   "seeds.json",
+			},
+			cfg:  config.DefaultConfig,
+			want: "seed-file",
+		},
+		{
+			name: "subset percent",
+			flags: dumpFlags{
+				DSN:        "postgres://h-a/db_a",
+				Output:     t.TempDir(),
+				Workers:    2,
+				WorkersSet: true,
+				Percent:    50,
+			},
+			cfg:  config.DefaultConfig,
+			want: "percent",
+		},
+		{
+			name: "no transaction",
+			flags: dumpFlags{
+				DSN:           "postgres://h-a/db_a",
+				Output:        t.TempDir(),
+				Workers:       2,
+				WorkersSet:    true,
+				NoTransaction: true,
+			},
+			cfg:  config.DefaultConfig,
+			want: "no-transaction",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := buildDumpOptions(tt.flags, tt.cfg())
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunDumpWorkersInsufficientPoolBeforeAllocation(t *testing.T) {
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	ran := false
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(context.Context, *sql.DB, string, ...dump.Option) error {
+		ran = true
+		return nil
+	}
+	dumpLoadConfig = func(string) (*config.Config, error) {
+		cfg := config.DefaultConfig()
+		cfg.DB.MaxOpenConns = 2
+		return cfg, nil
+	}
+
+	err := runDump([]string{
+		"--dsn", "postgres://h/db",
+		"--output", t.TempDir(),
+		"--workers", "3",
+	})
+	if err == nil || !strings.Contains(err.Error(), "max_open_conns") {
+		t.Fatalf("error = %v", err)
+	}
+	if ran {
+		t.Fatal("dump should not run when pool headroom fails before allocation")
+	}
+}

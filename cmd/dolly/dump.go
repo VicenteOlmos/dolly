@@ -57,6 +57,8 @@ type dumpFlags struct {
 	ExcludeTableFiles []string
 	ChunkTables       []string
 	ChunkTableFiles   []string
+	Workers           int
+	WorkersSet        bool
 	JSON              bool
 }
 
@@ -102,6 +104,7 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 		flags.ChunkTableFiles = append(flags.ChunkTableFiles, s)
 		return nil
 	})
+	fs.IntVar(&flags.Workers, "workers", 0, "parallel table dump workers (default: config dump.workers or 1; max 16)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	return fs
 }
@@ -119,6 +122,11 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 	if err := fs.Parse(args); err != nil {
 		return flags, mapFlagHelp(err)
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "workers" {
+			flags.WorkersSet = true
+		}
+	})
 
 	if err := validateDSNOrConnection(flags.Connection, flags.DSN); err != nil {
 		return flags, err
@@ -146,6 +154,50 @@ func applySubsetLimits(limits dump.SubsetLimits, flags dumpFlags, cfg *config.Co
 		limits.MaxInListSize = flags.MaxInListSize
 	}
 	return limits
+}
+
+func resolveDumpWorkers(flags dumpFlags, cfg *config.Config) int {
+	if flags.WorkersSet {
+		return flags.Workers
+	}
+	workers := cfg.Dump.Workers
+	if workers <= 0 {
+		workers = 1
+	}
+	return workers
+}
+
+func validateDumpWorkers(flags dumpFlags, cfg *config.Config, workers int) error {
+	if workers < 1 || workers > dump.MaxParallelWorkers() {
+		return fmt.Errorf("--workers must be between 1 and %d, got %d", dump.MaxParallelWorkers(), workers)
+	}
+	if workers <= 1 {
+		return nil
+	}
+	if flags.NoTransaction {
+		return errors.New("--workers > 1 requires a read-only transaction snapshot; remove --no-transaction")
+	}
+	if flags.SlowConnection {
+		return errors.New("--workers and --slow-connection are incompatible")
+	}
+	if hasChunkFlags(flags) || chunkPolicyConfigured(cfg) {
+		return errors.New("--workers and chunk-table selectors are incompatible")
+	}
+	effectiveSeedFile := flags.SeedFile
+	if effectiveSeedFile == "" && cfg.Subset.SeedFile != "" {
+		effectiveSeedFile = cfg.Subset.SeedFile
+	}
+	effectivePercent := flags.Percent
+	if effectivePercent == 0 {
+		effectivePercent = cfg.Subset.Percent
+	}
+	if effectiveSeedFile != "" {
+		return errors.New("--workers and --seed-file (subset dump) are incompatible")
+	}
+	if effectivePercent > 0 {
+		return errors.New("--workers and --percent (subset dump) are incompatible")
+	}
+	return nil
 }
 
 func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error) {
@@ -181,6 +233,10 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 	}
 	if (hasChunkFlags(flags) || chunkPolicyConfigured(cfg)) && effectivePercent > 0 {
 		return nil, errors.New("--chunk-table and --percent (subset dump) are incompatible")
+	}
+	workers := resolveDumpWorkers(flags, cfg)
+	if err := validateDumpWorkers(flags, cfg, workers); err != nil {
+		return nil, err
 	}
 	if flags.SlowConnection || hasChunkFlags(flags) {
 		if flags.SlowConnection {
@@ -274,6 +330,8 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 	} else if chunkPolicy != nil {
 		opts = append(opts, dump.WithChunkTablePolicy(*chunkPolicy, chunkIgnored))
 	}
+
+	opts = append(opts, dump.WithWorkers(workers))
 
 	return opts, nil
 }
@@ -412,13 +470,17 @@ func runDump(args []string) (err error) {
 		return err
 	}
 
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
-	}
 	maxConns := cfg.DB.MaxOpenConns
 	if maxConns <= 0 {
 		maxConns = 5
+	}
+	if err := dump.ValidateWorkerPoolHeadroom(dump.InspectWorkers(opts...), maxConns); err != nil {
+		return err
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
 	}
 	db.SetMaxOpenConns(maxConns)
 	db.SetConnMaxIdleTime(5 * time.Minute)

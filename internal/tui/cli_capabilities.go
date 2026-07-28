@@ -59,6 +59,7 @@ func CLICatalog() []CLICommand {
 				{Name: "exclude-table-file", Description: "newline-delimited exclude table file (repeatable; # comments and blank lines ignored)"},
 				{Name: "chunk-table", Description: "exact qualified table to stream with keyset chunking (repeatable; no globs or CSV)"},
 				{Name: "chunk-table-file", Description: "newline-delimited chunk table file (repeatable; # comments and blank lines ignored)"},
+				{Name: "workers", Default: "1", Description: "parallel table dump workers (max 16; incompatible with chunk/slow/subset/no-transaction)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
 			},
 			Examples: []string{
@@ -66,6 +67,7 @@ func CLICatalog() []CLICommand {
 				"dolly dump --dsn \"$DATABASE_URL\" --output ./subset --seed-file seeds.json",
 				"dolly dump --dsn \"$DATABASE_URL\" --output ./out --include-table public.users --exclude-table public.audit_log",
 				"dolly dump --dsn \"$DATABASE_URL\" --output ./out --chunk-table public.orders",
+				"dolly dump --dsn \"$DATABASE_URL\" --output ./out --workers 4",
 				"dolly dump list",
 				"dolly dump list --json --output ./dolly_dump",
 			},
