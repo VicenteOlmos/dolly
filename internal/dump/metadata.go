@@ -64,6 +64,7 @@ type Provenance struct {
 	TableCount       int      `json:"table_count"`
 	TotalRowEstimate int64    `json:"total_row_estimate,omitempty"`
 	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
+	ChunkTables      *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {
