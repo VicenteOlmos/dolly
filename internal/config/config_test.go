@@ -582,6 +582,30 @@ func TestLoadConfigDumpWorkersRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRestoreWorkersRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+
+	orig := DefaultConfig()
+	orig.Restore.Workers = 4
+	orig.Restore.PartialStateFile = "/tmp/restore-state.json"
+
+	if err := SaveConfig(orig, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got.Restore.Workers != 4 {
+		t.Fatalf("Restore.Workers = %d, want 4", got.Restore.Workers)
+	}
+	if got.Restore.PartialStateFile != "/tmp/restore-state.json" {
+		t.Fatalf("Restore.PartialStateFile = %q", got.Restore.PartialStateFile)
+	}
+}
+
 func TestDriftGuard(t *testing.T) {
 	// The embedded template and the committed config.jsonc at repo root must be identical.
 	// This test is intentionally skipped when the repo root file is absent (e.g. in sub-tree builds).

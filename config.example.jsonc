@@ -112,6 +112,16 @@
     "chunk_table_files": []
   },
 
+  // ── Restore ──────────────────────────────────────────────────────────────
+  "restore": {
+    // Parallel table restore workers (default 1 = serial). CLI --workers overrides when set.
+    // Values above 1 require --no-transaction --yes --ack-partial-state and conflict policy error.
+    "workers": 1,
+    // Partial-state manifest path for parallel restore. CLI --partial-state-file overrides when set.
+    // When unset, restore uses {input_dir}/.dolly-restore-partial-state.json.
+    "partial_state_file": ""
+  },
+
   // ── Database pool ────────────────────────────────────────────────────────
   "db": {
     // Maximum open connections in the sql.DB pool (default 5).

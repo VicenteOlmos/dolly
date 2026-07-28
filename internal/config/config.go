@@ -45,10 +45,14 @@ type Config struct {
 		Enabled bool `json:"enabled"`
 	} `json:"sanitization"`
 	Subset struct {
-		Percent          int `json:"percent"`
-		SeedFile         string `json:"seed_file"`
-		MaxRowsPerTable  int `json:"max_rows_per_table"`
+		Percent         int    `json:"percent"`
+		SeedFile        string `json:"seed_file"`
+		MaxRowsPerTable int    `json:"max_rows_per_table"`
 	} `json:"subset"`
+	Restore struct {
+		Workers          int    `json:"workers"`
+		PartialStateFile string `json:"partial_state_file"`
+	} `json:"restore"`
 	Dump struct {
 		OutputDir         string   `json:"output_dir"`
 		Workers           int      `json:"workers"`
@@ -110,6 +114,7 @@ func DefaultConfig() *Config {
 	cfg.Clone.Preflight.CachePermissionsPath = ".dolly/permissions-cache.yaml"
 	cfg.Clone.Preflight.CachePermissionsTTL = "24h"
 	cfg.Connections.Scope = "project"
+	cfg.Restore.Workers = 1
 	cfg.Dump.OutputDir = "dolly_dump"
 	cfg.Dump.Workers = 1
 	cfg.Dump.SlowChunkSize = 1000

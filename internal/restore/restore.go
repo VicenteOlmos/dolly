@@ -143,6 +143,24 @@ func InspectSchemas(opts ...Option) []string {
 	return append([]string(nil), c.schemas...)
 }
 
+// InspectWorkers returns the worker count captured from opts (0 means unset/default 1).
+func InspectWorkers(opts ...Option) int {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.workers
+}
+
+// InspectPartialStateManifest returns the partial-state manifest path from opts.
+func InspectPartialStateManifest(opts ...Option) string {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.partialStatePath
+}
+
 // Restore loads dump artifacts from inputDir into an existing PostgreSQL schema.
 func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Option) error {
 	var cfg config
