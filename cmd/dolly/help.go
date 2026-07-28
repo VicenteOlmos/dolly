@@ -88,6 +88,10 @@ func printDumpUsage() {
 	fmt.Fprintln(os.Stderr, "        newline-delimited include table file (repeatable; # comments and blank lines ignored)")
 	fmt.Fprintln(os.Stderr, "  --exclude-table-file string")
 	fmt.Fprintln(os.Stderr, "        newline-delimited exclude table file (repeatable; # comments and blank lines ignored)")
+	fmt.Fprintln(os.Stderr, "  --chunk-table string")
+	fmt.Fprintln(os.Stderr, "        exact qualified table to stream with keyset chunking (repeatable; no globs or CSV)")
+	fmt.Fprintln(os.Stderr, "  --chunk-table-file string")
+	fmt.Fprintln(os.Stderr, "        newline-delimited chunk table file (repeatable; # comments and blank lines ignored)")
 	fmt.Fprintln(os.Stderr, "  --json")
 	fmt.Fprintln(os.Stderr, "        emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	fmt.Fprintln(os.Stderr, "")
@@ -95,6 +99,7 @@ func printDumpUsage() {
 	fmt.Fprintln(os.Stderr, "  sanitization.enabled  redact sensitive column values in NDJSON output (default false)")
 	fmt.Fprintln(os.Stderr, "  dump.include_tables / dump.exclude_tables  exact qualified table selectors (replaced by CLI flags when set)")
 	fmt.Fprintln(os.Stderr, "  dump.include_table_files / dump.exclude_table_files  newline-delimited selector files")
+	fmt.Fprintln(os.Stderr, "  dump.chunk_tables / dump.chunk_table_files  keyset-chunked table selectors (replaced by CLI flags when set)")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "schema.sql is captured when pg_dump is on PATH and sanitized for cross-version restore compatibility.")
 }

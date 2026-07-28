@@ -102,7 +102,12 @@
     "include_tables": [],
     "exclude_tables": [],
     "include_table_files": [],
-    "exclude_table_files": []
+    "exclude_table_files": [],
+
+    // Exact qualified tables to stream with keyset chunking (schema.table; no globs or CSV).
+    // CLI --chunk-table/--chunk-table-file flags replace these lists when present.
+    "chunk_tables": [],
+    "chunk_table_files": []
   },
 
   // ── Database pool ────────────────────────────────────────────────────────

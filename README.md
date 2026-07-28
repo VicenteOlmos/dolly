@@ -129,6 +129,14 @@ dolly dump --dsn "$DB" --output ./dolly_dump --include-table public.users --excl
 
 Use exact `schema.table` names only. Repeat `--include-table` / `--exclude-table` or point at newline-delimited files with `--include-table-file` / `--exclude-table-file` (`#` comments and blank lines are ignored). Includes narrow the dump; excludes win. Globs, CSV, and unqualified names are rejected. Unmatched includes fail before output; unmatched excludes become warnings in metadata provenance.
 
+### Chunk large tables
+
+```bash
+dolly dump --dsn "$DB" --output ./dolly_dump --chunk-table public.orders --chunk-table public.events
+```
+
+`--chunk-table` / `--chunk-table-file` use the same exact `schema.table` grammar as include/exclude selectors. Only named tables stream with keyset pagination and checkpoint/resume; other selected tables use the normal single-query path. Unmatched chunk selectors fail before output; chunk tables without a primary key fail during planning. `--slow-connection` chunks every selected table and keeps the existing resumable dump-dir behavior. Chunk and slow modes reject parallel workers (`workers > 1`).
+
 ### Faster bulk restore — advanced
 
 Default restore runs in one transaction. For trusted empty targets or very large loads:

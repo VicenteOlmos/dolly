@@ -55,6 +55,8 @@ type dumpFlags struct {
 	ExcludeTables     []string
 	IncludeTableFiles []string
 	ExcludeTableFiles []string
+	ChunkTables       []string
+	ChunkTableFiles   []string
 	JSON              bool
 }
 
@@ -90,6 +92,14 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	})
 	fs.Func("exclude-table-file", "newline-delimited exclude table file (repeatable; # comments and blank lines ignored)", func(s string) error {
 		flags.ExcludeTableFiles = append(flags.ExcludeTableFiles, s)
+		return nil
+	})
+	fs.Func("chunk-table", "exact qualified table to stream with keyset chunking (repeatable; no globs or CSV)", func(s string) error {
+		flags.ChunkTables = append(flags.ChunkTables, s)
+		return nil
+	})
+	fs.Func("chunk-table-file", "newline-delimited chunk table file (repeatable; # comments and blank lines ignored)", func(s string) error {
+		flags.ChunkTableFiles = append(flags.ChunkTableFiles, s)
 		return nil
 	})
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
@@ -166,8 +176,16 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 	if flags.SlowConnection && effectivePercent > 0 {
 		return nil, errors.New("--slow-connection and --percent (subset dump) are incompatible")
 	}
-	if flags.SlowConnection {
-		opts = append(opts, dump.WithSlowConnection())
+	if (hasChunkFlags(flags) || chunkPolicyConfigured(cfg)) && effectiveSeedFile != "" {
+		return nil, errors.New("--chunk-table and --seed-file (subset dump) are incompatible")
+	}
+	if (hasChunkFlags(flags) || chunkPolicyConfigured(cfg)) && effectivePercent > 0 {
+		return nil, errors.New("--chunk-table and --percent (subset dump) are incompatible")
+	}
+	if flags.SlowConnection || hasChunkFlags(flags) {
+		if flags.SlowConnection {
+			opts = append(opts, dump.WithSlowConnection())
+		}
 
 		chunkSize := flags.ChunkSize
 		if chunkSize <= 0 && cfg.Dump.SlowChunkSize > 0 {
@@ -204,6 +222,26 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 			}
 			opts = append(opts, dump.WithSlowRetry(retryMax, retryBase))
 		}
+	} else if chunkPolicyConfigured(cfg) {
+		chunkSize := cfg.Dump.SlowChunkSize
+		if chunkSize <= 0 {
+			chunkSize = dump.DefaultSlowChunkSize
+		}
+		opts = append(opts, dump.WithSlowChunkSize(chunkSize))
+		if cfg.Dump.SlowRetryMax > 0 {
+			retryBaseStr := cfg.Dump.SlowRetryBase
+			if retryBaseStr == "" {
+				retryBaseStr = "500ms"
+			}
+			retryBase, err := time.ParseDuration(retryBaseStr)
+			if err != nil {
+				return nil, fmt.Errorf("parse retry base duration %q: %w", retryBaseStr, err)
+			}
+			if retryBase <= 0 {
+				return nil, errors.New("chunk retry base must be positive when slow_retry_max > 0")
+			}
+			opts = append(opts, dump.WithSlowRetry(cfg.Dump.SlowRetryMax, retryBase))
+		}
 	}
 
 	if effectiveSeedFile != "" {
@@ -231,7 +269,77 @@ func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error
 		opts = append(opts, dump.WithTableSelection(*policy, ignored))
 	}
 
+	if chunkPolicy, chunkIgnored, err := resolveChunkPolicy(flags, cfg); err != nil {
+		return nil, err
+	} else if chunkPolicy != nil {
+		opts = append(opts, dump.WithChunkTablePolicy(*chunkPolicy, chunkIgnored))
+	}
+
 	return opts, nil
+}
+
+func hasChunkFlags(flags dumpFlags) bool {
+	return len(flags.ChunkTables) > 0 || len(flags.ChunkTableFiles) > 0
+}
+
+func chunkPolicyConfigured(cfg *config.Config) bool {
+	return len(cfg.Dump.ChunkTables) > 0 || len(cfg.Dump.ChunkTableFiles) > 0
+}
+
+func effectiveResilientDumpMode(flags dumpFlags, cfg *config.Config) bool {
+	return flags.SlowConnection || hasChunkFlags(flags) || chunkPolicyConfigured(cfg)
+}
+
+type resumableDumpExpectation struct {
+	sourceSignature      string
+	schemas              []string
+	sanitizationEnabled  bool
+	chunkFingerprint     *dump.ChunkTableProvenance
+	selectionFingerprint *dump.TableSelectionProvenance
+}
+
+func buildResumableDumpExpectation(flags dumpFlags, cfg *config.Config, dsn string, schemas []string, sanitizationEnabled bool) (resumableDumpExpectation, error) {
+	exp := resumableDumpExpectation{
+		sourceSignature:     sourceSignatureFromDSN(dsn),
+		schemas:             append([]string(nil), schemas...),
+		sanitizationEnabled: sanitizationEnabled,
+	}
+	chunkPolicy, _, err := resolveChunkPolicy(flags, cfg)
+	if err != nil {
+		return resumableDumpExpectation{}, err
+	}
+	exp.chunkFingerprint = dump.ChunkPolicyResumeFingerprint(chunkPolicy)
+
+	selPolicy, _, err := resolveTableSelection(flags, cfg)
+	if err != nil {
+		return resumableDumpExpectation{}, err
+	}
+	exp.selectionFingerprint = dump.SelectionPolicyResumeFingerprint(selPolicy)
+	return exp, nil
+}
+
+func provenanceMatchesResumable(meta *dump.Provenance, exp resumableDumpExpectation) bool {
+	if meta == nil {
+		return false
+	}
+	if !dump.ChunkResumeProvenanceMatches(exp.chunkFingerprint, meta.ChunkTables) {
+		return false
+	}
+	return dump.SelectionResumeProvenanceMatches(exp.selectionFingerprint, meta.TableSelection)
+}
+
+func resolveChunkPolicy(flags dumpFlags, cfg *config.Config) (*dump.ChunkPolicy, []dump.IgnoredFileLine, error) {
+	direct := cfg.Dump.ChunkTables
+	files := cfg.Dump.ChunkTableFiles
+	sourceKind, sourceName := "config", "dump.chunk_tables"
+
+	if hasChunkFlags(flags) {
+		direct = flags.ChunkTables
+		files = flags.ChunkTableFiles
+		sourceKind, sourceName = "flag", "--chunk-table"
+	}
+
+	return dump.BuildChunkPolicyWithSources(direct, files, sourceKind, sourceName)
 }
 
 func resolveTableSelection(flags dumpFlags, cfg *config.Config) (*dump.SelectionPolicy, []dump.IgnoredFileLine, error) {
@@ -331,8 +439,12 @@ func runDump(args []string) (err error) {
 	var outputDir string
 	var seq int
 	freshAllocated := false
-	if flags.SlowConnection {
-		if resumable, resumableSeq, ok := findResumableSlowDumpDir(out, sourceSignatureFromDSN(dsn), schemas, cfg.Sanitization.Enabled); ok {
+	resumeExpect, err := buildResumableDumpExpectation(flags, cfg, dsn, schemas, cfg.Sanitization.Enabled)
+	if err != nil {
+		return err
+	}
+	if effectiveResilientDumpMode(flags, cfg) {
+		if resumable, resumableSeq, ok := findResumableDumpDir(out, resumeExpect); ok {
 			outputDir = resumable
 			seq = resumableSeq
 		} else {
@@ -372,7 +484,7 @@ func runDump(args []string) (err error) {
 	}))
 
 	if err := dumpRun(ctx, db, outputDir, opts...); err != nil {
-		if freshAllocated && dump.IsTableSelectionError(err) {
+		if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err)) {
 			_ = removeFreshEmptyDumpDir(outputDir)
 		}
 		return fmt.Errorf("dump: %w", err)
@@ -459,13 +571,11 @@ func sourceSignatureFromDSN(dsn string) string {
 	return fmt.Sprintf("postgres://%s@%s/%s", user, net.JoinHostPort(strings.ToLower(u.Hostname()), port), databaseFromDSN(dsn))
 }
 
-// findResumableSlowDumpDir returns the latest numbered dump directory under
-// baseDir that looks like an interrupted slow-connection dump: it contains
-// slow checkpoint/temp artifacts, no final metadata.json, and its
-// metadata.json.tmp provenance matches source, schemas, and sanitization mode.
-// Normal dumps are unaffected because this helper is only consulted for
-// --slow-connection.
-func findResumableSlowDumpDir(baseDir, sourceSignature string, schemas []string, sanitizationEnabled bool) (string, int, bool) {
+// findResumableDumpDir returns the latest numbered dump directory under baseDir
+// that looks like an interrupted resilient dump: it contains checkpoint/temp
+// artifacts, no final metadata.json, and metadata.json.tmp provenance matches
+// the current source, schemas, sanitization, chunk, and selection policy.
+func findResumableDumpDir(baseDir string, exp resumableDumpExpectation) (string, int, bool) {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		return "", 0, false
@@ -500,13 +610,16 @@ func findResumableSlowDumpDir(baseDir, sourceSignature string, schemas []string,
 		if meta.Provenance == nil {
 			continue
 		}
-		if meta.Provenance.SourceSignature == "" || meta.Provenance.SourceSignature != sourceSignature {
+		if meta.Provenance.SourceSignature == "" || meta.Provenance.SourceSignature != exp.sourceSignature {
 			continue
 		}
-		if !schemasEqual(meta.Provenance.Schemas, schemas) {
+		if !schemasEqual(meta.Provenance.Schemas, exp.schemas) {
 			continue
 		}
-		if meta.Provenance.Sanitized == nil || *meta.Provenance.Sanitized != sanitizationEnabled {
+		if meta.Provenance.Sanitized == nil || *meta.Provenance.Sanitized != exp.sanitizationEnabled {
+			continue
+		}
+		if !provenanceMatchesResumable(meta.Provenance, exp) {
 			continue
 		}
 		return dir, n, true
