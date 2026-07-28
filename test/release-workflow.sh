@@ -38,6 +38,23 @@ fi
 
 grep -F 'environment: release' "$release" >/dev/null
 grep -F 'needs: build' "$release" >/dev/null
+
+publish_block=$(awk '/^  publish:/{found=1} found{print}' "$release")
+printf '%s\n' "$publish_block" | grep -F "GH_REPO: \${{ github.repository }}" >/dev/null
+if printf '%s\n' "$publish_block" | grep -F 'actions/checkout@' >/dev/null; then
+	echo "publish job must not checkout source; use GH_REPO for gh release context" >&2
+	exit 1
+fi
+printf '%s\n' "$publish_block" | grep -F 'gh release create' >/dev/null
+printf '%s\n' "$publish_block" | grep -F 'gh release upload' >/dev/null
+printf '%s\n' "$publish_block" | grep -F 'gh release edit' >/dev/null
+printf '%s\n' "$publish_block" | grep -F -- '--verify-tag' >/dev/null
+if printf '%s\n' "$publish_block" | grep -F -- '--repo ' >/dev/null; then
+	:
+elif ! printf '%s\n' "$publish_block" | grep -F 'GH_REPO:' >/dev/null; then
+	echo "publish job gh release commands need GH_REPO or explicit --repo" >&2
+	exit 1
+fi
 grep -F 'Release tag must be SemVer vX.Y.Z' "$release" >/dev/null
 grep -F 'is not current protected main tip' "$release" >/dev/null
 grep -F 'refusing to clobber' "$release" >/dev/null
