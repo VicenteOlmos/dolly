@@ -28,11 +28,11 @@ type RowPredicate struct {
 
 // SubsetLimits caps closure planning and streaming.
 type SubsetLimits struct {
-	MaxDepth         int `json:"max_depth"`
-	MaxTables        int `json:"max_tables"`
-	MaxRows          int `json:"max_rows"`
-	MaxRowsPerTable  int `json:"max_rows_per_table"`
-	MaxInListSize    int `json:"max_in_list_size"`
+	MaxDepth        int `json:"max_depth"`
+	MaxTables       int `json:"max_tables"`
+	MaxRows         int `json:"max_rows"`
+	MaxRowsPerTable int `json:"max_rows_per_table"`
+	MaxInListSize   int `json:"max_in_list_size"`
 }
 
 // SubsetConfig enables subset dump mode.

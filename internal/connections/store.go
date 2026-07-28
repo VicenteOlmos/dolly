@@ -345,5 +345,3 @@ func (s *FileStore) persist(doc *fileDocument) error {
 	}
 	return nil
 }
-
-

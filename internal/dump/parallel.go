@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,8 @@ func ValidateWorkerPoolHeadroom(workers, maxOpenConns int) error {
 }
 
 const parallelStagingPrefix = ".parallel-staging-"
+
+const snapshotLivenessInterval = 500 * time.Millisecond
 
 var snapshotIDPattern = regexp.MustCompile(`^[0-9A-F]+-[0-9A-F]+-[0-9]+$`)
 
@@ -259,6 +262,76 @@ func (c *snapshotCoordinator) close() error {
 	return err
 }
 
+func joinParallelErrors(primary error, others ...error) error {
+	var joined []error
+	if primary != nil {
+		joined = append(joined, primary)
+	}
+	for _, err := range others {
+		if err != nil {
+			joined = append(joined, err)
+		}
+	}
+	if len(joined) == 0 {
+		return nil
+	}
+	return errors.Join(joined...)
+}
+
+// parallelSnapshotLivenessCheck verifies the exporter transaction is still usable.
+var parallelSnapshotLivenessCheck = func(ctx context.Context, c *snapshotCoordinator) error {
+	if c == nil || c.tx == nil {
+		return fmt.Errorf("coordinator transaction closed")
+	}
+	var one int
+	if err := c.tx.QueryRowContext(ctx, "SELECT 1").Scan(&one); err != nil {
+		return fmt.Errorf("coordinator liveness check failed: %w", err)
+	}
+	return nil
+}
+
+func productionSnapshotMonitorTicks(ctx context.Context) <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(snapshotLivenessInterval)
+		defer ticker.Stop()
+		defer close(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				select {
+				case ch <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return ch
+}
+
+// parallelSnapshotMonitorTicks supplies monitor ticks; tests inject manual channels.
+var parallelSnapshotMonitorTicks = productionSnapshotMonitorTicks
+
+// parallelSnapshotMonitor runs liveness checks until ctx ends or a check fails.
+var parallelSnapshotMonitor = func(ctx context.Context, c *snapshotCoordinator, ticks <-chan struct{}, check func(context.Context, *snapshotCoordinator) error) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case _, ok := <-ticks:
+			if !ok {
+				return nil
+			}
+			if err := check(ctx, c); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 type workerSession struct {
 	conn *sql.Conn
 	tx   *sql.Tx
@@ -363,6 +436,8 @@ func runParallelDump(ctx context.Context, plan *ParallelPlan, workers int) error
 	var firstErr error
 	var firstErrOnce sync.Once
 	var completed atomic.Int32
+	var closeMu sync.Mutex
+	var closeErrs []error
 
 	recordErr := func(err error) {
 		if err == nil {
@@ -373,11 +448,29 @@ func runParallelDump(ctx context.Context, plan *ParallelPlan, workers int) error
 			cancel()
 		})
 	}
+	recordCloseErr := func(err error) {
+		if err == nil {
+			return
+		}
+		closeMu.Lock()
+		closeErrs = append(closeErrs, err)
+		closeMu.Unlock()
+	}
 	emit := func(ev ProgressEvent) {
 		plan.progressMu.Lock()
 		emitProgress(&plan.cfg, ev)
 		plan.progressMu.Unlock()
 	}
+
+	monitorCtx, monitorCancel := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		ticks := parallelSnapshotMonitorTicks(monitorCtx)
+		if err := parallelSnapshotMonitor(monitorCtx, plan.coordinator, ticks, parallelSnapshotLivenessCheck); err != nil {
+			recordErr(fmt.Errorf("snapshot coordinator: %w", err))
+		}
+	}()
 
 	for workerID := 1; workerID <= workers; workerID++ {
 		wg.Add(1)
@@ -388,7 +481,9 @@ func runParallelDump(ctx context.Context, plan *ParallelPlan, workers int) error
 				recordErr(err)
 				return
 			}
-			defer closeSession()
+			defer func() {
+				recordCloseErr(closeSession())
+			}()
 
 			for job := range jobs {
 				if ctx.Err() != nil {
@@ -435,13 +530,22 @@ func runParallelDump(ctx context.Context, plan *ParallelPlan, workers int) error
 	}()
 
 	wg.Wait()
+
+	monitorCancel()
+	<-monitorDone
+
+	var workErr error
 	if firstErr != nil {
-		return firstErr
+		workErr = firstErr
+	} else if err := ctx.Err(); err != nil {
+		workErr = err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return plan.coordinator.close()
+
+	closeMu.Lock()
+	closeErr := joinParallelErrors(nil, closeErrs...)
+	closeMu.Unlock()
+	coordErr := plan.coordinator.close()
+	return joinParallelErrors(workErr, closeErr, coordErr)
 }
 
 func parallelStagingPath(stagingDir string, table db.Table) string {
