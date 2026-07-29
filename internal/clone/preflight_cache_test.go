@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,5 +188,255 @@ func TestPreflightSkipsPermissionQueriesOnCacheHit(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPermissionCacheSecureExistingCacheRead(t *testing.T) {
+	t.Run("broad mode tightened before parse", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		if err := os.WriteFile(path, []byte("entries: []\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadPermissionCacheFile(path); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("mode = %o, want 0600", info.Mode().Perm())
+		}
+	})
+
+	t.Run("tighten error beats parse error", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		if err := os.WriteFile(path, []byte("not: valid: yaml: [\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		orig := ensureCacheOwnerOnlyImpl
+		ensureCacheOwnerOnlyImpl = func(string) error {
+			return fmt.Errorf("injected tighten failure")
+		}
+		t.Cleanup(func() { ensureCacheOwnerOnlyImpl = orig })
+
+		_, err := loadPermissionCacheFile(path)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "injected tighten failure") {
+			t.Fatalf("expected tighten error, got %v", err)
+		}
+		if strings.Contains(err.Error(), "parse permission cache") {
+			t.Fatalf("parse error should not win over tighten: %v", err)
+		}
+	})
+
+	t.Run("invalid yaml fails closed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		if err := os.WriteFile(path, []byte("not: valid: yaml: [\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadPermissionCacheFile(path); err == nil || !strings.Contains(err.Error(), "parse permission cache") {
+			t.Fatalf("expected parse failure, got %v", err)
+		}
+	})
+
+	t.Run("read failure fails closed", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "dir")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadPermissionCacheFile(path); err == nil || !strings.Contains(err.Error(), "read permission cache") {
+			t.Fatalf("expected read failure, got %v", err)
+		}
+	})
+}
+
+func TestPermissionCacheMergePreservesLiveEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	permissionCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { permissionCacheNow = time.Now })
+
+	ds := preflightDSNs{
+		sourceDSN: "postgres://u:p@h:5432/db",
+		targetDSN: "postgres://u:p@h:5432/clone",
+		sourceDB:  "db",
+		sameInst:  true,
+	}
+	cfg := PermissionCacheConfig{Enabled: true, Path: path, TTL: time.Hour}
+
+	liveKey, err := permissionCacheKey(ds, Options{CloneName: "clone-live"}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveEntry, err := buildPermissionCacheEntry(liveKey, ds, Options{CloneName: "clone-live"}, "schema-replay", "live-role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredEntry := liveEntry
+	expiredEntry.Key = "expired-key"
+	expiredEntry.ExpiresAt = now
+	newKey, err := permissionCacheKey(ds, Options{CloneName: "clone-new"}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameKeyEntry, err := buildPermissionCacheEntry(newKey, ds, Options{CloneName: "clone-new"}, "schema-replay", "old-role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameKeyEntry.Role = "old-role"
+
+	seed := permissionCacheDoc{Entries: []permissionCacheEntry{liveEntry, expiredEntry, sameKeyEntry}}
+	if err := savePermissionCacheFile(path, seed); err != nil {
+		t.Fatal(err)
+	}
+
+	newEntry, err := buildPermissionCacheEntry(newKey, ds, Options{CloneName: "clone-new"}, "schema-replay", "new-role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storePermissionCache(cfg, newEntry); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := loadPermissionCacheFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make(map[string]permissionCacheEntry, len(doc.Entries))
+	for _, e := range doc.Entries {
+		keys[e.Key] = e
+	}
+	if _, ok := keys[expiredEntry.Key]; ok {
+		t.Fatalf("expired entry %q should be removed", expiredEntry.Key)
+	}
+	if got := keys[liveKey]; got.Role != "live-role" {
+		t.Fatalf("live entry role = %q, want live-role", got.Role)
+	}
+	if got := keys[newKey]; got.Role != "new-role" {
+		t.Fatalf("new entry role = %q, want new-role", got.Role)
+	}
+	if _, ok := keys[liveKey]; !ok {
+		t.Fatal("expected live key to remain")
+	}
+	if len(doc.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(doc.Entries))
+	}
+}
+
+var errInjectedReplacementFailure = fmt.Errorf("injected replacement failure")
+
+func TestPermissionCacheReplacementFailurePreservesBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+	orig := []byte("entries: []\n")
+	if err := os.WriteFile(path, orig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	permissionCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { permissionCacheNow = time.Now })
+
+	origReplace := replacePermissionCacheFile
+	replacePermissionCacheFile = func(src, dst string) error {
+		info, err := os.Stat(src)
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm() != 0o600 {
+			return fmt.Errorf("staging mode = %o, want 0600", info.Mode().Perm())
+		}
+		if info.Size() == 0 {
+			return fmt.Errorf("staging file not written before replace")
+		}
+		staged, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if !bytes.Contains(staged, []byte("entries:")) || !bytes.Contains(staged, []byte("role: role")) {
+			return fmt.Errorf("staging bytes incomplete or invalid")
+		}
+		return errInjectedReplacementFailure
+	}
+	t.Cleanup(func() { replacePermissionCacheFile = origReplace })
+
+	var warnings []string
+	origWarn := warnPermissionCache
+	warnPermissionCache = func(msg string) { warnings = append(warnings, msg) }
+	t.Cleanup(func() { warnPermissionCache = origWarn })
+	ds := preflightDSNs{
+		sourceDSN: "postgres://u:p@h:5432/db",
+		targetDSN: "postgres://u:p@h:5432/clone",
+		sourceDB:  "db",
+		sameInst:  true,
+	}
+	entry, err := buildPermissionCacheEntry("k", ds, Options{CloneName: "c"}, "schema-replay", "role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storePermissionCache(PermissionCacheConfig{Enabled: true, Path: path, TTL: time.Hour}, entry); err != nil {
+		t.Fatalf("store should bypass write failure: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "injected replacement failure") {
+		t.Fatalf("expected persist warning wrapping injected failure, got %v", warnings)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, orig) {
+		t.Fatalf("target bytes changed: %q", got)
+	}
+
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".dolly.permissions-cache-") {
+			t.Fatalf("temp residue %q", e.Name())
+		}
+	}
+}
+
+func TestPermissionCacheWindowsRuntime(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("windows runtime harness only")
+	}
+	path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	permissionCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { permissionCacheNow = time.Now })
+
+	if err := ensureCacheOwnerOnly(path); err != nil {
+		t.Fatalf("permission tighten should be no-op on Windows: %v", err)
+	}
+
+	ds := preflightDSNs{
+		sourceDSN: "postgres://u:p@h:5432/db",
+		targetDSN: "postgres://u:p@h:5432/clone",
+		sourceDB:  "db",
+		sameInst:  true,
+	}
+	cfg := PermissionCacheConfig{Enabled: true, Path: path, TTL: time.Hour}
+	entry, err := buildPermissionCacheEntry("win-live", ds, Options{CloneName: "win-live"}, "schema-replay", "live-role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storePermissionCache(cfg, entry); err != nil {
+		t.Fatal(err)
+	}
+	entry, err = buildPermissionCacheEntry("win-new", ds, Options{CloneName: "win-new"}, "schema-replay", "new-role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storePermissionCache(cfg, entry); err != nil {
+		t.Fatal(err)
+	}
+	if doc, err := loadPermissionCacheFile(path); err != nil || len(doc.Entries) != 2 {
+		t.Fatalf("entries after second store: err=%v len=%d", err, len(doc.Entries))
 	}
 }
