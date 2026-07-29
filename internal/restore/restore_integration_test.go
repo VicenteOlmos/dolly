@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/testutil/pgintegration"
 )
@@ -167,6 +168,81 @@ func integrationDump(t *testing.T, conn *sql.DB) string {
 		t.Fatalf("dump: %v", err)
 	}
 	return dir
+}
+
+func TestIntegrationRestoreRejectsEmptyDump(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	meta := dump.Metadata{
+		GeneratedAt: "2026-01-01T00:00:00Z",
+		Schema:      "public",
+		Tables:      nil,
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var before int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Restore(ctx, conn, dir)
+	if !IsEmptyDumpError(err) {
+		t.Fatalf("error = %v, want EmptyDumpError", err)
+	}
+
+	var after int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("tbl_a count changed %d -> %d after empty restore refusal", before, after)
+	}
+}
+
+func TestIntegrationRestoreRejectsNoDataFiles(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	meta := dump.Metadata{
+		GeneratedAt: "2026-01-01T00:00:00Z",
+		Schema:      "public",
+		Tables: []db.Table{
+			{Name: "tbl_a", Columns: []db.Column{{Name: "id", DataType: "integer"}}},
+			{Name: "departments", Columns: []db.Column{{Name: "id", DataType: "integer"}}},
+		},
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var before int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Restore(ctx, conn, dir)
+	if !IsNoDataFilesError(err) {
+		t.Fatalf("error = %v, want NoDataFilesError", err)
+	}
+
+	var after int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("tbl_a count changed %d -> %d after no-data-files restore refusal", before, after)
+	}
 }
 
 func TestIntegrationRestoreSchemaMismatchPreInsert(t *testing.T) {

@@ -180,6 +180,69 @@ func runTestParallelDump(t *testing.T, tables []db.Table, workers int, cfg confi
 	}, workers)
 }
 
+func TestIntrospectParallelPlanNoTablesBeforeMetadata(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"})
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("empty_schema").
+		WillReturnRows(tablesRows)
+
+	cfg := &config{schemas: []string{"empty_schema"}, skipSequences: true}
+	_, _, err = introspectParallelPlan(context.Background(), sqlDB, cfg)
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIntrospectParallelPlanExcludeAllBeforeMetadata(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1)).
+		AddRow("public", "orders", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true).
+		AddRow("public", "orders", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	cfg := &config{
+		schemas:       []string{"public"},
+		skipSequences: true,
+		selection: &SelectionPolicy{
+			Excludes: []SelectorEntry{
+				{Table: QualifiedTable{Schema: "public", Name: "users"}},
+				{Table: QualifiedTable{Schema: "public", Name: "orders"}},
+			},
+		},
+	}
+	_, _, err = introspectParallelPlan(context.Background(), sqlDB, cfg)
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestParallelProgressCallbackSerialized(t *testing.T) {
 	tables := make([]db.Table, 4)
 	for i := range tables {

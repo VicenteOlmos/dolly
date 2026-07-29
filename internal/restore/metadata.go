@@ -17,19 +17,21 @@ func verifyNDJSONFiles(meta dump.Metadata, dir string) ([]string, error) {
 	}
 	paths := make([]string, len(meta.Tables))
 	seen := make(map[string]struct{}, len(meta.Tables))
+	var missingCount int
+	var firstMissing error
 	for i, table := range meta.Tables {
 		path, err := resolveDataFile(root, table)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[path]; ok {
-			return nil, fmt.Errorf("duplicate data file for table %q", table.Name)
-		}
-		seen[path] = struct{}{}
 		info, err := os.Stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("missing data file for table %q: %s", table.Name, path)
+				missingCount++
+				if firstMissing == nil {
+					firstMissing = fmt.Errorf("missing data file for table %q: %s", table.Name, path)
+				}
+				continue
 			}
 			return nil, fmt.Errorf("stat table %q data file: %w", table.Name, err)
 		}
@@ -40,7 +42,17 @@ func verifyNDJSONFiles(meta dump.Metadata, dir string) ([]string, error) {
 		if err != nil || !within(root, resolved) {
 			return nil, fmt.Errorf("unsafe data file for table %q", table.Name)
 		}
+		if _, ok := seen[path]; ok {
+			return nil, fmt.Errorf("duplicate data file for table %q", table.Name)
+		}
+		seen[path] = struct{}{}
 		paths[i] = path
+	}
+	if missingCount > 0 {
+		if missingCount == len(meta.Tables) {
+			return nil, &NoDataFilesError{InputDir: root, TableCount: len(meta.Tables)}
+		}
+		return nil, firstMissing
 	}
 	return paths, nil
 }

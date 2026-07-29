@@ -99,11 +99,14 @@ func TestPlanTableSelectionPrecedence(t *testing.T) {
 	}
 
 	filtered, prov, err := PlanTableSelection(tables, policy, nil)
-	if err == nil {
-		t.Fatal("expected no tables selected")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "matched no tables") {
-		t.Fatalf("error = %q", err.Error())
+	if len(filtered) != 0 {
+		t.Fatalf("filtered = %+v, want empty", filtered)
+	}
+	if err := guardSelectedTables(filtered, []string{"public"}); !IsNoTablesError(err) {
+		t.Fatalf("guard = %v, want NoTablesError", err)
 	}
 	if len(prov.Warnings) != 0 {
 		t.Fatalf("warnings = %v", prov.Warnings)
@@ -125,6 +128,29 @@ func TestPlanTableSelectionPrecedence(t *testing.T) {
 	}
 	if prov.Selected[0] != "public.users" {
 		t.Fatalf("selected = %v", prov.Selected)
+	}
+}
+
+func TestPlanTableSelectionExcludeAllReturnsEmptyForGuard(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "users"},
+		{Schema: "public", Name: "orders"},
+	}
+	policy := &SelectionPolicy{
+		Excludes: []SelectorEntry{
+			{Table: QualifiedTable{Schema: "public", Name: "users"}},
+			{Table: QualifiedTable{Schema: "public", Name: "orders"}},
+		},
+	}
+	filtered, _, err := PlanTableSelection(tables, policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 0 {
+		t.Fatalf("filtered = %+v, want empty", filtered)
+	}
+	if err := guardSelectedTables(filtered, []string{"public"}); !IsNoTablesError(err) {
+		t.Fatalf("guard = %v, want NoTablesError", err)
 	}
 }
 

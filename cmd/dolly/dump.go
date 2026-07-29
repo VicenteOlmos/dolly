@@ -556,7 +556,7 @@ func runDump(args []string) (err error) {
 	}))
 
 	if err := dumpRun(ctx, db, outputDir, opts...); err != nil {
-		if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err)) {
+		if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
 			_ = removeFreshEmptyDumpDir(outputDir)
 		}
 		return fmt.Errorf("dump: %w", err)

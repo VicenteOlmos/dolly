@@ -806,6 +806,113 @@ func TestDumpWithTableSelectionIncludeMissFailsBeforeOutput(t *testing.T) {
 	}
 }
 
+func TestDumpNoTablesInSelectedSchemaFailsBeforeOutput(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"})
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("empty_schema").
+		WillReturnRows(tablesRows)
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSchemas([]string{"empty_schema"}))
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json.tmp")); statErr == nil {
+		t.Fatal("metadata.json.tmp should not exist")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDumpExcludeAllSelectionFailsBeforeOutput(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1)).
+		AddRow("public", "orders", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true).
+		AddRow("public", "orders", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	policy := SelectionPolicy{
+		Excludes: []SelectorEntry{
+			{Table: QualifiedTable{Schema: "public", Name: "users"}},
+			{Table: QualifiedTable{Schema: "public", Name: "orders"}},
+		},
+	}
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithTableSelection(policy, nil))
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json.tmp")); statErr == nil {
+		t.Fatal("metadata.json.tmp should not exist")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDumpSubsetPercentEmptySchemaFailsBeforeOutput(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"})
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("empty_schema").
+		WillReturnRows(tablesRows)
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSchemas([]string{"empty_schema"}),
+		WithSubset(SubsetConfig{Percent: 50, Limits: DefaultSubsetLimits()}))
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json.tmp")); statErr == nil {
+		t.Fatal("metadata.json.tmp should not exist")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDumpWithoutTableSelectionUnchanged(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -26,6 +27,45 @@ func TestVerifyNDJSONFiles(t *testing.T) {
 	}
 	if _, err := verifyNDJSONFiles(meta, dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVerifyNDJSONFilesAllMissingReturnsNoDataFilesError(t *testing.T) {
+	dir := t.TempDir()
+	meta := dump.Metadata{
+		Schema: "public",
+		Tables: []db.Table{
+			{Name: "users", Columns: []db.Column{{Name: "id"}}},
+			{Name: "orders", Columns: []db.Column{{Name: "id"}}},
+		},
+	}
+	_, err := verifyNDJSONFiles(meta, dir)
+	if !IsNoDataFilesError(err) {
+		t.Fatalf("error = %v, want NoDataFilesError", err)
+	}
+}
+
+func TestVerifyNDJSONFilesPartialMissingKeepsTableDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "users.ndjson"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := dump.Metadata{
+		Schema: "public",
+		Tables: []db.Table{
+			{Name: "users", Columns: []db.Column{{Name: "id"}}},
+			{Name: "orders", Columns: []db.Column{{Name: "id"}}},
+		},
+	}
+	_, err := verifyNDJSONFiles(meta, dir)
+	if err == nil {
+		t.Fatal("expected missing file error")
+	}
+	if IsNoDataFilesError(err) {
+		t.Fatalf("error = %v, want per-table missing not NoDataFilesError", err)
+	}
+	if !strings.Contains(err.Error(), "orders") {
+		t.Fatalf("error = %q, want orders missing diagnostic", err.Error())
 	}
 }
 

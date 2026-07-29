@@ -104,10 +104,10 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | Command | Purpose |
 |---|---|
 | `dolly tui` | Interactive cockpit for connecting, dumping, and cloning. |
-| `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. |
-| `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. |
+| `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. Refuses when the effective schema scope has no tables. |
+| `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. Empty schema scope fails closed; nonempty scope with no eligible percent roots reports a candidate-root diagnostic. |
 | `dolly dump list` | List local dump history without a database connection. |
-| `dolly restore` | Load a Dolly dump into PostgreSQL. |
+| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. |
 | `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. |
 | `dolly config` | Create or inspect `config.jsonc` with `init` and `show`. |
 | `dolly version` | Print build version. |

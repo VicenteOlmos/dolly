@@ -158,6 +158,53 @@ func TestRestoreFullFlow(t *testing.T) {
 	}
 }
 
+func TestRestoreRejectsEmptyDumpBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": []
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := Restore(context.Background(), sqlDB, dir); !IsEmptyDumpError(err) {
+		t.Fatalf("error = %v, want EmptyDumpError", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("empty dump should reject before DB access: %v", err)
+	}
+}
+
+func TestRestoreRejectsNoDataFilesBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "schema": "public",
+  "tables": [
+    {"name": "users", "columns": [{"name": "id"}]},
+    {"name": "orders", "columns": [{"name": "id"}]}
+  ]
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := Restore(context.Background(), sqlDB, dir); !IsNoDataFilesError(err) {
+		t.Fatalf("error = %v, want NoDataFilesError", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("no-data-files dump should reject before DB access: %v", err)
+	}
+}
+
 func TestRestoreRejectsReplaceWithoutTransactionBeforeMutation(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureDump(t, dir)

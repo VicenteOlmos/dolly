@@ -41,7 +41,7 @@ func CLICatalog() []CLICommand {
 				{Name: "dsn", Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
 				{Name: "connection", Description: "saved connection profile name (requires save_connections in config.jsonc)"},
 				{Name: "output", Description: "output directory (or config dump.output_dir)"},
-				{Name: "schemas", Description: "comma-separated source schema names (overrides saved profile and dump.schemas; default public)"},
+				{Name: "schemas", Description: "comma-separated source schema names (overrides saved profile and dump.schemas; default public; fails closed when scope has no tables)"},
 				{Name: "no-transaction", Description: "skip read-only transaction wrapper (recommended for large subset closures)"},
 				{Name: "seed-file", Description: "JSON seed file for subset dump (omit for full-schema dump; conflicts with --percent/--slow-connection)"},
 				{Name: "percent", Description: "percent-based subset dump (1-100). Samples recent root rows, then FK closure may exceed percent. Conflicts with --seed-file/--slow-connection"},
@@ -80,7 +80,7 @@ func CLICatalog() []CLICommand {
 			Flags: []CLIFlag{
 				{Name: "dsn", Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
 				{Name: "connection", Description: "saved connection profile name (requires save_connections in config.jsonc)"},
-				{Name: "input", Required: true, Description: "dump input directory"},
+				{Name: "input", Required: true, Description: "dump input directory (refuses zero-table dumps before DB mutation)"},
 				{Name: "on-conflict", Default: "error", Description: "row conflict policy: error, skip, upsert"},
 				{Name: "replace", Description: "truncate tables before insert (destructive)"},
 				{Name: "no-transaction", Description: "advanced: commit after each table (no global rollback; requires --yes; default is atomic)"},
