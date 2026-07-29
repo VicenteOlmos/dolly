@@ -739,3 +739,46 @@ func assertSequencesInSchemas(t *testing.T, seqs []SequenceState, allowed ...str
 		}
 	}
 }
+
+func TestIntegrationDumpRejectsEmptySelectedSchema(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	const schemaName = "dolly_empty_guard"
+	if _, err := conn.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+schemaName); err != nil {
+		t.Fatalf("create schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), `DROP SCHEMA IF EXISTS `+schemaName+` CASCADE`)
+	})
+
+	dir := t.TempDir()
+	err := Dump(ctx, conn, dir, WithSchemas([]string{schemaName}), WithoutSequences())
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist for empty schema dump")
+	}
+}
+
+func TestIntegrationDumpExcludeAllFailsBeforeOutput(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	excludes := []SelectorEntry{
+		{Table: QualifiedTable{Schema: "public", Name: "departments"}},
+		{Table: QualifiedTable{Schema: "public", Name: "tbl_a"}},
+		{Table: QualifiedTable{Schema: "public", Name: "projects"}},
+		{Table: QualifiedTable{Schema: "public", Name: "project_members"}},
+		{Table: QualifiedTable{Schema: "public", Name: "empty_audit"}},
+		{Table: QualifiedTable{Schema: "app", Name: "invoices"}},
+	}
+	err := Dump(ctx, conn, dir, WithoutSequences(), WithTableSelection(SelectionPolicy{Excludes: excludes}, nil))
+	if !IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist when all tables excluded")
+	}
+}

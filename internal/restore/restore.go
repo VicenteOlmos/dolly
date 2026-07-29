@@ -176,6 +176,9 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 		return err
 	}
 	meta.Tables = dump.SortTables(meta.Tables)
+	if len(meta.Tables) == 0 {
+		return &EmptyDumpError{InputDir: inputDir}
+	}
 	dataPaths, err := verifyNDJSONFiles(meta, inputDir)
 	if err != nil {
 		return err
@@ -252,22 +255,6 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 
 	if workers > 1 {
 		return runParallelRestore(ctx, &cfg, dbConn, meta, dataPaths, parallelLevels, schemaFilter, workers, startedAt)
-	}
-
-	if len(meta.Tables) == 0 {
-		// Empty dump: emit a single event so consumers can clear spinners.
-		emitProgress(&cfg, ProgressEvent{
-			Phase:   "table_start",
-			Current: 1,
-			Total:   1,
-			Elapsed: time.Since(startedAt),
-		})
-		emitProgress(&cfg, ProgressEvent{
-			Phase:   "table_end",
-			Current: 1,
-			Total:   1,
-			Elapsed: time.Since(startedAt),
-		})
 	}
 
 	for i, table := range meta.Tables {

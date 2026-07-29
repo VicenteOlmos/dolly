@@ -479,7 +479,7 @@ func PlanTableSelection(tables []db.Table, policy *SelectionPolicy, ignored []Ig
 	sort.Strings(prov.Warnings)
 
 	if len(selected) == 0 {
-		return nil, prov, fmt.Errorf("%w: table selection matched no tables", ErrTableSelection)
+		return []db.Table{}, prov, nil
 	}
 
 	var filtered []db.Table

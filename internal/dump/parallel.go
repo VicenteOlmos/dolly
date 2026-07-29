@@ -419,6 +419,9 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 			sequences = seqs
 		}
 	}
+	if err := guardSelectedTables(tables, cfg.schemas); err != nil {
+		return nil, nil, err
+	}
 	return tables, sequences, nil
 }
 

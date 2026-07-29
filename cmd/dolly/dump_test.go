@@ -1868,6 +1868,37 @@ func TestRunDumpSelectionErrorRemovesFreshEmptyDir(t *testing.T) {
 	}
 }
 
+func TestRunDumpNoTablesErrorRemovesFreshEmptyDir(t *testing.T) {
+	stubDumpListSchemaNames(t, []string{"empty_schema"}, nil)
+
+	oldLoad := dumpLoadConfig
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	t.Cleanup(func() {
+		dumpLoadConfig = oldLoad
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, _ ...dump.Option) error {
+		return &dump.NoTablesError{Schemas: []string{"empty_schema"}}
+	}
+
+	baseDir := t.TempDir()
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", baseDir, "--schemas", "empty_schema"})
+	if err == nil {
+		t.Fatal("expected no-tables error")
+	}
+	if !dump.IsNoTablesError(err) {
+		t.Fatalf("error = %v, want NoTablesError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, "1")); !os.IsNotExist(statErr) {
+		t.Fatalf("fresh empty dump dir should be removed, stat err = %v", statErr)
+	}
+}
+
 func TestRunDumpNonSelectionErrorPreservesFreshDir(t *testing.T) {
 	oldLoad := dumpLoadConfig
 	oldPing := dumpPingContext

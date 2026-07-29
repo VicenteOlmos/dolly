@@ -868,6 +868,32 @@ func TestSelectPercentRootsUsesRowCountEstimate(t *testing.T) {
 	}
 }
 
+func TestPlanSubsetPercentNoCandidateRootsKeepsEligibilityDiagnostic(t *testing.T) {
+	tables := []db.Table{
+		{
+			Schema: "public",
+			Name:   "composite_only",
+			Columns: []db.Column{
+				{Name: "a", DataType: "integer", PrimaryKey: true},
+				{Name: "b", DataType: "integer", PrimaryKey: true},
+			},
+		},
+	}
+	_, err := planSubset(context.Background(), nil, tables, SubsetConfig{
+		Percent: 50,
+		Limits:  DefaultSubsetLimits(),
+	})
+	if err == nil {
+		t.Fatal("expected percent planning error")
+	}
+	if IsNoTablesError(err) {
+		t.Fatalf("error = %v, want candidate-root diagnostic not NoTablesError", err)
+	}
+	if !strings.Contains(err.Error(), "no candidate root tables") {
+		t.Fatalf("error = %q, want candidate-root message", err.Error())
+	}
+}
+
 func TestSelectPercentRootsMaxRowsClamping(t *testing.T) {
 	// MaxRows should clamp LIMIT before querying to avoid fetching millions.
 	// Two roots, first exhausts budget, second errors.

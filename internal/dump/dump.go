@@ -374,6 +374,10 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		cfg.provenance.ChunkTables = &chunkProv
 	}
 
+	if err := guardSelectedTables(tables, cfg.schemas); err != nil {
+		return err
+	}
+
 	if cfg.subset != nil {
 		return dumpSubset(ctx, q, tx, tables, outputDir, &cfg)
 	}
@@ -554,6 +558,9 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 	var included []db.Table
 	for _, name := range plan.tableOrder {
 		included = append(included, byName[name])
+	}
+	if err := guardSelectedTables(included, cfg.schemas); err != nil {
+		return err
 	}
 	assignDataFiles(included)
 
