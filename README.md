@@ -257,6 +257,8 @@ Serial `--no-transaction` mode can leave partial progress if it fails mid-way. P
 
 `physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory rather than one database. Read [physical backup](docs/physical-backup.md) before using it.
 
+Non-profile `clone -ff` keeps your dotenv or shell `DB_URL` as-is (query params such as `sslmode` stay intact; config may add only `statement_timeout`). When preflight cannot reach the source, the error includes a redacted connection detail before the generic network hint — passwords and full raw DSNs are not printed.
+
 ## Safety
 
 Treat Dolly like a database administration tool:

@@ -520,6 +520,44 @@ func TestPreflightSchemaReplayLive(t *testing.T) {
 	}
 }
 
+func TestDotenvSourceDumpAndClonePreflightParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+	if !strings.Contains(dsn, "sslmode=") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + "sslmode=disable"
+	}
+
+	ctx := context.Background()
+	dumpDB, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open dump-style source: %v", err)
+	}
+	defer dumpDB.Close()
+	if err := dumpDB.PingContext(ctx); err != nil {
+		t.Fatalf("dump-style ping: %v", err)
+	}
+
+	requirePgDumpMajorMatch(t, dumpDB)
+
+	if err := Preflight(ctx, Options{
+		SourceDSN:  dsn,
+		CloneName:  "dolly_pf_parity_unused",
+		SkipCreate: false,
+	}, &CopyStreamStrategy{}); err != nil {
+		t.Fatalf("clone preflight: %v", err)
+	}
+}
+
 func TestReplicationPreflightLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
