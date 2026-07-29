@@ -1,3 +1,10 @@
+CREATE SCHEMA IF NOT EXISTS app;
+
+CREATE TABLE IF NOT EXISTS app.invoices (
+    id SERIAL PRIMARY KEY,
+    note TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS departments (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -32,7 +39,10 @@ CREATE TABLE IF NOT EXISTS empty_audit (
     event TEXT
 );
 
-TRUNCATE project_members, projects, tbl_a, departments, empty_audit RESTART IDENTITY CASCADE;
+TRUNCATE app.invoices, project_members, projects, tbl_a, departments, empty_audit RESTART IDENTITY CASCADE;
+
+INSERT INTO app.invoices (id, note) VALUES
+    (1, 'fixture invoice');
 
 INSERT INTO departments (id, name, code) VALUES
     (1, 'Engineering', 'ENG'),

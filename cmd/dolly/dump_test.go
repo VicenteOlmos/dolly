@@ -416,6 +416,51 @@ func TestRunDumpConnectionDisabled(t *testing.T) {
 	}
 }
 
+func TestRunDumpUnknownSchemaLeavesOutputEmptyAndRedactsDSN(t *testing.T) {
+	const secret = "SecretPass123"
+	stubDumpListSchemaNames(t, []string{"public", "app"}, nil)
+
+	oldPing := dumpPingContext
+	oldRun := dumpRun
+	oldLoad := dumpLoadConfig
+	t.Cleanup(func() {
+		dumpPingContext = oldPing
+		dumpRun = oldRun
+		dumpLoadConfig = oldLoad
+	})
+
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpRun = func(context.Context, *sql.DB, string, ...dump.Option) error {
+		t.Fatal("dumpRun should not run when schema validation fails")
+		return nil
+	}
+
+	baseDir := t.TempDir()
+	stderr := captureStderr(func() {
+		err := runDump([]string{
+			"--dsn", "postgres://user:" + secret + "@host:5432/db",
+			"--output", baseDir,
+			"--schemas", "missing",
+		})
+		if err == nil {
+			t.Fatal("expected unknown schema error")
+		}
+		if !strings.Contains(err.Error(), "unknown schema") {
+			t.Fatalf("err = %q, want unknown schema", err.Error())
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaks password: %q", err.Error())
+		}
+	})
+	if strings.Contains(stderr, secret) {
+		t.Fatalf("stderr leaks password: %q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "1")); !os.IsNotExist(err) {
+		t.Fatal("output dir should not be allocated before dump runs")
+	}
+}
+
 func TestRunDumpConnectionPassesSchemasToDump(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DOLLY_CONNECTIONS_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
@@ -433,6 +478,8 @@ func TestRunDumpConnectionPassesSchemasToDump(t *testing.T) {
 	}
 
 	t.Chdir(dir)
+
+	stubDumpListSchemaNames(t, []string{"public", "app"}, nil)
 
 	oldLoad := dumpLoadConfig
 	dumpLoadConfig = func(path string) (*config.Config, error) {
@@ -763,7 +810,7 @@ func TestRunDumpSlowConnectionResumesInterruptedDir(t *testing.T) {
   "tables": [],
   "provenance": {
 	"source_database": "db",
-	"schemas": []
+	"schemas": ["public"]
 	,"source_signature": "postgres://@h:5432/db",
 	"sanitization_enabled": false
   }
@@ -1290,7 +1337,11 @@ func TestRunDumpJSONNilSchemas(t *testing.T) {
 
 	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
 	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
-	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
+	dumpRun = func(_ context.Context, _ *sql.DB, out string, opts ...dump.Option) error {
+		got := dump.InspectSchemas(opts...)
+		if len(got) != 1 || got[0] != "public" {
+			t.Fatalf("dump schemas = %v, want [public]", got)
+		}
 		return writeStubDumpMetadata(out)
 	}
 
@@ -1309,9 +1360,8 @@ func TestRunDumpJSONNilSchemas(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
 	}
-	// schemas must be [] not nil/null
-	if result.Schemas == nil {
-		t.Fatal("schemas must be empty array [], not null")
+	if len(result.Schemas) != 1 || result.Schemas[0] != "public" {
+		t.Fatalf("schemas = %v, want [public]", result.Schemas)
 	}
 }
 
@@ -1906,7 +1956,7 @@ func TestRunDumpResumedSlowDirNotRemovedOnSelectionError(t *testing.T) {
   "tables": [],
   "provenance": {
     "source_database": "db",
-    "schemas": [],
+    "schemas": ["public"],
     "source_signature": "postgres://@h:5432/db",
     "sanitization_enabled": false
   }
@@ -2070,7 +2120,7 @@ func TestRunDumpChunkTableResumesInterruptedDir(t *testing.T) {
   "provenance": {
     "source_database": "db",
     "source_signature": "postgres://@h:5432/db",
-    "schemas": [],
+    "schemas": ["public"],
     "sanitization_enabled": false,
     "chunk_tables": {
       "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
@@ -2128,7 +2178,7 @@ func TestRunDumpChunkConfigResumesInterruptedDir(t *testing.T) {
   "provenance": {
     "source_database": "db",
     "source_signature": "postgres://@h:5432/db",
-    "schemas": [],
+    "schemas": ["public"],
     "sanitization_enabled": false,
     "chunk_tables": {
       "requested": [{"normalized": "public.orders", "source": "config: dump.chunk_tables"}]
@@ -2379,7 +2429,7 @@ func TestRunDumpSlowConnectionWithChunkTableResumesInterruptedDir(t *testing.T) 
   "provenance": {
     "source_database": "db",
     "source_signature": "postgres://@h:5432/db",
-    "schemas": [],
+    "schemas": ["public"],
     "sanitization_enabled": false,
     "chunk_tables": {
       "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]

@@ -82,6 +82,7 @@ For a CLI workflow, pass a PostgreSQL DSN:
 ```bash
 export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
 dolly dump --dsn "$DB" --output ./dolly_dump
+dolly dump --dsn "$DB" --schemas app,public --output ./dolly_dump
 dolly dump list --output ./dolly_dump
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
 ```
@@ -103,7 +104,7 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | Command | Purpose |
 |---|---|
 | `dolly tui` | Interactive cockpit for connecting, dumping, and cloning. |
-| `dolly dump` | Export data to numbered NDJSON dump directories. |
+| `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. |
 | `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. |
 | `dolly dump list` | List local dump history without a database connection. |
 | `dolly restore` | Load a Dolly dump into PostgreSQL. |
