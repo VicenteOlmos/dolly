@@ -83,7 +83,7 @@ var (
 	cloneIsTerminal   = config.IsStdinTerminal
 	cloneRun          = clone.Run
 	clonePingContext  = func(db *sql.DB, ctx context.Context) error { return db.PingContext(ctx) }
-	cloneDotEnvConn   = connections.ConnectionFromDotEnv
+	cloneLoadDotEnv   = config.LoadDotEnv
 )
 
 // cloneListSchemaNames lists non-system schemas on the source database.
@@ -191,17 +191,15 @@ func runClone(args []string) (err error) {
 		UserVar:     cfg.Env.UserVar,
 		PasswordVar: cfg.Env.PasswordVar,
 	}
-	envConn, err := cloneDotEnvConn(cfg.Env.Path, envNames)
+	sourceDSN, err := cloneLoadDotEnv(cfg.Env.Path, envNames)
 	if flags.FastForward {
 		if err != nil {
 			return fmt.Errorf("resolve source DSN: %w", err)
 		}
 	} else if err != nil && !errors.Is(err, config.ErrSourceDSNNotFound) {
 		return fmt.Errorf("resolve source DSN: %w", err)
-	}
-	var sourceDSN string
-	if err == nil {
-		sourceDSN = envConn.DSN()
+	} else if err != nil {
+		sourceDSN = ""
 	}
 
 	var cloneName, targetURL, strategy string

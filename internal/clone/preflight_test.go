@@ -90,6 +90,67 @@ func TestPreflightErrorMessage(t *testing.T) {
 	}
 }
 
+func TestPreflightReachabilityCause(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pingErr string
+		dsn     string
+		want    []string
+		bad     []string
+	}{
+		{
+			name:    "redacted_generic_hint",
+			pingErr: `dial tcp: connection refused; password=topsecret sslmode=disable`,
+			dsn:     "postgres://u:topsecret@h-a:5432/db_src?sslmode=disable",
+			want:    []string{"connection refused", "check host, port, credentials, and network access"},
+			bad:     []string{"topsecret", "password=topsecret", ":topsecret@"},
+		},
+		{
+			name:    "ssl_readable",
+			pingErr: "pq: SSL is not enabled on the server",
+			dsn:     "postgres://u:p@h-a:5432/db_src?sslmode=require",
+			want:    []string{"SSL is not enabled"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDB, mock := newSQLMock(t)
+			defer mockDB.Close()
+			origOpen := sqlOpenDB
+			sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
+			t.Cleanup(func() { sqlOpenDB = origOpen })
+			mock.ExpectPing().WillReturnError(errors.New(tc.pingErr))
+			err := Preflight(context.Background(), Options{SourceDSN: tc.dsn, CloneName: "db_clone"}, &CopyStreamStrategy{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var pe *PreflightError
+			if !errors.As(err, &pe) {
+				t.Fatalf("expected PreflightError, got %T", err)
+			}
+			if pe.Kind != PreflightReachability {
+				t.Fatalf("kind = %q", pe.Kind)
+			}
+			if pe.Cause == nil {
+				t.Fatal("expected sanitized cause")
+			}
+			msg := err.Error()
+			for _, sub := range tc.want {
+				if !strings.Contains(msg, sub) {
+					t.Fatalf("error = %q, want %q", msg, sub)
+				}
+			}
+			for _, sub := range tc.bad {
+				if strings.Contains(msg, sub) {
+					t.Fatalf("error leaks %q: %s", sub, msg)
+				}
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func expectSourceReadPrivilegeQueries(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(`SELECT n.nspname, c.relname, c.relkind`).
 		WillReturnError(sql.ErrNoRows)

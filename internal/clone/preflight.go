@@ -3,12 +3,15 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 // PreflightKind categorizes a preflight failure.
@@ -30,6 +33,11 @@ type PreflightError struct {
 	TargetVer string
 	ClientVer string
 	Hint      string
+	Cause     error
+}
+
+func (e *PreflightError) Unwrap() error {
+	return e.Cause
 }
 
 func (e *PreflightError) Error() string {
@@ -61,6 +69,9 @@ func (e *PreflightError) Error() string {
 		} else {
 			b.WriteString(": version mismatch")
 		}
+	}
+	if e.Cause != nil {
+		fmt.Fprintf(&b, ": %s", e.Cause.Error())
 	}
 	if e.Hint != "" {
 		fmt.Fprintf(&b, " (%s)", e.Hint)
@@ -459,6 +470,7 @@ func pingDB(ctx context.Context, dbConn *sql.DB, dbLabel, strategy string) error
 			Kind:     PreflightReachability,
 			Strategy: strategy,
 			Database: dbLabel,
+			Cause:    errors.New(connections.RedactMessage(err.Error())),
 			Hint:     "check host, port, credentials, and network access",
 		}
 	}

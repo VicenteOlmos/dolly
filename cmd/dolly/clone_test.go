@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,6 +17,53 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/restore"
 )
+
+func testCloneConn() connections.Connection {
+	return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}
+}
+
+func TestMain(m *testing.M) {
+	orig := cloneLoadDotEnv
+	cloneLoadDotEnv = func(string, config.EnvVarNames) (string, error) { return testCloneConn().DSN(), nil }
+	code := m.Run()
+	cloneLoadDotEnv = orig
+	os.Exit(code)
+}
+
+func stubCloneLoadDotEnv(t *testing.T, fn func(string, config.EnvVarNames) (string, error)) {
+	t.Helper()
+	orig := cloneLoadDotEnv
+	cloneLoadDotEnv = fn
+	t.Cleanup(func() { cloneLoadDotEnv = orig })
+}
+
+func stubCloneLoadDotEnvConn(t *testing.T, conn connections.Connection) {
+	t.Helper()
+	stubCloneLoadDotEnv(t, func(string, config.EnvVarNames) (string, error) { return conn.DSN(), nil })
+}
+
+func useRealLoadDotEnv(t *testing.T) {
+	t.Helper()
+	stubCloneLoadDotEnv(t, config.LoadDotEnv)
+}
+
+func assertNotContainsAny(t *testing.T, text string, subs ...string) {
+	t.Helper()
+	for _, sub := range subs {
+		if strings.Contains(text, sub) {
+			t.Fatalf("unexpected %q in %q", sub, text)
+		}
+	}
+}
+
+func assertContainsAll(t *testing.T, text string, subs ...string) {
+	t.Helper()
+	for _, sub := range subs {
+		if !strings.Contains(text, sub) {
+			t.Fatalf("%q missing %q", text, sub)
+		}
+	}
+}
 
 func stubCloneListSchemaNames(t *testing.T, names []string, err error) {
 	t.Helper()
@@ -218,12 +267,6 @@ func TestRunCloneFFSchemasFlag(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
@@ -257,12 +300,6 @@ func TestRunCloneFFConfigSchemas(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
@@ -294,12 +331,6 @@ func TestRunCloneFFDiscovery(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
@@ -330,12 +361,6 @@ func TestRunCloneFFDefaults(t *testing.T) {
 		return config.DefaultConfig(), nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -385,12 +410,6 @@ func TestRunCloneFFStrategyFlagOverridesConfig(t *testing.T) {
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	defer func() { cloneIsTerminal = origIsTerminal }()
@@ -423,12 +442,6 @@ func TestRunCloneFFTargetDirFlagOverridesConfig(t *testing.T) {
 		return cfg, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -463,12 +476,6 @@ func TestRunCloneFFStrategyConfigPassthrough(t *testing.T) {
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	defer func() { cloneIsTerminal = origIsTerminal }()
@@ -501,12 +508,6 @@ func TestRunCloneFFCustomTargetURL(t *testing.T) {
 		return cfg, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -544,12 +545,6 @@ func TestRunCloneSkipCreate(t *testing.T) {
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	defer func() { cloneIsTerminal = origIsTerminal }()
@@ -583,12 +578,6 @@ func TestRunCloneRestoreOptionsWired(t *testing.T) {
 		return cfg, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -643,12 +632,6 @@ func TestRunCloneInvalidRestoreOnConflict(t *testing.T) {
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	defer func() { cloneIsTerminal = origIsTerminal }()
@@ -678,12 +661,6 @@ func TestRunClonePromptPath(t *testing.T) {
 		return config.DefaultConfig(), nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return true }
@@ -745,12 +722,6 @@ func TestRunCloneInteractivePromptOverridesConfigSchemas(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return true }
 	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
@@ -792,12 +763,6 @@ func TestRunCloneInteractivePromptSchemas(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return true }
 	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
@@ -837,12 +802,6 @@ func TestRunClonePromptPathDefaultTargetURL(t *testing.T) {
 		return cfg, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return true }
@@ -889,11 +848,9 @@ func TestRunCloneInteractiveNoDotEnvManual(t *testing.T) {
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{}, config.ErrSourceDSNNotFound
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
+	stubCloneLoadDotEnv(t, func(string, config.EnvVarNames) (string, error) {
+		return "", config.ErrSourceDSNNotFound
+	})
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return true }
@@ -974,12 +931,6 @@ func TestRunCloneInteractiveSavedConnection(t *testing.T) {
 		return c, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return true }
@@ -1129,12 +1080,6 @@ func TestRunClonePropagatesRunError(t *testing.T) {
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	defer func() { cloneIsTerminal = origIsTerminal }()
@@ -1164,12 +1109,6 @@ func TestRunCloneProductionScaleRejected(t *testing.T) {
 		return config.DefaultConfig(), nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -1201,12 +1140,6 @@ func TestRunCloneValidatesCloneName(t *testing.T) {
 	cloneIsTerminal = func() bool { return false }
 	defer func() { cloneIsTerminal = origIsTerminal }()
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	defer func() { cloneDotEnvConn = origDotEnvConn }()
-
 	// FF path: clone name is derived from DB name template => always valid.
 	// The ValidateCloneName call path is exercised and non-blocking.
 	err := runClone([]string{"-ff"})
@@ -1231,12 +1164,6 @@ func TestRunCloneWithSourceRejectsInvalidCloneName(t *testing.T) {
 		return config.DefaultConfig(), nil
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
 
 	origPrompt := clonePromptSource
 	clonePromptSource = func(r io.Reader, w io.Writer, defaults config.PromptDefaults, _ *config.SavedSourcePicker) (config.PromptResult, error) {
@@ -1286,12 +1213,6 @@ func TestRunCloneJSONOutput(t *testing.T) {
 		return cfg, nil
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -1391,12 +1312,6 @@ func TestRunCloneJSONErrorWrap(t *testing.T) {
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
 
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
-
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
 	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
@@ -1441,12 +1356,6 @@ func TestRunCloneJSONNilSchemas(t *testing.T) {
 		return config.DefaultConfig(), nil
 	}
 	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
-
-	origDotEnvConn := cloneDotEnvConn
-	cloneDotEnvConn = func(path string, names config.EnvVarNames) (connections.Connection, error) {
-		return connections.Connection{Name: "local", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}, nil
-	}
-	t.Cleanup(func() { cloneDotEnvConn = origDotEnvConn })
 
 	origIsTerminal := cloneIsTerminal
 	cloneIsTerminal = func() bool { return false }
@@ -1549,5 +1458,228 @@ func TestRunCloneExecuteStderrGuardrails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func stubCloneFFHarnessCore(t *testing.T) {
+	t.Helper()
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
+}
+
+func stubCloneFFHarness(t *testing.T) {
+	t.Helper()
+	stubCloneListSchemaNames(t, nil, nil)
+	stubCloneFFHarnessCore(t)
+}
+
+type cloneSeamCalls struct{ run, list bool }
+
+func trackCloneSeams(t *testing.T) *cloneSeamCalls {
+	t.Helper()
+	c := &cloneSeamCalls{}
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error { c.run = true; return nil }
+	t.Cleanup(func() { cloneRun = origRun })
+	origList := cloneListSchemaNames
+	cloneListSchemaNames = func(ctx context.Context, dsn string) ([]string, error) { c.list = true; return nil, nil }
+	t.Cleanup(func() { cloneListSchemaNames = origList })
+	return c
+}
+
+func captureCloneRun(t *testing.T) *clone.Options {
+	t.Helper()
+	var captured clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error { captured = opts; return nil }
+	t.Cleanup(func() { cloneRun = origRun })
+	return &captured
+}
+
+func TestRunCloneFFDotenvSource(t *testing.T) {
+	rawShellURL := "postgres://u:secret@h-a:5432/db_a?sslmode=disable&connect_timeout=3&application_name=clone"
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		setup     func(t *testing.T) *clone.Options
+		wantErr   string
+		noSideFX  bool
+		checkLeak []string
+		wants     []string
+		rejects   []string
+	}{
+		{
+			name: "shell_url",
+			setup: func(t *testing.T) *clone.Options {
+				stubCloneFFHarness(t)
+				captured := captureCloneRun(t)
+				t.Setenv("DB_URL", rawShellURL)
+				for _, key := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
+					t.Setenv(key, "")
+				}
+				useRealLoadDotEnv(t)
+				return captured
+			},
+			checkLeak: []string{"secret", rawShellURL},
+			wants:     []string{"sslmode=disable", "connect_timeout=3", "application_name=clone", "statement_timeout=5min"},
+			rejects:   []string{"sslmode=verify-full"},
+		},
+		{
+			name: "custom_file",
+			setup: func(t *testing.T) *clone.Options {
+				stubCloneFFHarness(t)
+				captured := captureCloneRun(t)
+				dir := t.TempDir()
+				envPath := filepath.Join(dir, "custom.env")
+				rawURL := "postgres://u:secret@file-host:5433/filedb?sslmode=disable&channel_binding=prefer"
+				if err := os.WriteFile(envPath, []byte("CUSTOM_URL="+rawURL+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				origLoadConfig := cloneLoadConfig
+				cloneLoadConfig = func(path string) (*config.Config, error) {
+					cfg := config.DefaultConfig()
+					cfg.Env.Path = envPath
+					cfg.Env.URLVar = "CUSTOM_URL"
+					return cfg, nil
+				}
+				t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+				useRealLoadDotEnv(t)
+				return captured
+			},
+			wants: []string{"sslmode=disable", "channel_binding=prefer", "statement_timeout=5min", "file-host:5433/filedb"},
+		},
+		{
+			name: "component_fallback",
+			setup: func(t *testing.T) *clone.Options {
+				stubCloneFFHarness(t)
+				captured := captureCloneRun(t)
+				t.Setenv("DB_URL", "")
+				t.Setenv("DB_HOST", "comp-host")
+				t.Setenv("DB_PORT", "5434")
+				t.Setenv("DB_NAME", "compdb")
+				t.Setenv("DB_USER", "compuser")
+				t.Setenv("DB_PASSWORD", "comppass")
+				useRealLoadDotEnv(t)
+				return captured
+			},
+			wants:   []string{"comp-host:5434/compdb"},
+			rejects: []string{"sslmode=verify-full"},
+		},
+		{
+			name: "missing",
+			setup: func(t *testing.T) *clone.Options {
+				stubCloneFFHarnessCore(t)
+				for _, key := range []string{"DB_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
+					t.Setenv(key, "")
+				}
+				useRealLoadDotEnv(t)
+				return nil
+			},
+			wantErr:  "resolve source DSN",
+			noSideFX: true,
+		},
+		{
+			name: "invalid_no_db",
+			setup: func(t *testing.T) *clone.Options {
+				stubCloneFFHarnessCore(t)
+				stubCloneLoadDotEnv(t, func(string, config.EnvVarNames) (string, error) { return "postgres://u:p@h-a:5432", nil })
+				return nil
+			},
+			wantErr:  "parse source DB name",
+			noSideFX: true,
+		},
+		{
+			name: "malformed_url",
+			setup: func(t *testing.T) *clone.Options {
+				stubCloneFFHarnessCore(t)
+				stubCloneLoadDotEnv(t, func(string, config.EnvVarNames) (string, error) { return "://bad-url", nil })
+				return nil
+			},
+			wantErr:  "parse source DB name",
+			noSideFX: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls *cloneSeamCalls
+			if tc.noSideFX {
+				calls = trackCloneSeams(t)
+			}
+			captured := tc.setup(t)
+			var err error
+			if len(tc.checkLeak) > 0 {
+				stdout := captureStdout(func() {
+					stderr := captureStderr(func() { err = runClone([]string{"-ff"}) })
+					assertNotContainsAny(t, stderr, tc.checkLeak...)
+				})
+				assertNotContainsAny(t, stdout, tc.checkLeak...)
+			} else {
+				err = runClone(append([]string{"-ff"}, tc.args...))
+			}
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tc.wantErr)
+				}
+				if calls != nil && (calls.run || calls.list) {
+					t.Fatalf("side effects: run=%v list=%v", calls.run, calls.list)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runClone: %v", err)
+			}
+			if captured != nil {
+				assertContainsAll(t, captured.SourceDSN, tc.wants...)
+				for _, bad := range tc.rejects {
+					if strings.Contains(captured.SourceDSN, bad) {
+						t.Fatalf("SourceDSN = %q, reject %q", captured.SourceDSN, bad)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRunCloneFFConnectionBypassesDotenv(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	cfg := config.DefaultConfig()
+	cfg.SaveConnections = true
+	store, err := connections.OpenStore(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(connections.Connection{Name: "prod", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p", Schemas: []string{"app"}}); err != nil {
+		t.Fatal(err)
+	}
+	captured := captureCloneRun(t)
+	stubCloneListSchemaNames(t, nil, nil)
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		c := config.DefaultConfig()
+		c.SaveConnections = true
+		return c, nil
+	}
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+	envCalled := false
+	stubCloneLoadDotEnv(t, func(string, config.EnvVarNames) (string, error) {
+		envCalled = true
+		return "postgres://dotenv:wrong@ignored/db", nil
+	})
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
+	t.Chdir(dir)
+	if err := runClone([]string{"-ff", "--connection", "prod"}); err != nil {
+		t.Fatalf("runClone: %v", err)
+	}
+	if envCalled {
+		t.Fatal("cloneLoadDotEnv should not run when --connection is set")
+	}
+	if !strings.Contains(captured.SourceDSN, "h-a:5432/db_a") {
+		t.Fatalf("SourceDSN = %q", captured.SourceDSN)
 	}
 }
