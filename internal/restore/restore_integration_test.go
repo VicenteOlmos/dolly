@@ -49,6 +49,78 @@ func openIntegrationDB(t *testing.T) *sql.DB {
 	return integrationDB
 }
 
+func TestIntegrationRestoreSelectedSchemasSlowChunkDump(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	schemas := []string{"app", "public"}
+
+	if err := dump.Dump(ctx, conn, dir,
+		dump.WithSchemas(schemas),
+		dump.WithSlowConnection(),
+		dump.WithChunkTables([]dump.QualifiedTable{{Schema: "public", Name: "tbl_a"}}),
+		dump.WithProvenance(dump.Provenance{Schemas: append([]string(nil), schemas...)}),
+	); err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil || len(meta.Provenance.Schemas) != 2 {
+		t.Fatalf("provenance schemas = %v, want %v", meta.Provenance, schemas)
+	}
+	if len(meta.Sequences) == 0 {
+		t.Fatal("expected sequences in multi-schema slow/chunk dump")
+	}
+	for _, seq := range meta.Sequences {
+		if seq.Schema != "app" && seq.Schema != "public" {
+			t.Fatalf("sequence %s.%s outside selected schemas", seq.Schema, seq.Name)
+		}
+	}
+
+	truncateFixtureData(t, conn, ctx)
+	if err := Restore(ctx, conn, dir); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	var invoiceCount, tblACount int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM app.invoices`).Scan(&invoiceCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM tbl_a`).Scan(&tblACount); err != nil {
+		t.Fatal(err)
+	}
+	if invoiceCount != 1 || tblACount != 8 {
+		t.Fatalf("after restore invoices=%d tbl_a=%d, want 1 and 8", invoiceCount, tblACount)
+	}
+
+	assertRestoredSequenceState(t, conn, ctx, "app", "invoices_id_seq", 1, true)
+	assertRestoredSequenceState(t, conn, ctx, "public", "tbl_a_id_seq", 8, true)
+
+	var nextInvoiceID int
+	if err := conn.QueryRowContext(ctx, `INSERT INTO app.invoices (note) VALUES ('post-restore seq') RETURNING id`).Scan(&nextInvoiceID); err != nil {
+		t.Fatal(err)
+	}
+	if nextInvoiceID != 2 {
+		t.Fatalf("next app.invoices id = %d, want 2 after sequence restore", nextInvoiceID)
+	}
+}
+
+func assertRestoredSequenceState(t *testing.T, conn *sql.DB, ctx context.Context, schema, seqName string, wantLast int, wantCalled bool) {
+	t.Helper()
+	qualified := quoteIdentifier(schema) + "." + quoteIdentifier(seqName)
+	var last int
+	var called bool
+	if err := conn.QueryRowContext(ctx, fmt.Sprintf(`SELECT last_value, is_called FROM %s`, qualified)).Scan(&last, &called); err != nil {
+		t.Fatalf("read sequence %s.%s: %v", schema, seqName, err)
+	}
+	if last != wantLast || called != wantCalled {
+		t.Fatalf("sequence %s.%s = (%d, called=%t), want (%d, called=%t)", schema, seqName, last, called, wantLast, wantCalled)
+	}
+}
+
 func TestIntegrationDumpRestoreRoundTrip(t *testing.T) {
 	conn := openIntegrationDB(t)
 	dir := integrationDump(t, conn)
@@ -80,7 +152,7 @@ func TestIntegrationDumpRestoreRoundTrip(t *testing.T) {
 func truncateFixtureData(t *testing.T, conn *sql.DB, ctx context.Context) {
 	t.Helper()
 	_, err := conn.ExecContext(ctx, `
-		TRUNCATE project_members, projects, tbl_a, departments, empty_audit
+		TRUNCATE app.invoices, project_members, projects, tbl_a, departments, empty_audit
 		RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate fixture data: %v", err)

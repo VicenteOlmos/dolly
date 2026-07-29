@@ -59,6 +59,9 @@ type dumpFlags struct {
 	ChunkTableFiles   []string
 	Workers           int
 	WorkersSet        bool
+	Schemas           []string
+	SchemasSet        bool
+	schemasFlag       dumpSchemasFlag
 	JSON              bool
 }
 
@@ -106,6 +109,7 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	})
 	fs.IntVar(&flags.Workers, "workers", 0, "parallel table dump workers (default: config dump.workers or 1; max 16)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
+	fs.Var(&flags.schemasFlag, "schemas", "comma-separated source schema names (overrides saved profile and dump.schemas config)")
 	return fs
 }
 
@@ -131,6 +135,9 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 	if err := validateDSNOrConnection(flags.Connection, flags.DSN); err != nil {
 		return flags, err
 	}
+
+	flags.Schemas = append([]string(nil), flags.schemasFlag.values...)
+	flags.SchemasSet = flags.schemasFlag.set
 
 	return flags, nil
 }
@@ -456,7 +463,7 @@ func runDump(args []string) (err error) {
 		return errors.New("required flag --output or config dump.output_dir")
 	}
 
-	dsn, schemas, err := resolveDataSource(cfg, ".", flags.Connection, flags.DSN)
+	dsn, profileSchemas, err := resolveDataSource(cfg, ".", flags.Connection, flags.DSN)
 	if err != nil {
 		return err
 	}
@@ -493,6 +500,11 @@ func runDump(args []string) (err error) {
 		return fmt.Errorf("ping database: %w", err)
 	}
 
+	schemas, err := resolveEffectiveDumpSchemas(ctx, dsn, flags.SchemasSet, flags.Schemas, profileSchemas, cfg)
+	if err != nil {
+		return err
+	}
+
 	store, err := dumphistory.OpenStore(cfg, ".")
 	if err != nil {
 		return fmt.Errorf("open dump history: %w", err)
@@ -524,9 +536,7 @@ func runDump(args []string) (err error) {
 		freshAllocated = true
 	}
 
-	if len(schemas) > 0 {
-		opts = append(opts, dump.WithSchemas(schemas))
-	}
+	opts = append(opts, dump.WithSchemas(schemas))
 	opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
 	sanitizationEnabled := cfg.Sanitization.Enabled
 	opts = append(opts, dump.WithProvenance(dump.Provenance{
@@ -553,7 +563,7 @@ func runDump(args []string) (err error) {
 	}
 	fmt.Fprintln(os.Stderr, "dump complete")
 
-	if err := dumpCaptureSchema(ctx, dsn, outputDir); err != nil {
+	if err := dumpCaptureSchema(ctx, dsn, outputDir, schemas); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: schema capture: %v\n", err)
 	}
 
@@ -734,6 +744,6 @@ func schemasEqual(a, b []string) bool {
 // captureSchema runs pg_dump --schema-only on dsn and writes the output
 // to outDir/schema.sql. It strips the password and any pg_dump-rejected
 // URI params before calling pg_dump.
-func captureSchema(ctx context.Context, dsn, outDir string) error {
-	return schemacapture.Capture(ctx, dsn, outDir)
+func captureSchema(ctx context.Context, dsn, outDir string, schemas []string) error {
+	return schemacapture.Capture(ctx, dsn, outDir, schemas)
 }

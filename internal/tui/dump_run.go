@@ -49,13 +49,15 @@ type DumpRunner interface {
 type productionDumpRunner struct{}
 
 func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir string, draft DumpDraft, schemas []string, sourceDB, sourceDSN string, onProgress func(dump.ProgressEvent)) error {
+	effectiveSchemas := append([]string(nil), schemas...)
+	if len(effectiveSchemas) == 0 {
+		effectiveSchemas = []string{"public"}
+	}
 	var opts []dump.Option
 	if draft.NoTransaction {
 		opts = append(opts, dump.WithoutTransaction())
 	}
-	if len(schemas) > 0 {
-		opts = append(opts, dump.WithSchemas(schemas))
-	}
+	opts = append(opts, dump.WithSchemas(effectiveSchemas))
 	if onProgress != nil {
 		opts = append(opts, dump.WithProgress(onProgress))
 	}
@@ -67,14 +69,14 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 			Seq:            seq,
 			BaseDir:        draft.OutputDir,
 			SourceDatabase: sourceDB,
-			Schemas:        append([]string(nil), schemas...),
+			Schemas:        append([]string(nil), effectiveSchemas...),
 		}))
 	}
 	if err := dump.Dump(ctx, db, outputDir, opts...); err != nil {
 		return err
 	}
 	if sourceDSN != "" {
-		if err := schemacapture.Capture(ctx, sourceDSN, outputDir); err != nil && onProgress != nil {
+		if err := schemacapture.Capture(ctx, sourceDSN, outputDir, effectiveSchemas); err != nil && onProgress != nil {
 			onProgress(dump.ProgressEvent{Phase: "schema_capture_warning", Table: err.Error()})
 		}
 	}

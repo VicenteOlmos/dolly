@@ -65,6 +65,7 @@ type Config struct {
 		ExcludeTableFiles []string `json:"exclude_table_files"`
 		ChunkTables       []string `json:"chunk_tables"`
 		ChunkTableFiles   []string `json:"chunk_table_files"`
+		Schemas           []string `json:"schemas"`
 	} `json:"dump"`
 	SaveConnections bool `json:"save_connections"`
 	DB              struct {

@@ -29,7 +29,8 @@ var runCommand = func(ctx context.Context, name string, args []string, env []str
 }
 
 // Capture runs pg_dump --schema-only on dsn and writes a sanitized schema.sql.
-func Capture(ctx context.Context, dsn, outDir string) error {
+// When schemas is non-empty, each name is passed as a separate --schema argv pair.
+func Capture(ctx context.Context, dsn, outDir string, schemas []string) error {
 	if _, err := lookPath("pg_dump"); err != nil {
 		return fmt.Errorf("pg_dump not on PATH, schema.sql skipped")
 	}
@@ -37,7 +38,11 @@ func Capture(ctx context.Context, dsn, outDir string) error {
 	if err != nil {
 		return fmt.Errorf("clean DSN: %w", err)
 	}
-	args := []string{"--schema-only", "--no-owner", "--no-acl", cleanDSN}
+	args := []string{"--schema-only", "--no-owner", "--no-acl"}
+	for _, schema := range schemas {
+		args = append(args, "--schema", schema)
+	}
+	args = append(args, cleanDSN)
 	env := clone.StripSensitiveEnv(os.Environ())
 	if password != "" {
 		env = append(env, "PGPASSWORD="+password)

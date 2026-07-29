@@ -301,6 +301,7 @@ func TestSaveConfig(t *testing.T) {
 		orig := DefaultConfig()
 		orig.DB.StatementTimeout = "5min" // template default — match what gets round-tripped
 		orig.Clone.Schemas = []string{}   // match JSON "schemas": [] after template-based save
+		orig.Dump.Schemas = []string{}    // match JSON "dump.schemas": [] after template-based save
 		orig.Clone.Strategy = "template"
 		orig.Env.Path = ".env.custom"
 		orig.Subset.Percent = 42
@@ -559,6 +560,26 @@ func TestLoadConfigDumpChunkTablesRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(orig.Dump.ChunkTableFiles, got.Dump.ChunkTableFiles) {
 		t.Fatalf("ChunkTableFiles = %v, want %v", got.Dump.ChunkTableFiles, orig.Dump.ChunkTableFiles)
+	}
+}
+
+func TestLoadConfigDumpSchemasRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+
+	orig := DefaultConfig()
+	orig.Dump.Schemas = []string{"app", "billing"}
+
+	if err := SaveConfig(orig, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !reflect.DeepEqual(orig.Dump.Schemas, got.Dump.Schemas) {
+		t.Fatalf("Schemas = %v, want %v", got.Dump.Schemas, orig.Dump.Schemas)
 	}
 }
 

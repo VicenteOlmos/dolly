@@ -31,7 +31,7 @@ func TestCaptureWritesSanitizedSchemaWithPrivateMode(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	if err := Capture(context.Background(), "postgres://u:secret@localhost/db", outDir); err != nil {
+	if err := Capture(context.Background(), "postgres://u:secret@localhost/db", outDir, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +65,7 @@ func TestCaptureRemovesSchemaOnDumpFailure(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	err := Capture(context.Background(), "postgres://u:secret@localhost/db", outDir)
+	err := Capture(context.Background(), "postgres://u:secret@localhost/db", outDir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -83,12 +83,47 @@ func TestCaptureRejectsMalformedDSNBeforeRunningCommand(t *testing.T) {
 		return nil
 	}
 
-	err := Capture(context.Background(), "not a postgres DSN", t.TempDir())
+	err := Capture(context.Background(), "not a postgres DSN", t.TempDir(), nil)
 	if err == nil || !strings.Contains(err.Error(), "clean DSN") {
 		t.Fatalf("Capture error = %v", err)
 	}
 	if ran {
 		t.Fatal("pg_dump ran with a malformed DSN")
+	}
+}
+
+func TestCapturePassesRepeatedSchemaArgs(t *testing.T) {
+	restoreSeams := stubSeams(t)
+	defer restoreSeams()
+
+	var gotArgs []string
+	runCommand = func(ctx context.Context, name string, args []string, env []string, stdout *os.File) error {
+		gotArgs = append([]string(nil), args...)
+		_, err := stdout.WriteString("CREATE TABLE app.users (id integer);")
+		return err
+	}
+
+	outDir := t.TempDir()
+	if err := Capture(context.Background(), "postgres://u:secret@localhost/db", outDir, []string{"app", "billing"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--schema-only", "--no-owner", "--no-acl"}
+	for i := range want {
+		if gotArgs[i] != want[i] {
+			t.Fatalf("args[%d] = %q want %q (full %v)", i, gotArgs[i], want[i], gotArgs)
+		}
+	}
+	var schemaNames []string
+	for i := 0; i+1 < len(gotArgs); i++ {
+		if gotArgs[i] == "--schema" {
+			schemaNames = append(schemaNames, gotArgs[i+1])
+		}
+	}
+	if len(schemaNames) != 2 || schemaNames[0] != "app" || schemaNames[1] != "billing" {
+		t.Fatalf("schema args = %v", schemaNames)
+	}
+	if !strings.HasPrefix(gotArgs[len(gotArgs)-1], "postgres://") {
+		t.Fatalf("last arg = %q, want postgres DSN", gotArgs[len(gotArgs)-1])
 	}
 }
 

@@ -72,6 +72,8 @@ func TestPrintDumpUsage(t *testing.T) {
 		"--dsn",
 		"--connection",
 		"--output",
+		"--schemas",
+		"dump.schemas",
 		"dolly dump list",
 		"--no-transaction",
 		"--slow-connection",

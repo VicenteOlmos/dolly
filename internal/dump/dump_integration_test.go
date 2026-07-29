@@ -624,3 +624,118 @@ func TestIntegrationParallelDumpDefaultSerialRegression(t *testing.T) {
 		t.Fatal("expected tables in metadata")
 	}
 }
+
+func TestIntegrationDumpSelectedSchemasAlign(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	schemas := []string{"app", "public"}
+
+	if err := Dump(ctx, conn, dir,
+		WithSchemas(schemas),
+		WithSlowConnection(),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "tbl_a"}}),
+		WithProvenance(Provenance{Schemas: append([]string(nil), schemas...)}),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Schema != "multi" {
+		t.Fatalf("schema label = %q, want multi", meta.Schema)
+	}
+	if meta.Provenance == nil {
+		t.Fatal("missing provenance")
+	}
+	if !schemaSlicesEqual(meta.Provenance.Schemas, schemas) {
+		t.Fatalf("provenance schemas = %v, want %v", meta.Provenance.Schemas, schemas)
+	}
+
+	names := map[string]bool{}
+	for _, tbl := range meta.Tables {
+		if tbl.Schema != "app" && tbl.Schema != "public" {
+			t.Fatalf("table %s.%s outside selected schemas", tbl.Schema, tbl.Name)
+		}
+		names[tbl.Schema+"."+tbl.Name] = true
+	}
+	for _, want := range []string{"public.tbl_a", "app.invoices"} {
+		if !names[want] {
+			t.Fatalf("table set = %v, missing %s", names, want)
+		}
+	}
+	if len(meta.Sequences) == 0 {
+		t.Fatal("expected captured sequences for selected schemas")
+	}
+	assertSequencesInSchemas(t, meta.Sequences, "app", "public")
+	hasAppSeq, hasPublicSeq := false, false
+	for _, seq := range meta.Sequences {
+		switch seq.Schema {
+		case "app":
+			hasAppSeq = true
+		case "public":
+			hasPublicSeq = true
+		}
+	}
+	if !hasAppSeq || !hasPublicSeq {
+		t.Fatalf("sequences = %+v, want both app and public", meta.Sequences)
+	}
+}
+
+func TestIntegrationDumpSlowConnectionExplicitPublicSchemas(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	if err := Dump(ctx, conn, dir,
+		WithSchemas([]string{"public"}),
+		WithSlowConnection(),
+		WithProvenance(Provenance{Schemas: []string{"public"}}),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tbl := range meta.Tables {
+		if tbl.Schema != "public" {
+			t.Fatalf("table %s in schema %q, want public only", tbl.Name, tbl.Schema)
+		}
+	}
+	if meta.Provenance == nil || !schemaSlicesEqual(meta.Provenance.Schemas, []string{"public"}) {
+		t.Fatalf("provenance schemas = %v, want [public]", meta.Provenance)
+	}
+	assertSequencesInSchemas(t, meta.Sequences, "public")
+	if _, err := os.Stat(tableDataPath(dir, metadataTable(t, meta, "tbl_a"))); err != nil {
+		t.Fatalf("missing tbl_a data: %v", err)
+	}
+}
+
+func schemaSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assertSequencesInSchemas(t *testing.T, seqs []SequenceState, allowed ...string) {
+	t.Helper()
+	set := make(map[string]struct{}, len(allowed))
+	for _, s := range allowed {
+		set[s] = struct{}{}
+	}
+	for _, seq := range seqs {
+		if _, ok := set[seq.Schema]; !ok {
+			t.Fatalf("sequence %s.%s outside allowed schemas %v", seq.Schema, seq.Name, allowed)
+		}
+	}
+}

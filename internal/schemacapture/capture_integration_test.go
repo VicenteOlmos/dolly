@@ -17,7 +17,7 @@ func TestIntegrationCapture(t *testing.T) {
 	pgintegration.ApplyFixtures(t, db)
 
 	outDir := t.TempDir()
-	if err := Capture(context.Background(), os.Getenv(pgintegration.EnvDSN), outDir); err != nil {
+	if err := Capture(context.Background(), os.Getenv(pgintegration.EnvDSN), outDir, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -27,5 +27,27 @@ func TestIntegrationCapture(t *testing.T) {
 	}
 	if !strings.Contains(string(schema), "CREATE TABLE public.tbl_a") {
 		t.Fatalf("captured schema missing public.tbl_a:\n%s", schema)
+	}
+}
+
+func TestIntegrationCaptureSelectedSchemas(t *testing.T) {
+	db := pgintegration.Open(t)
+	pgintegration.ApplyFixtures(t, db)
+
+	outDir := t.TempDir()
+	if err := Capture(context.Background(), os.Getenv(pgintegration.EnvDSN), outDir, []string{"app"}); err != nil {
+		t.Fatal(err)
+	}
+
+	schema, err := os.ReadFile(filepath.Join(outDir, "schema.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(schema)
+	if strings.Contains(body, "public.tbl_a") {
+		t.Fatalf("schema.sql should not include public when only app selected:\n%s", body)
+	}
+	if !strings.Contains(body, "app.invoices") {
+		t.Fatalf("schema.sql missing app.invoices:\n%s", body)
 	}
 }
