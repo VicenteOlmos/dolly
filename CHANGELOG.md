@@ -2,7 +2,9 @@
 
 All notable operator-facing changes to Dolly are documented here.
 
-## [0.3.0](https://github.com/VicenteOlmos/dolly/compare/v0.2.0...0af60f0) — Pending
+## Unreleased
+
+## [0.3.0](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.0) — 2026-07-30
 
 ### Runtime safety
 
