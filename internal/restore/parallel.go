@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,6 +101,45 @@ func buildParallelTableMaps(tables []db.Table, dataPaths []string) (map[string]d
 	return byLabel, paths, labels
 }
 
+func initParallelRestoreManifest(path string, allLabels []string) (PartialStateManifest, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		m := NewPartialStateManifest(allLabels)
+		if err := parallelWriteManifest(path, m); err != nil {
+			return PartialStateManifest{}, fmt.Errorf("write initial partial state: %w", err)
+		}
+		return m, nil
+	} else if err != nil {
+		return PartialStateManifest{}, fmt.Errorf("stat partial state manifest: %w", err)
+	}
+	existing, err := LoadPartialStateManifest(path)
+	if err != nil {
+		return PartialStateManifest{}, fmt.Errorf("load partial state manifest: %w", err)
+	}
+	return mergePartialStateManifestForRetry(existing, allLabels), nil
+}
+
+func isLabelCommitted(m *PartialStateManifest, label string) bool {
+	for _, committed := range m.Committed {
+		if committed == label {
+			return true
+		}
+	}
+	return false
+}
+
+func filterUncommittedTables(m *PartialStateManifest, tables []string) []string {
+	if len(tables) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tables))
+	for _, label := range tables {
+		if !isLabelCommitted(m, label) {
+			out = append(out, label)
+		}
+	}
+	return out
+}
+
 func runParallelRestore(
 	ctx context.Context,
 	cfg *config,
@@ -115,15 +155,16 @@ func runParallelRestore(
 	defer cancel()
 
 	byLabel, pathsByLabel, allLabels := buildParallelTableMaps(meta.Tables, dataPaths)
-	manifest := NewPartialStateManifest(allLabels)
-	if err := parallelWriteManifest(cfg.partialStatePath, manifest); err != nil {
-		return fmt.Errorf("write initial partial state: %w", err)
+	manifest, err := initParallelRestoreManifest(cfg.partialStatePath, allLabels)
+	if err != nil {
+		return err
 	}
 
 	totalTables := len(allLabels)
 	var manifestMu sync.Mutex
 	var progressMu sync.Mutex
 	var completed atomic.Int32
+	completed.Store(int32(len(manifest.Committed)))
 	var firstErr error
 	var firstErrOnce sync.Once
 
@@ -176,12 +217,19 @@ func runParallelRestore(
 			break
 		}
 
-		jobs := make(chan parallelTableJob, len(level.Tables))
+		manifestMu.Lock()
+		levelTables := filterUncommittedTables(&manifest, level.Tables)
+		manifestMu.Unlock()
+		if len(levelTables) == 0 {
+			continue
+		}
+
+		jobs := make(chan parallelTableJob, len(levelTables))
 		var wg sync.WaitGroup
 
 		levelWorkers := workers
-		if len(level.Tables) < levelWorkers {
-			levelWorkers = len(level.Tables)
+		if len(levelTables) < levelWorkers {
+			levelWorkers = len(levelTables)
 		}
 
 		for workerID := 1; workerID <= levelWorkers; workerID++ {
@@ -233,7 +281,7 @@ func runParallelRestore(
 				}
 			}
 			close(jobs)
-		}(level.Tables)
+		}(levelTables)
 
 		wg.Wait()
 		if firstErr != nil {

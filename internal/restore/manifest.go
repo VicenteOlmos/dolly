@@ -57,12 +57,47 @@ func ValidatePartialStatePath(path string) error {
 	if base == "." || base == ".." {
 		return fmt.Errorf("%w: path %q is not a file", ErrPartialStatePath, path)
 	}
-	if info, err := os.Stat(path); err == nil {
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: path %q is a symlink", ErrPartialStatePath, path)
+		}
 		if info.IsDir() {
 			return fmt.Errorf("%w: path %q is a directory", ErrPartialStatePath, path)
 		}
 	}
 	return nil
+}
+
+// mergePartialStateManifestForRetry carries forward committed tables from a prior
+// partial manifest and re-pends every other table in the current restore scope.
+func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels []string) PartialStateManifest {
+	scope := make(map[string]struct{}, len(allLabels))
+	for _, label := range allLabels {
+		scope[label] = struct{}{}
+	}
+	committedSet := make(map[string]struct{}, len(existing.Committed))
+	var retained []string
+	for _, label := range existing.Committed {
+		if _, ok := scope[label]; !ok {
+			continue
+		}
+		if _, dup := committedSet[label]; dup {
+			continue
+		}
+		committedSet[label] = struct{}{}
+		retained = append(retained, label)
+	}
+	pending := make([]string, 0, len(allLabels))
+	for _, label := range normalizeQualifiedList(allLabels) {
+		if _, ok := committedSet[label]; !ok {
+			pending = append(pending, label)
+		}
+	}
+	return PartialStateManifest{
+		Committed: normalizeQualifiedList(retained),
+		Failed:    nil,
+		Pending:   pending,
+	}
 }
 
 // NewPartialStateManifest builds the initial pending-only manifest for tables.

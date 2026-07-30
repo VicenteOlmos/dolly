@@ -5,9 +5,28 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestMergePartialStateManifestForRetry(t *testing.T) {
+	existing := PartialStateManifest{
+		Committed: []string{"public.users"},
+		Failed:    []PartialStateFailure{{Table: "public.posts", Error: "copy failed"}},
+		Pending:   nil,
+	}
+	got := mergePartialStateManifestForRetry(existing, []string{"public.posts", "public.users", "public.comments"})
+	if !reflect.DeepEqual(got.Committed, []string{"public.users"}) {
+		t.Fatalf("committed = %v", got.Committed)
+	}
+	if len(got.Failed) != 0 {
+		t.Fatalf("failed = %v, want cleared on retry", got.Failed)
+	}
+	if !reflect.DeepEqual(got.Pending, []string{"public.comments", "public.posts"}) {
+		t.Fatalf("pending = %v", got.Pending)
+	}
+}
 
 func TestPartialStateManifest_atomicRewriteAndPermissions(t *testing.T) {
 	root := t.TempDir()
@@ -166,6 +185,13 @@ func TestValidatePartialStatePath(t *testing.T) {
 		if err := ValidatePartialStatePath(bad); !errors.Is(err, ErrPartialStatePath) {
 			t.Fatalf("traversal path %q err = %v", bad, err)
 		}
+	}
+	target := filepath.Join(dir, "state.json")
+	if err := os.Symlink(target, filepath.Join(dir, "state-link.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePartialStatePath(filepath.Join(dir, "state-link.json")); !errors.Is(err, ErrPartialStatePath) {
+		t.Fatalf("symlink path err = %v", err)
 	}
 	if got := DefaultPartialStatePath("/tmp/work"); got != filepath.Join("/tmp/work", defaultPartialState) {
 		t.Fatalf("default path = %q", got)
