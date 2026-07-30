@@ -80,6 +80,7 @@ func (a *App) handleCloneProceed() (tea.Model, tea.Cmd) {
 
 func (a *App) startCloneExecution(schemas []string) (tea.Model, tea.Cmd) {
 	a.clearCloneResult()
+	a.appendCloneUnsanitizedWarningIfNeeded()
 	a.cloneStatus = CloneStatusRunning
 	a.cloneError = ""
 	if cs, ok := a.screens[ScreenClone].(*cloneScreen); ok {
@@ -98,19 +99,18 @@ func (a *App) startCloneExecution(schemas []string) (tea.Model, tea.Cmd) {
 
 // resolveCloneTargetDSN sets TargetDSN based on TargetSource.
 func (a *App) resolveCloneTargetDSN() {
-	switch a.clone.TargetSource {
-	case TargetSourceCurrent:
-		a.clone.TargetDSN = a.conn.DSN()
-	case TargetSourceSaved:
-		if a.clone.TargetProfileName != "" && a.connStore != nil {
-			prof, err := a.connStore.Get(a.clone.TargetProfileName)
-			if err == nil {
-				a.clone.TargetDSN = profileDSN(prof)
-			}
-		}
-	case TargetSourceManual:
-		// Keep whatever the user typed.
+	resolveCloneDraftTargetDSN(&a.clone, a.conn.DSN, a.connStore)
+}
+
+func (a *App) appendCloneUnsanitizedWarningIfNeeded() {
+	if a.cfg == nil {
+		return
 	}
+	if !cloneNeedsUnsanitizedWarning(a.clone.Strategy, a.cfg.Sanitization.Enabled) {
+		return
+	}
+	warn := connections.RedactMessage(formatCloneUnsanitizedWarning(a.clone.Strategy, a.cfg.Sanitization.Enabled))
+	appendCloneLog(&a.cloneLog, warn)
 }
 
 func (a *App) handleCloneProgress(msg cloneProgressMsg) (tea.Model, tea.Cmd) {
