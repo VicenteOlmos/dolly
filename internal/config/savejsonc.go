@@ -49,6 +49,9 @@ func saveConfigCleanJSON(cfg *Config, path string) error {
 }
 
 func loadSaveBaseline(path string) (base []byte, oldCfg *Config, err error) {
+	if err := ensureOwnerOnly(path); err != nil {
+		return nil, nil, fmt.Errorf("tighten config %s: %w", path, err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

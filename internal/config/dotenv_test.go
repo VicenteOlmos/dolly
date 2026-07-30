@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -269,5 +270,123 @@ func TestLoadDotEnvComponentsURLVarParsedToComponents(t *testing.T) {
 	}
 	if host != "urlhost" || port != "5433" || name != "urldb" || user != "urluser" || password != "urlpass" {
 		t.Fatalf("got host=%q port=%q name=%q user=%q password=%q", host, port, name, user, password)
+	}
+}
+
+func TestLoadDotEnvTightensBeforeRead(t *testing.T) {
+	names := defaultNames()
+	clearEnv(t, names)
+
+	dir := t.TempDir()
+	dotenv := filepath.Join(dir, ".env")
+	content := "DB_URL=postgres://u:p@host/db\n"
+	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dsn, err := LoadDotEnv(dotenv, names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dsn != "postgres://u:p@host/db" {
+		t.Fatalf("expected URL DSN, got %q", dsn)
+	}
+	if runtime.GOOS == "windows" {
+		return // Windows no-op preserves original mode
+	}
+	info, err := os.Stat(dotenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 0600 after tighten", got)
+	}
+}
+
+func TestLoadDotEnvFailClosedBeforeRead(t *testing.T) {
+	names := defaultNames()
+	clearEnv(t, names)
+
+	dir := t.TempDir()
+	dotenv := filepath.Join(dir, ".env")
+	content := "DB_URL=postgres://u:p@host/db\n"
+	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := ensureOwnerOnlyImpl
+	ensureOwnerOnlyImpl = func(string) error {
+		return errors.New("injected tighten failure")
+	}
+	t.Cleanup(func() { ensureOwnerOnlyImpl = orig })
+
+	_, err := LoadDotEnv(dotenv, names)
+	if err == nil {
+		t.Fatal("expected error from injected tighten failure")
+	}
+	if !strings.Contains(err.Error(), "injected tighten failure") {
+		t.Fatalf("expected tighten error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "read .env") {
+		t.Fatalf("godotenv.Read should not be reached before tighten: %v", err)
+	}
+}
+
+func TestLoadDotEnvComponentsFailClosedBeforeRead(t *testing.T) {
+	names := defaultNames()
+	clearEnv(t, names)
+
+	dir := t.TempDir()
+	dotenv := filepath.Join(dir, ".env")
+	content := "DB_HOST=myhost\nDB_PORT=5432\nDB_NAME=mydb\nDB_USER=myuser\nDB_PASSWORD=mypass\n"
+	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := ensureOwnerOnlyImpl
+	ensureOwnerOnlyImpl = func(string) error {
+		return errors.New("injected tighten failure")
+	}
+	t.Cleanup(func() { ensureOwnerOnlyImpl = orig })
+
+	_, _, _, _, _, err := LoadDotEnvComponents(dotenv, names)
+	if err == nil {
+		t.Fatal("expected error from injected tighten failure")
+	}
+	if !strings.Contains(err.Error(), "injected tighten failure") {
+		t.Fatalf("expected tighten error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "read .env") {
+		t.Fatalf("godotenv.Read should not be reached before tighten: %v", err)
+	}
+}
+
+func TestLoadDotEnvComponentsTightensBeforeRead(t *testing.T) {
+	names := defaultNames()
+	clearEnv(t, names)
+
+	dir := t.TempDir()
+	dotenv := filepath.Join(dir, ".env")
+	content := "DB_HOST=myhost\nDB_PORT=5432\nDB_NAME=mydb\nDB_USER=myuser\nDB_PASSWORD=mypass\n"
+	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	host, port, name, user, password, err := LoadDotEnvComponents(dotenv, names)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if host != "myhost" || port != "5432" || name != "mydb" || user != "myuser" || password != "mypass" {
+		t.Fatalf("got host=%q port=%q name=%q user=%q password=%q", host, port, name, user, password)
+	}
+	if runtime.GOOS == "windows" {
+		return // Windows no-op preserves original mode
+	}
+	info, err := os.Stat(dotenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 0600 after tighten", got)
 	}
 }

@@ -187,6 +187,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := ensureOwnerOnly(path); err != nil {
+		return nil, fmt.Errorf("tighten config %s: %w", path, err)
+	}
+
 	cfg := DefaultConfig()
 
 	data, err := os.ReadFile(path)

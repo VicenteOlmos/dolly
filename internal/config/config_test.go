@@ -3,9 +3,11 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -442,6 +444,33 @@ func TestSaveConfigAtomicallyTightensExistingMode(t *testing.T) {
 	}
 }
 
+func TestSaveConfigFailClosedBeforeBaselineRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.jsonc")
+	content := `{"clone":{"strategy":"template"}}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := ensureOwnerOnlyImpl
+	ensureOwnerOnlyImpl = func(string) error {
+		return errors.New("injected tighten failure")
+	}
+	t.Cleanup(func() { ensureOwnerOnlyImpl = orig })
+
+	cfg := DefaultConfig()
+	cfg.Clone.Strategy = "template"
+	err := SaveConfig(cfg, path)
+	if err == nil {
+		t.Fatal("expected error from injected tighten failure")
+	}
+	if !strings.Contains(err.Error(), "injected tighten failure") {
+		t.Fatalf("expected tighten error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "chmod config") || strings.Contains(err.Error(), "parse config") {
+		t.Fatalf("baseline read/parse should not be reached before tighten: %v", err)
+	}
+}
+
 func TestDefaultConfigDumpOutputDir(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Dump.OutputDir != "dolly_dump" {
@@ -640,5 +669,30 @@ func TestDriftGuard(t *testing.T) {
 	}
 	if !bytes.Equal(committed, defaultConfigTemplate) {
 		t.Fatalf("config.jsonc and embedded template have drifted; regenerate config.jsonc from internal/config/config.jsonc.tmpl")
+	}
+}
+
+func TestLoadConfigTightensBeforeRead(t *testing.T) {
+	content := `{"clone":{"strategy":"template"}}`
+	p := filepath.Join(t.TempDir(), "config.jsonc")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Clone.Strategy != "template" {
+		t.Fatalf("strategy = %q, want template", cfg.Clone.Strategy)
+	}
+	if runtime.GOOS == "windows" {
+		return // Windows no-op preserves original mode
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("file mode = %o, want 0600 after tighten", got)
 	}
 }
