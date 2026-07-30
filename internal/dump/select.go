@@ -407,6 +407,8 @@ func selectorRecordsEqual(a, b []SelectorRecord) bool {
 }
 
 // PlanTableSelection filters introspected tables using include-narrow/exclude-win semantics.
+// Output is deterministic: selections are in introspection order, Selected provenance
+// is sorted, and no map iteration affects the result.
 func PlanTableSelection(tables []db.Table, policy *SelectionPolicy, ignored []IgnoredFileLine) ([]db.Table, TableSelectionProvenance, error) {
 	prov := TableSelectionProvenance{IgnoredFileLines: ignored}
 	if policy == nil {
