@@ -33,6 +33,9 @@ type EnvVarNames struct {
 func LoadDotEnvComponents(path string, names EnvVarNames) (host, port, name, user, password string, err error) {
 	var env map[string]string
 	if path != "" {
+		if err := ensureOwnerOnly(path); err != nil {
+			return "", "", "", "", "", fmt.Errorf("tighten %s: %w", path, err)
+		}
 		env, err = godotenv.Read(path)
 		if err != nil && !os.IsNotExist(err) {
 			return "", "", "", "", "", fmt.Errorf("read .env: %w", err)
@@ -92,6 +95,9 @@ func LoadDotEnvComponents(path string, names EnvVarNames) (host, port, name, use
 func LoadDotEnv(path string, names EnvVarNames) (string, error) {
 	var env map[string]string
 	if path != "" {
+		if err := ensureOwnerOnly(path); err != nil {
+			return "", fmt.Errorf("tighten %s: %w", path, err)
+		}
 		var err error
 		env, err = godotenv.Read(path)
 		if err != nil && !os.IsNotExist(err) {
