@@ -3,6 +3,7 @@ package clone
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +48,8 @@ var (
 	savePermissionCacheFile    = savePermissionCacheToPath
 	replacePermissionCacheFile = atomicReplace
 	permissionCacheNow         = time.Now
+
+	errPermissionCacheCommittedRelease = errors.New("permission cache committed but lock release failed")
 )
 
 func permissionCacheKey(dsns preflightDSNs, opts Options, strategy string) (string, error) {
@@ -112,9 +115,18 @@ func storePermissionCache(cfg PermissionCacheConfig, entry permissionCacheEntry)
 	if !cfg.Enabled || cfg.Path == "" {
 		return nil
 	}
-	doc, err := loadPermissionCacheFile(cfg.Path)
-	if err != nil {
-		return err
+	lock, acqErr := lockCacheFile(cfg.Path + ".lock")
+	if acqErr != nil {
+		warnPermissionCache(fmt.Sprintf("dolly: warning: permission cache lock acquisition failed: %s: %v", cfg.Path, acqErr))
+		return nil
+	}
+	doc, loadErr := loadPermissionCacheFile(cfg.Path)
+	if loadErr != nil {
+		releaseErr := lock.close()
+		if releaseErr != nil {
+			return errors.Join(loadErr, releaseErr)
+		}
+		return loadErr
 	}
 	now := permissionCacheNow()
 	out := make([]permissionCacheEntry, 0, len(doc.Entries)+1)
@@ -125,8 +137,18 @@ func storePermissionCache(cfg PermissionCacheConfig, entry permissionCacheEntry)
 		out = append(out, e)
 	}
 	out = append(out, entry)
-	if err := savePermissionCacheFile(cfg.Path, permissionCacheDoc{Entries: out}); err != nil {
-		warnPermissionCache(fmt.Sprintf("dolly: warning: permission cache persist failed: %s: %v", cfg.Path, err))
+	commitErr := savePermissionCacheFile(cfg.Path, permissionCacheDoc{Entries: out})
+	releaseErr := lock.close()
+	if commitErr != nil {
+		joined := commitErr
+		if releaseErr != nil {
+			joined = errors.Join(commitErr, releaseErr)
+		}
+		warnPermissionCache(fmt.Sprintf("dolly: warning: permission cache persist failed: %s: %v", cfg.Path, joined))
+		return nil
+	}
+	if releaseErr != nil {
+		warnPermissionCache(fmt.Sprintf("dolly: warning: %s: %s: %v", errPermissionCacheCommittedRelease.Error(), cfg.Path, releaseErr))
 		return nil
 	}
 	return nil
