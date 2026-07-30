@@ -2,6 +2,7 @@ package dump
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1165,5 +1166,113 @@ func TestDumpChunkTableResumeNoDuplicates(t *testing.T) {
 	gotLines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(gotLines) != chunkSize+1 {
 		t.Fatalf("got %d lines, want %d", len(gotLines), chunkSize+1)
+	}
+}
+
+func TestDumpCaptureSequencesQueryErrorFailsClosed(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	// pg_sequences query fails (e.g. unreadable system view)
+	mock.ExpectQuery(`SELECT schemaname, sequencename`).
+		WillReturnError(fmt.Errorf("simulated pg_sequences failure"))
+
+	mock.ExpectRollback()
+
+	// Do NOT pass WithoutSequences() — captureSequences must run and fail.
+	err = Dump(context.Background(), sqlDB, dir)
+	if err == nil {
+		t.Fatal("expected capture sequences error, got nil")
+	}
+	if !strings.Contains(err.Error(), "capture sequences") {
+		t.Fatalf("error missing capture sequences context: %v", err)
+	}
+	// No metadata should be written.
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist on sequence capture failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json.tmp")); statErr == nil {
+		t.Fatal("metadata.json.tmp should not exist on sequence capture failure")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDumpCaptureSequencesScopeErrorFailsClosed(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	// pg_sequences returns a sequence from a schema outside cfg.schemas (public)
+	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
+		AddRow("secret", "token_seq", 42, 1)
+	mock.ExpectQuery(`SELECT schemaname, sequencename`).
+		WithArgs("public").
+		WillReturnRows(seqsRows)
+
+	mock.ExpectRollback()
+
+	err = Dump(context.Background(), sqlDB, dir, WithSchemas([]string{"public"}))
+	if err == nil {
+		t.Fatal("expected scope error, got nil")
+	}
+	if !strings.Contains(err.Error(), "capture sequences") {
+		t.Fatalf("error missing capture sequences context: %v", err)
+	}
+	var scopeErr *SequenceScopeOutofRangeError
+	if !errors.As(err, &scopeErr) {
+		t.Fatalf("error = %v, want SequenceScopeOutofRangeError", err)
+	}
+	if scopeErr.Schema != "secret" || scopeErr.SeqName != "token_seq" {
+		t.Fatalf("scope error = %+v", scopeErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not exist on scope error")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json.tmp")); statErr == nil {
+		t.Fatal("metadata.json.tmp should not exist on scope error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
