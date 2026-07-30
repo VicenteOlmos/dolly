@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestSubprocessDSNKeywordStripPasswordAndTimeout(t *testing.T) {
+	const secret = "kw-secret"
+	clean, password, err := SubprocessDSN("host=localhost port=5432 dbname=mydb user=u password=" + secret + " sslmode=disable statement_timeout=30s options='--client flag'")
+	if err != nil || password != secret {
+		t.Fatalf("password=%q err=%v", password, err)
+	}
+	for _, leaked := range []string{secret, "statement_timeout", "options=", "--client"} {
+		if strings.Contains(clean, leaked) {
+			t.Fatalf("clean DSN leaked %q: %q", leaked, clean)
+		}
+	}
+	for _, required := range []string{"host=localhost", "port=5432", "dbname=mydb", "user=u", "sslmode=disable"} {
+		if !strings.Contains(clean, required) {
+			t.Fatalf("clean DSN lost %q: %q", required, clean)
+		}
+	}
+}
+
 func TestSubprocessDSNRemovesAllPasswords(t *testing.T) {
 	const secret = "p%/^=word"
 	clean, password, err := SubprocessDSN("postgres://user:" + secret + "@localhost/db?password=query-secret&sslmode=disable&statement_timeout=1")

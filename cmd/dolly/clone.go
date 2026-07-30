@@ -353,9 +353,16 @@ func runCloneWithSource(ctx context.Context, flags cloneFlags, cfg *config.Confi
 
 func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, sourceDSN, cloneName, targetURL string, schemas []string, strategy string) error {
 	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
-		sourceDSN = appendQueryParam(sourceDSN, "statement_timeout", cfg.DB.StatementTimeout)
+		var err error
+		sourceDSN, err = appendQueryParam(sourceDSN, "statement_timeout", cfg.DB.StatementTimeout)
+		if err != nil {
+			return err
+		}
 		if targetURL != "" {
-			targetURL = appendQueryParam(targetURL, "statement_timeout", cfg.DB.StatementTimeout)
+			targetURL, err = appendQueryParam(targetURL, "statement_timeout", cfg.DB.StatementTimeout)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	var dumpOpts []dump.Option
