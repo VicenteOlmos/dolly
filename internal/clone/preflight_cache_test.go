@@ -12,10 +12,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"gopkg.in/yaml.v3"
 )
 
 func TestPermissionCacheKeyVersionBump(t *testing.T) {
@@ -746,4 +749,231 @@ func TestStorePermissionCacheReacquire(t *testing.T) {
 		}()
 		acquireRelease(t, path)
 	})
+}
+
+const (
+	permWriterFail        = "w-fail"
+	permWriterReleaseErr  = "w-release-err"
+	permWriterCleanPrefix = "w-clean-"
+)
+
+type permConcurrentResult struct {
+	key              string
+	storeErr         error
+	committedRelease bool
+}
+
+func permConcurrentOutcome(r permConcurrentResult) error {
+	if r.committedRelease {
+		return errPermissionCacheCommittedRelease
+	}
+	return r.storeErr
+}
+
+func permConcurrentBarrierStart(wg *sync.WaitGroup, n int, fn func(int)) {
+	start := make(chan struct{})
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			fn(i)
+		}(i)
+	}
+	close(start)
+}
+
+func permStagedLastCloneName(data []byte) (string, bool) {
+	var doc permissionCacheDoc
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Entries) == 0 {
+		return "", false
+	}
+	return doc.Entries[len(doc.Entries)-1].CloneName, true
+}
+
+func TestPermissionCacheConcurrentOutcomes(t *testing.T) {
+	restore := saveCacheSeams()
+	defer restore()
+
+	path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	permFixNow(t, now)
+
+	ds := permStoreDSNs()
+	cfg := permCfg(path)
+
+	liveKey, err := permissionCacheKey(ds, Options{CloneName: "seed-live"}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveEntry, err := buildPermissionCacheEntry(liveKey, ds, Options{CloneName: "seed-live"}, "schema-replay", "seed-live-role", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredEntry := liveEntry
+	expiredEntry.Key = "expired-fixture"
+	expiredEntry.ExpiresAt = now
+
+	if err := savePermissionCacheFile(path, permissionCacheDoc{Entries: []permissionCacheEntry{liveEntry, expiredEntry}}); err != nil {
+		t.Fatal(err)
+	}
+
+	writers := []struct {
+		clone string
+		role  string
+	}{
+		{permWriterFail, "fail-role"},
+		{permWriterReleaseErr, "release-err-role"},
+		{permWriterCleanPrefix + "0", "clean-0"},
+		{permWriterCleanPrefix + "1", "clean-1"},
+		{permWriterCleanPrefix + "2", "clean-2"},
+	}
+	results := make([]permConcurrentResult, len(writers))
+
+	var currentWriter atomic.Int32
+	var releaseErrArm atomic.Int32
+	var releaseErrWriterIdx atomic.Int32
+	releaseErrWriterIdx.Store(-1)
+
+	origReplace := replacePermissionCacheFile
+	releaseErr := errors.New("concurrent release failure")
+
+	replacePermissionCacheFile = func(src, dst string) error {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if clone, ok := permStagedLastCloneName(data); ok && clone == permWriterFail {
+			return errInjectedReplacementFailure
+		}
+		if err := origReplace(src, dst); err != nil {
+			return err
+		}
+		if clone, ok := permStagedLastCloneName(data); ok && clone == permWriterReleaseErr {
+			releaseErrArm.Store(1)
+			for j, w := range writers {
+				if w.clone == permWriterReleaseErr {
+					releaseErrWriterIdx.Store(int32(j))
+					break
+				}
+			}
+		}
+		return nil
+	}
+
+	origRelease := lockCacheRelease
+	lockCacheRelease = func(f *os.File) error {
+		if releaseErrArm.Swap(0) == 1 {
+			return releaseErr
+		}
+		return origRelease(f)
+	}
+
+	warnPermissionCache = func(msg string) {
+		if !strings.Contains(msg, errPermissionCacheCommittedRelease.Error()) {
+			return
+		}
+		j := releaseErrWriterIdx.Load()
+		if j >= 0 && int(j) < len(results) {
+			results[j].committedRelease = true
+		}
+	}
+
+	var wg sync.WaitGroup
+	permConcurrentBarrierStart(&wg, len(writers), func(i int) {
+		w := writers[i]
+		key, err := permissionCacheKey(ds, Options{CloneName: w.clone}, "schema-replay")
+		if err != nil {
+			t.Errorf("writer %d key: %v", i, err)
+			return
+		}
+		entry, err := buildPermissionCacheEntry(key, ds, Options{CloneName: w.clone}, "schema-replay", w.role, time.Hour)
+		if err != nil {
+			t.Errorf("writer %d entry: %v", i, err)
+			return
+		}
+		currentWriter.Store(int32(i))
+		storeErr := storePermissionCache(cfg, entry)
+		currentWriter.Store(-1)
+		results[i] = permConcurrentResult{
+			key:              key,
+			storeErr:         storeErr,
+			committedRelease: results[i].committedRelease,
+		}
+	})
+	wg.Wait()
+
+	failKey, err := permissionCacheKey(ds, Options{CloneName: permWriterFail}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseKey, err := permissionCacheKey(ds, Options{CloneName: permWriterReleaseErr}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	committedReleaseCount := 0
+	var releaseErrWriter int = -1
+	for i, r := range results {
+		if errors.Is(permConcurrentOutcome(r), errPermissionCacheCommittedRelease) {
+			committedReleaseCount++
+			releaseErrWriter = i
+		}
+		if writers[i].clone == permWriterFail {
+			if r.storeErr != nil {
+				t.Fatalf("w-fail storeErr = %v, want nil uncommitted", r.storeErr)
+			}
+		} else if writers[i].clone != permWriterReleaseErr && r.storeErr != nil {
+			t.Fatalf("clean writer %q storeErr = %v", writers[i].clone, r.storeErr)
+		}
+	}
+
+	doc, err := loadPermissionCacheFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make(map[string]permissionCacheEntry, len(doc.Entries))
+	for _, e := range doc.Entries {
+		keys[e.Key] = e
+	}
+
+	if committedReleaseCount != 1 {
+		_, releasePresent := keys[releaseKey]
+		t.Fatalf("committed-release-error writers = %d, want 1; releaseKeyPresent=%v results=%+v", committedReleaseCount, releasePresent, results)
+	}
+
+	if writers[releaseErrWriter].clone != permWriterReleaseErr {
+		t.Fatalf("committed-release-error writer = %q, want %q", writers[releaseErrWriter].clone, permWriterReleaseErr)
+	}
+
+	if _, ok := keys[liveKey]; !ok {
+		t.Fatalf("seed live key %q missing", liveKey)
+	}
+	if _, ok := keys[expiredEntry.Key]; ok {
+		t.Fatalf("expired fixture %q should be absent", expiredEntry.Key)
+	}
+	if _, ok := keys[failKey]; ok {
+		t.Fatalf("w-fail key %q should be absent", failKey)
+	}
+	if got := keys[releaseKey]; got.Role != "release-err-role" {
+		t.Fatalf("release-error entry role = %q, want release-err-role", got.Role)
+	}
+
+	wantClean := 0
+	for _, w := range writers {
+		if !strings.HasPrefix(w.clone, permWriterCleanPrefix) {
+			continue
+		}
+		wantClean++
+		key, err := permissionCacheKey(ds, Options{CloneName: w.clone}, "schema-replay")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := keys[key]; got.Role != w.role {
+			t.Fatalf("clean entry %q role = %q, want %q", w.clone, got.Role, w.role)
+		}
+	}
+	if len(keys) != 1+wantClean+1 { // seed-live + clean + release-err
+		t.Fatalf("final entry count = %d, want %d", len(keys), 1+wantClean+1)
+	}
 }
