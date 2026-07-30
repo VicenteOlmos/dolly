@@ -44,3 +44,50 @@ func guardSelectedTables(tables []db.Table, schemas []string) error {
 	}
 	return &NoTablesError{Schemas: append([]string(nil), effective...)}
 }
+
+// ErrSequenceScopeOutofRange marks sequence capture failures where a returned
+// sequence belongs to a schema outside the configured effective schemas.
+var ErrSequenceScopeOutofRange = errors.New("sequence scope out of range")
+
+// SequenceScopeOutofRangeError reports a sequence whose schema is not in the
+// requested scope. The dump exits nonzero before publishing any metadata or
+// schema artifacts.
+type SequenceScopeOutofRangeError struct {
+	Schema  string
+	SeqName string
+}
+
+func (e *SequenceScopeOutofRangeError) Error() string {
+	return fmt.Sprintf("sequence %s.%s: schema %q is not in the requested scope", e.Schema, e.SeqName, e.Schema)
+}
+
+func (e *SequenceScopeOutofRangeError) Is(target error) bool {
+	return target == ErrSequenceScopeOutofRange
+}
+
+// IsSequenceScopeOutofRangeError reports whether err is a scope-out-of-range
+// sequence capture failure.
+func IsSequenceScopeOutofRangeError(err error) bool {
+	var scopeErr *SequenceScopeOutofRangeError
+	return errors.As(err, &scopeErr)
+}
+
+// guardSequenceScope validates that every captured sequence belongs to one of
+// the effective schemas. When schemas is empty (no explicit filter), all
+// sequences pass. When schemas is non-empty, it returns
+// *SequenceScopeOutofRangeError on the first out-of-scope sequence found.
+func guardSequenceScope(seqs []SequenceState, schemas []string) error {
+	if len(schemas) == 0 {
+		return nil
+	}
+	scopeSet := make(map[string]struct{}, len(schemas))
+	for _, s := range schemas {
+		scopeSet[s] = struct{}{}
+	}
+	for _, seq := range seqs {
+		if _, ok := scopeSet[seq.Schema]; !ok {
+			return &SequenceScopeOutofRangeError{Schema: seq.Schema, SeqName: seq.Name}
+		}
+	}
+	return nil
+}
