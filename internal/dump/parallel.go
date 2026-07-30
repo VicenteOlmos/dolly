@@ -121,11 +121,11 @@ func (p *ParallelPlan) Run(ctx context.Context) error {
 	workers := effectiveWorkers(p.cfg.workers)
 	err := runParallelDump(ctx, p, workers)
 	if err != nil {
-		cleanupParallelArtifacts(p.outputDir, p.stagingDir, p.metaTmpPath, p.tables)
+		cleanupParallelArtifacts(p.stagingDir, p.metaTmpPath)
 		return err
 	}
 	if err := publishParallelArtifacts(p); err != nil {
-		cleanupParallelArtifacts(p.outputDir, p.stagingDir, p.metaTmpPath, p.tables)
+		cleanupParallelArtifacts(p.stagingDir, p.metaTmpPath)
 		return err
 	}
 	p.published = true
@@ -138,7 +138,7 @@ func (p *ParallelPlan) Close() error {
 		return nil
 	}
 	if !p.published {
-		cleanupParallelArtifacts(p.outputDir, p.stagingDir, p.metaTmpPath, p.tables)
+		cleanupParallelArtifacts(p.stagingDir, p.metaTmpPath)
 	}
 	if p.coordinator == nil {
 		return nil
@@ -578,14 +578,15 @@ func publishParallelArtifacts(plan *ParallelPlan) error {
 	return nil
 }
 
-func cleanupParallelArtifacts(outputDir, stagingDir, metaTmpPath string, tables []db.Table) {
-	_ = os.RemoveAll(stagingDir)
-	_ = os.Remove(metaTmpPath)
-	_ = os.Remove(filepath.Join(outputDir, "metadata.json"))
-	for _, table := range tables {
-		_ = os.Remove(tableDataPath(outputDir, table))
-		_ = os.Remove(tableDataPath(outputDir, table) + ".tmp")
+func cleanupParallelArtifacts(stagingDir, metaTmpPath string) {
+	if parallelTestHooks.onCleanupStart != nil {
+		parallelTestHooks.onCleanupStart(stagingDir, metaTmpPath)
 	}
+	_ = os.RemoveAll(stagingDir)
+	if parallelTestHooks.onCleanupStagingRemoved != nil {
+		parallelTestHooks.onCleanupStagingRemoved()
+	}
+	_ = os.Remove(metaTmpPath)
 }
 
 // parallelStreamTable is the streaming seam used by parallel workers (overridable in tests).
@@ -593,5 +594,7 @@ var parallelStreamTable = streamTableToPath
 
 // parallelTestHooks supports deterministic integration tests without sleeps.
 var parallelTestHooks struct {
-	onSnapshotExported func()
+	onSnapshotExported      func()
+	onCleanupStart          func(stagingDir, metaTmpPath string)
+	onCleanupStagingRemoved func()
 }
