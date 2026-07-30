@@ -406,12 +406,12 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if !cfg.skipSequences {
 		seqs, err := captureSequences(ctx, q, seqSchemas)
 		if err != nil {
-			// ponytail: non-fatal — pg_sequences is a system view that works with
-			// real PostgreSQL but not with test mocks. Carry on without sequence state.
-			sequences = nil
-		} else {
-			sequences = seqs
+			return fmt.Errorf("capture sequences: %w", err)
 		}
+		if err := guardSequenceScope(seqs, cfg.schemas); err != nil {
+			return fmt.Errorf("capture sequences: %w", err)
+		}
+		sequences = seqs
 	}
 
 	metaPath, err := writeMetadata(outputDir, sorted, nil, cfg.schemas, sequences, provenanceForWrite(&cfg, sorted))

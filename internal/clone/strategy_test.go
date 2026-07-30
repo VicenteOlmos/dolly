@@ -264,6 +264,58 @@ func TestSchemaReplayStrategyExecute(t *testing.T) {
 	}
 }
 
+func TestSchemaReplayPgDumpArgsIncludeSchemaFlags(t *testing.T) {
+	origLookPath := lookPath
+	lookPath = func(file string) (string, error) { return "/usr/bin/" + file, nil }
+	defer func() { lookPath = origLookPath }()
+
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		return nil, fmt.Errorf("mock db")
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	mockRunner := &mockCommandRunner{}
+	strat := &SchemaReplayStrategy{Runner: mockRunner}
+
+	opts := Options{
+		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
+		CloneName:  "db_clone",
+		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"app", "billing"})},
+	}
+
+	err := strat.Execute(context.Background(), opts)
+	if err == nil {
+		t.Fatal("expected error from mock db open")
+	}
+
+	if len(mockRunner.pipeCalls) != 1 {
+		t.Fatalf("expected 1 pipe call, got %d", len(mockRunner.pipeCalls))
+	}
+	pc := mockRunner.pipeCalls[0]
+	if pc.srcName != "pg_dump" {
+		t.Fatalf("expected pg_dump, got %s", pc.srcName)
+	}
+	// --schema-only --no-owner --no-acl --schema=app --schema=billing <DSN>
+	foundApp := false
+	foundBilling := false
+	for _, a := range pc.srcArgs {
+		if a == "--schema=app" {
+			foundApp = true
+		}
+		if a == "--schema=billing" {
+			foundBilling = true
+		}
+	}
+	if !foundApp || !foundBilling {
+		t.Fatalf("pg_dump args = %v, want --schema=app and --schema=billing", pc.srcArgs)
+	}
+	if pc.dstName != "psql" {
+		t.Fatalf("expected psql, got %s", pc.dstName)
+	}
+}
+
 func TestSchemaReplayStrategyExecutePassesSanitizationDumpOpts(t *testing.T) {
 	origLookPath := lookPath
 	lookPath = func(file string) (string, error) { return "/usr/bin/" + file, nil }

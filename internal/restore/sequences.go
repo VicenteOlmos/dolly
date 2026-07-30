@@ -2,7 +2,9 @@ package restore
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/dump"
@@ -69,6 +71,36 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 		if seq.LastValue != nil {
 			value = *seq.LastValue
 			isCalled = seq.IsCalled
+		}
+
+		// Read current target value to prevent regression: never lower a
+		// sequence value that was advanced after the dump was taken.
+		checkSQL := fmt.Sprintf(
+			"SELECT last_value, is_called FROM %s",
+			quoteQualifiedTable(seq.Schema, seq.Name),
+		)
+		checkRows, err := q.QueryContext(ctx, checkSQL)
+		if err != nil {
+			return fmt.Errorf("read current value for %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+		var curLast sql.NullInt64
+		var curCalled bool
+		if checkRows.Next() {
+			if err := checkRows.Scan(&curLast, &curCalled); err != nil {
+				checkRows.Close()
+				return fmt.Errorf("scan current value for %s.%s: %w", seq.Schema, seq.Name, err)
+			}
+		}
+		if err := checkRows.Close(); err != nil {
+			return fmt.Errorf("close current value rows for %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+
+		if curLast.Valid && curLast.Int64 >= value {
+			fmt.Fprintf(os.Stderr,
+				"skipping sequence %s.%s: current value %d >= dump value %d, not lowering\n",
+				seq.Schema, seq.Name, curLast.Int64, value,
+			)
+			continue
 		}
 
 		setSQL := fmt.Sprintf(
