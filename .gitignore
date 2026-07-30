@@ -36,7 +36,10 @@ coverage.*
 .agents/
 .codex/
 .cursor/
-/openspec/
+/openspec/**
+!/openspec/changes/
+!/openspec/changes/**/
+!/openspec/changes/**/.gitkeep
 
 # Dolly local config (may contain DSNs, passwords, or user overrides)
 cmd/dolly/my_config_dump_dir/

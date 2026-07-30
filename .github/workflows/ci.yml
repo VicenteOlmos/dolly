@@ -24,6 +24,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify checked-out SHA
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $expected = '${{ github.event.pull_request.head.sha || github.sha }}'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $expected) {
+            Write-Error "checked-out SHA mismatch: expected $expected actual $actual"
+            exit 1
+          }
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -34,6 +47,10 @@ jobs:
 
       - if: runner.os != 'Windows'
         run: go test -race -count=1 ./...
+
+      - if: runner.os == 'Windows'
+        name: Run Windows permission cache runtime tests
+        run: go test -race -count=1 -run 'TestPermissionCache(WindowsRuntime|ReplacementFailurePreservesBytes)$' ./internal/clone
 
       - if: runner.os == 'Windows'
         name: Run Windows lock runtime tests

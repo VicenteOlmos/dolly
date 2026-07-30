@@ -43,9 +43,10 @@ type permissionCacheDoc struct {
 }
 
 var (
-	loadPermissionCacheFile = loadPermissionCacheFromPath
-	savePermissionCacheFile = savePermissionCacheToPath
-	permissionCacheNow      = time.Now
+	loadPermissionCacheFile    = loadPermissionCacheFromPath
+	savePermissionCacheFile    = savePermissionCacheToPath
+	replacePermissionCacheFile = atomicReplace
+	permissionCacheNow         = time.Now
 )
 
 func permissionCacheKey(dsns preflightDSNs, opts Options, strategy string) (string, error) {
@@ -118,16 +119,23 @@ func storePermissionCache(cfg PermissionCacheConfig, entry permissionCacheEntry)
 	now := permissionCacheNow()
 	out := make([]permissionCacheEntry, 0, len(doc.Entries)+1)
 	for _, e := range doc.Entries {
-		if e.Key == entry.Key || now.After(e.ExpiresAt) {
+		if e.Key == entry.Key || !now.Before(e.ExpiresAt) {
 			continue
 		}
 		out = append(out, e)
 	}
 	out = append(out, entry)
-	return savePermissionCacheFile(cfg.Path, permissionCacheDoc{Entries: out})
+	if err := savePermissionCacheFile(cfg.Path, permissionCacheDoc{Entries: out}); err != nil {
+		warnPermissionCache(fmt.Sprintf("dolly: warning: permission cache persist failed: %s: %v", cfg.Path, err))
+		return nil
+	}
+	return nil
 }
 
 func loadPermissionCacheFromPath(path string) (permissionCacheDoc, error) {
+	if err := ensureCacheOwnerOnly(path); err != nil {
+		return permissionCacheDoc{}, fmt.Errorf("tighten permission cache: %w", err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -150,9 +158,37 @@ func savePermissionCacheToPath(path string, doc permissionCacheDoc) error {
 	if err != nil {
 		return fmt.Errorf("marshal permission cache: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".dolly.permissions-cache-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp cache file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	committed := false
+	cleanup := func() {
+		if committed {
+			return
+		}
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	defer cleanup()
+	if err := ensureCacheOwnerOnly(tmpPath); err != nil {
+		return fmt.Errorf("tighten permission cache temp: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
 		return fmt.Errorf("write permission cache: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync permission cache: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close permission cache: %w", err)
+	}
+	if err := replacePermissionCacheFile(tmpPath, path); err != nil {
+		return fmt.Errorf("rename permission cache: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -212,3 +248,5 @@ func buildPermissionCacheEntry(
 		ExpiresAt:  now.Add(ttl),
 	}, nil
 }
+
+var warnPermissionCache = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
