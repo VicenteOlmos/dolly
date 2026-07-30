@@ -433,9 +433,10 @@ func walLevelAtLeastReplica(level string) bool {
 	}
 }
 
-func validateReplicationTargetDir(targetDir string) error {
-	const strategy = "physical-backup"
+var errReplicationTargetNotEmpty = errors.New("replication target directory is not empty")
 
+// checkReplicationTargetDir returns nil when targetDir is absent or an empty directory.
+func checkReplicationTargetDir(targetDir string) error {
 	info, err := os.Stat(targetDir)
 	if os.IsNotExist(err) {
 		return nil
@@ -444,24 +445,56 @@ func validateReplicationTargetDir(targetDir string) error {
 		return fmt.Errorf("stat target directory: %w", err)
 	}
 	if !info.IsDir() {
-		return &PreflightError{
-			Kind:     PreflightPermission,
-			Strategy: strategy,
-			Hint:     "target path must be a directory for pg_basebackup -D",
-		}
+		return fmt.Errorf("target path is not a directory: %s", targetDir)
 	}
 	entries, err := os.ReadDir(targetDir)
 	if err != nil {
 		return fmt.Errorf("read target directory: %w", err)
 	}
 	if len(entries) > 0 {
+		return fmt.Errorf("%w: %s", errReplicationTargetNotEmpty, targetDir)
+	}
+	return nil
+}
+
+// ensureReplicationTargetDir creates targetDir when absent or reuses an empty directory.
+func ensureReplicationTargetDir(targetDir string) error {
+	if err := checkReplicationTargetDir(targetDir); err != nil {
+		if errors.Is(err, errReplicationTargetNotEmpty) {
+			return fmt.Errorf("target directory is not empty: %s", targetDir)
+		}
+		return err
+	}
+	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+		if err := os.Mkdir(targetDir, 0o700); err != nil {
+			return fmt.Errorf("create target directory: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateReplicationTargetDir(targetDir string) error {
+	const strategy = "physical-backup"
+
+	err := checkReplicationTargetDir(targetDir)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errReplicationTargetNotEmpty) {
 		return &PreflightError{
 			Kind:     PreflightPermission,
 			Strategy: strategy,
 			Hint:     "provide an empty or non-existent directory for pg_basebackup -D",
 		}
 	}
-	return nil
+	if strings.Contains(err.Error(), "not a directory") {
+		return &PreflightError{
+			Kind:     PreflightPermission,
+			Strategy: strategy,
+			Hint:     "target path must be a directory for pg_basebackup -D",
+		}
+	}
+	return err
 }
 
 func pingDB(ctx context.Context, dbConn *sql.DB, dbLabel, strategy string) error {

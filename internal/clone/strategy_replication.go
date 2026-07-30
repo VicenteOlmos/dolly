@@ -39,11 +39,8 @@ func (s *ReplicationStrategy) Execute(ctx context.Context, opts Options) error {
 	}
 
 	runner := commandRunnerForProgress(s.Runner, opts.ProgressFn)
-	if err := os.Mkdir(opts.TargetDir, 0o700); err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("target directory already exists: %s", opts.TargetDir)
-		}
-		return fmt.Errorf("create target directory: %w", err)
+	if err := ensureReplicationTargetDir(opts.TargetDir); err != nil {
+		return err
 	}
 	args := []string{
 		"-h", comps.Host,
@@ -52,9 +49,19 @@ func (s *ReplicationStrategy) Execute(ctx context.Context, opts Options) error {
 		"-D", opts.TargetDir,
 		"-Fp", "-Xs", "-P", "-v",
 	}
+	tlsEnv, err := TLSParams(opts.SourceDSN)
+	if err != nil {
+		return fmt.Errorf("parse TLS parameters: %w", err)
+	}
 	var env map[string]string
 	if pwForEnv != "" {
 		env = map[string]string{"PGPASSWORD": pwForEnv}
+	}
+	for k, v := range tlsEnv {
+		if env == nil {
+			env = make(map[string]string)
+		}
+		env[k] = v
 	}
 
 	reportProgressEvent(opts, ProgressEvent{
