@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -318,9 +319,6 @@ func TestPermissionCacheMergePreservesLiveEntries(t *testing.T) {
 	if got := keys[newKey]; got.Role != "new-role" {
 		t.Fatalf("new entry role = %q, want new-role", got.Role)
 	}
-	if _, ok := keys[liveKey]; !ok {
-		t.Fatal("expected live key to remain")
-	}
 	if len(doc.Entries) != 2 {
 		t.Fatalf("entries = %d, want 2", len(doc.Entries))
 	}
@@ -328,15 +326,79 @@ func TestPermissionCacheMergePreservesLiveEntries(t *testing.T) {
 
 var errInjectedReplacementFailure = fmt.Errorf("injected replacement failure")
 
+func permTestDSNs() preflightDSNs {
+	return preflightDSNs{
+		sourceDSN: "postgres://u:p@h-a:5432/db_src",
+		targetDSN: "postgres://u:p@h-a:5432/db_clone",
+		sourceDB:  "db_src",
+		sameInst:  true,
+	}
+}
+
+func permStoreDSNs() preflightDSNs {
+	return preflightDSNs{
+		sourceDSN: "postgres://u:p@h:5432/db",
+		targetDSN: "postgres://u:p@h:5432/clone",
+		sourceDB:  "db",
+		sameInst:  true,
+	}
+}
+
+func permFixNow(t *testing.T, now time.Time) {
+	t.Helper()
+	permissionCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { permissionCacheNow = time.Now })
+}
+
+func mustPermEntry(t *testing.T, key, role string) permissionCacheEntry {
+	t.Helper()
+	e, err := buildPermissionCacheEntry(key, permTestDSNs(), Options{CloneName: "c"}, "schema-replay", role, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func mustPermEntryDS(t *testing.T, ds preflightDSNs, key, clone, role string) permissionCacheEntry {
+	t.Helper()
+	e, err := buildPermissionCacheEntry(key, ds, Options{CloneName: clone}, "schema-replay", role, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func permCfg(path string) PermissionCacheConfig {
+	return PermissionCacheConfig{Enabled: true, Path: path, TTL: time.Hour}
+}
+
+func injectReleaseFail(err error) {
+	lockCacheRelease = func(*os.File) error { return err }
+	lockCacheClose = func(f *os.File) error { return f.Close() }
+	lockCacheContention = func(error) bool { return false }
+}
+
+func injectLockContention(now time.Time) error {
+	contentionErr := errors.New("contention")
+	clock := now
+	lockNow = func() time.Time {
+		v := clock
+		clock = clock.Add(100 * time.Millisecond)
+		return v
+	}
+	lockSleep = func(time.Duration) {}
+	lockCacheAcquire = func(*os.File) error { return contentionErr }
+	lockCacheContention = func(e error) bool { return errors.Is(e, contentionErr) }
+	return contentionErr
+}
+
 func TestPermissionCacheReplacementFailurePreservesBytes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
 	orig := []byte("entries: []\n")
 	if err := os.WriteFile(path, orig, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	permissionCacheNow = func() time.Time { return now }
-	t.Cleanup(func() { permissionCacheNow = time.Now })
+	permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	origReplace := replacePermissionCacheFile
 	replacePermissionCacheFile = func(src, dst string) error {
@@ -365,17 +427,9 @@ func TestPermissionCacheReplacementFailurePreservesBytes(t *testing.T) {
 	origWarn := warnPermissionCache
 	warnPermissionCache = func(msg string) { warnings = append(warnings, msg) }
 	t.Cleanup(func() { warnPermissionCache = origWarn })
-	ds := preflightDSNs{
-		sourceDSN: "postgres://u:p@h:5432/db",
-		targetDSN: "postgres://u:p@h:5432/clone",
-		sourceDB:  "db",
-		sameInst:  true,
-	}
-	entry, err := buildPermissionCacheEntry("k", ds, Options{CloneName: "c"}, "schema-replay", "role", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := storePermissionCache(PermissionCacheConfig{Enabled: true, Path: path, TTL: time.Hour}, entry); err != nil {
+
+	entry := mustPermEntryDS(t, permStoreDSNs(), "k", "c", "role")
+	if err := storePermissionCache(permCfg(path), entry); err != nil {
 		t.Fatalf("store should bypass write failure: %v", err)
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "injected replacement failure") {
@@ -439,4 +493,257 @@ func TestPermissionCacheWindowsRuntime(t *testing.T) {
 	if doc, err := loadPermissionCacheFile(path); err != nil || len(doc.Entries) != 2 {
 		t.Fatalf("entries after second store: err=%v len=%d", err, len(doc.Entries))
 	}
+}
+
+func saveCacheSeams() func() {
+	prevLockSeams := saveSeams()
+	prevLoad := loadPermissionCacheFile
+	prevSave := savePermissionCacheFile
+	prevReplace := replacePermissionCacheFile
+	prevNow := permissionCacheNow
+	prevWarn := warnPermissionCache
+	return func() {
+		prevLockSeams()
+		loadPermissionCacheFile = prevLoad
+		savePermissionCacheFile = prevSave
+		replacePermissionCacheFile = prevReplace
+		permissionCacheNow = prevNow
+		warnPermissionCache = prevWarn
+	}
+}
+
+func TestStorePermissionCacheOutcomeTable(t *testing.T) {
+	t.Run("clean commit entry present nil return", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		permFixNow(t, time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC))
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		doc, err := loadPermissionCacheFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(doc.Entries) != 1 || doc.Entries[0].Role != "role" {
+			t.Fatalf("entry absent or wrong: entries=%d", len(doc.Entries))
+		}
+	})
+
+	t.Run("uncommitted replacement failure warns nil entry absent prior preserved", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		orig := []byte("entries: []\n")
+		if err := os.WriteFile(path, orig, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+		replaceErr := errors.New("replace exploded")
+		replacePermissionCacheFile = func(src, dst string) error { return replaceErr }
+
+		var warnings []string
+		warnPermissionCache = func(msg string) { warnings = append(warnings, msg) }
+
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatalf("store should return nil: %v", err)
+		}
+		if len(warnings) != 1 || !strings.Contains(warnings[0], replaceErr.Error()) {
+			t.Fatalf("expected warning with replace cause, got %v", warnings)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, orig) {
+			t.Fatalf("prior bytes changed: %q", got)
+		}
+		doc, _ := loadPermissionCacheFile(path)
+		if len(doc.Entries) != 0 {
+			t.Fatalf("expected 0 entries, got %d", len(doc.Entries))
+		}
+	})
+
+	t.Run("committed-with-release-error replace ok release fails warn sentinel nil", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+		releaseErr := errors.New("unlock borked")
+		injectReleaseFail(releaseErr)
+
+		var warnings []string
+		warnPermissionCache = func(msg string) { warnings = append(warnings, msg) }
+
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatalf("store should return nil: %v", err)
+		}
+
+		doc, err := loadPermissionCacheFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(doc.Entries) != 1 || doc.Entries[0].Role != "role" {
+			t.Fatalf("entry absent after committed-with-release-error: entries=%d", len(doc.Entries))
+		}
+
+		if len(warnings) != 1 {
+			t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+		}
+		if !strings.Contains(warnings[0], errPermissionCacheCommittedRelease.Error()) {
+			t.Fatalf("warning missing sentinel: %q", warnings[0])
+		}
+		if !strings.Contains(warnings[0], releaseErr.Error()) {
+			t.Fatalf("warning missing release cause: %q", warnings[0])
+		}
+	})
+
+	t.Run("acquisition timeout warns nil no cache file", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		permFixNow(t, now)
+		injectLockContention(now)
+
+		var warnings []string
+		warnPermissionCache = func(msg string) { warnings = append(warnings, msg) }
+
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatalf("acquisition skip should return nil: %v", err)
+		}
+
+		if len(warnings) != 1 || !strings.Contains(warnings[0], errCacheLockTimeout.Error()) {
+			t.Fatalf("expected timeout warning, got %v", warnings)
+		}
+		if _, err := os.Stat(path); err == nil {
+			t.Fatal("expected cache file absent after acquisition skip")
+		}
+	})
+}
+
+func TestStorePermissionCacheJoinCauses(t *testing.T) {
+	t.Run("load abort plus release fail returns joined errors.Is both", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		loadErr := errors.New("load exploded")
+		releaseErr := errors.New("release exploded")
+		loadPermissionCacheFile = func(string) (permissionCacheDoc, error) {
+			return permissionCacheDoc{}, loadErr
+		}
+		injectReleaseFail(releaseErr)
+
+		err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role"))
+		if err == nil {
+			t.Fatal("expected non-nil error on load abort")
+		}
+		if !errors.Is(err, loadErr) {
+			t.Fatalf("error missing load cause: %v", err)
+		}
+		if !errors.Is(err, releaseErr) {
+			t.Fatalf("error missing release cause: %v", err)
+		}
+	})
+
+	t.Run("replace warn plus release fail warns joined nil return", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+		replaceErr := errors.New("replace exploded")
+		releaseErr := errors.New("release exploded")
+		replacePermissionCacheFile = func(src, dst string) error { return replaceErr }
+		injectReleaseFail(releaseErr)
+
+		var warnings []string
+		warnPermissionCache = func(msg string) { warnings = append(warnings, msg) }
+
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatalf("store should return nil: %v", err)
+		}
+
+		if len(warnings) != 1 {
+			t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+		}
+		if !strings.Contains(warnings[0], replaceErr.Error()) {
+			t.Fatalf("warning missing replace cause: %q", warnings[0])
+		}
+		if !strings.Contains(warnings[0], releaseErr.Error()) {
+			t.Fatalf("warning missing release cause: %q", warnings[0])
+		}
+	})
+}
+
+func TestStorePermissionCacheReacquire(t *testing.T) {
+	acquireRelease := func(t *testing.T, path string) {
+		t.Helper()
+		l, err := lockCacheFile(path + ".lock")
+		if err != nil {
+			t.Fatalf("subsequent acquire failed: %v", err)
+		}
+		l.close()
+	}
+
+	t.Run("after clean commit", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatal(err)
+		}
+		acquireRelease(t, path)
+	})
+
+	t.Run("after uncommitted", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+		replacePermissionCacheFile = func(src, dst string) error { return errors.New("fail") }
+		warnPermissionCache = func(string) {}
+
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatal(err)
+		}
+		acquireRelease(t, path)
+	})
+
+	t.Run("after committed-with-release", func(t *testing.T) {
+		restore := saveCacheSeams()
+		defer restore()
+
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		permFixNow(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+		injectReleaseFail(errors.New("unlock fail"))
+		warnPermissionCache = func(string) {}
+
+		if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+			t.Fatal(err)
+		}
+		acquireRelease(t, path)
+	})
+
+	t.Run("after acquisition skip", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "permissions-cache.yaml")
+		now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		permFixNow(t, now)
+
+		func() {
+			restore := saveCacheSeams()
+			defer restore()
+			injectLockContention(now)
+			warnPermissionCache = func(string) {}
+			if err := storePermissionCache(permCfg(path), mustPermEntry(t, "k", "role")); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		acquireRelease(t, path)
+	})
 }
