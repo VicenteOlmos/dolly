@@ -1,15 +1,19 @@
 package dump
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -81,31 +85,55 @@ func mustStaging(t *testing.T) (dir, staging string) {
 	return dir, staging
 }
 
-func TestCleanupParallelArtifactsRemovesStagingAndMetadata(t *testing.T) {
+func seedPriorParallelDumpArtifacts(t *testing.T, dir string) map[string][]byte {
+	t.Helper()
+	prior := map[string][]byte{
+		filepath.Join(dir, "metadata.json"):        []byte(`{"schema":"public","generated_at":"2020-01-01T00:00:00Z","tables":[]}` + "\n"),
+		filepath.Join(dir, "schema.sql"):           []byte("-- prior schema\nCREATE TABLE users (id int);\n"),
+		filepath.Join(dir, "data", "prior.ndjson"): []byte(`{"id":1,"name":"prior"}` + "\n"),
+	}
+	for path, data := range prior {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return prior
+}
+
+func assertPriorArtifactsUnchanged(t *testing.T, prior map[string][]byte) {
+	t.Helper()
+	for path, want := range prior {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read prior artifact %q: %v", path, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("prior artifact %q changed:\n got %q\nwant %q", path, got, want)
+		}
+	}
+}
+
+func TestCleanupParallelArtifactsRemovesRunOwnedOnly(t *testing.T) {
 	dir, staging := mustStaging(t)
+	prior := seedPriorParallelDumpArtifacts(t, dir)
 	table := db.Table{Schema: "public", Name: "users", DataFile: strPtr("data/users.ndjson")}
 	if err := os.WriteFile(parallelStagingPath(staging, table), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	metaTmp := filepath.Join(dir, "metadata.json.tmp")
-	for _, path := range []string{metaTmp, filepath.Join(dir, "metadata.json")} {
-		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	final := tableDataPath(dir, table)
-	if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
+	if err := os.WriteFile(metaTmp, []byte(`{"schema":"public"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(final, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cleanupParallelArtifacts(dir, staging, metaTmp, []db.Table{table})
-	for _, path := range []string{staging, metaTmp, filepath.Join(dir, "metadata.json"), final} {
+	cleanupParallelArtifacts(staging, metaTmp)
+	for _, path := range []string{staging, metaTmp} {
 		if _, err := os.Stat(path); err == nil {
 			t.Fatalf("expected %q removed", path)
 		}
 	}
+	assertPriorArtifactsUnchanged(t, prior)
 }
 
 func TestPublishParallelArtifactsPublishesInPlanOrder(t *testing.T) {
@@ -302,7 +330,42 @@ func TestParallelSchedulerRespectsWorkerCap(t *testing.T) {
 	}
 }
 
-func TestParallelDumpFailureCleansArtifacts(t *testing.T) {
+func TestParallelDumpFailurePreservesPriorArtifacts(t *testing.T) {
+	tables := []db.Table{{Schema: "public", Name: "ok"}, {Schema: "public", Name: "fail"}}
+	assignDataFiles(tables)
+	dir, staging := mustStaging(t)
+	prior := seedPriorParallelDumpArtifacts(t, dir)
+	metaTmp := filepath.Join(dir, "metadata.json.tmp")
+	if err := os.WriteFile(metaTmp, []byte(`{"schema":"public"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withParallelStream(t, func(_ context.Context, _ querier, table db.Table, path string, _ RowTransform) error {
+		if table.Name == "fail" {
+			return errParallelTestFailure
+		}
+		return os.WriteFile(path, []byte("x"), 0o600)
+	})
+	withTestWorkerSessions(t, stubQuerier{})
+	plan := &ParallelPlan{
+		cfg: config{}, outputDir: dir, tables: tables, stagingDir: staging, metaTmpPath: metaTmp,
+		startedAt: time.Now(), coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	if err := plan.Run(context.Background()); !errors.Is(err, errParallelTestFailure) {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(metaTmp); err == nil {
+		t.Fatal("run-owned metadata tmp should be removed")
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, parallelStagingPrefix+"*")); len(matches) > 0 {
+		t.Fatalf("run-owned staging should be removed, found %v", matches)
+	}
+	if _, err := os.Stat(staging); err == nil {
+		t.Fatal("staging dir should be removed")
+	}
+	assertPriorArtifactsUnchanged(t, prior)
+}
+
+func TestParallelDumpFailureCleansRunOwnedArtifacts(t *testing.T) {
 	tables := []db.Table{{Schema: "public", Name: "ok"}, {Schema: "public", Name: "fail"}}
 	assignDataFiles(tables)
 	dir, staging := mustStaging(t)
@@ -321,8 +384,8 @@ func TestParallelDumpFailureCleansArtifacts(t *testing.T) {
 	if err := runParallelDump(context.Background(), plan, 2); !errors.Is(err, errParallelTestFailure) {
 		t.Fatalf("error = %v", err)
 	}
-	cleanupParallelArtifacts(plan.outputDir, plan.stagingDir, plan.metaTmpPath, plan.tables)
-	for _, path := range []string{metaTmp, filepath.Join(dir, "metadata.json")} {
+	cleanupParallelArtifacts(plan.stagingDir, plan.metaTmpPath)
+	for _, path := range []string{metaTmp, staging} {
 		if _, err := os.Stat(path); err == nil {
 			t.Fatalf("expected %q removed", path)
 		}
@@ -430,12 +493,204 @@ func TestSnapshotLifecycleFailureCancelsActiveWorkers(t *testing.T) {
 	if !errors.Is(err, errParallelTestCoordinatorClose) {
 		t.Fatalf("error = %v, want coordinator lifecycle failure", err)
 	}
-	cleanupParallelArtifacts(plan.outputDir, plan.stagingDir, plan.metaTmpPath, plan.tables)
-	for _, path := range []string{metaTmp, filepath.Join(dir, "metadata.json")} {
+	cleanupParallelArtifacts(plan.stagingDir, plan.metaTmpPath)
+	for _, path := range []string{metaTmp, staging} {
 		if _, statErr := os.Stat(path); statErr == nil {
 			t.Fatalf("expected %q removed", path)
 		}
 	}
+}
+
+func TestParallelDumpCleanupDirProbePreservesDestination(t *testing.T) {
+	tables := []db.Table{{Schema: "public", Name: "fail"}}
+	assignDataFiles(tables)
+	dir, staging := mustStaging(t)
+	prior := seedPriorParallelDumpArtifacts(t, dir)
+	metaTmp := filepath.Join(dir, "metadata.json.tmp")
+	if err := os.WriteFile(metaTmp, []byte(`{"schema":"public"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var probeOnce sync.Once
+	oldHook := parallelTestHooks.onCleanupStart
+	parallelTestHooks.onCleanupStart = func(stagingDir, tmpPath string) {
+		probeOnce.Do(func() {
+			if stagingDir == "" || tmpPath == "" {
+				t.Error("cleanup missing run-owned paths")
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			for _, want := range []string{"metadata.json", "schema.sql", "data"} {
+				if !containsString(names, want) {
+					t.Fatalf("destination probe missing %q during cleanup: %v", want, names)
+				}
+			}
+			assertPriorArtifactsUnchanged(t, prior)
+		})
+	}
+	t.Cleanup(func() { parallelTestHooks.onCleanupStart = oldHook })
+
+	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) error {
+		return errParallelTestFailure
+	})
+	withTestWorkerSessions(t, stubQuerier{})
+	plan := &ParallelPlan{
+		cfg: config{}, outputDir: dir, tables: tables, stagingDir: staging, metaTmpPath: metaTmp,
+		startedAt: time.Now(), coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	if err := plan.Run(context.Background()); !errors.Is(err, errParallelTestFailure) {
+		t.Fatalf("error = %v", err)
+	}
+	assertPriorArtifactsUnchanged(t, prior)
+}
+
+func TestParallelDumpCancelPreservesPriorArtifacts(t *testing.T) {
+	tables := []db.Table{{Schema: "public", Name: "blocked"}}
+	assignDataFiles(tables)
+	dir, staging := mustStaging(t)
+	prior := seedPriorParallelDumpArtifacts(t, dir)
+	metaTmp := filepath.Join(dir, "metadata.json.tmp")
+	if err := os.WriteFile(metaTmp, []byte(`{"schema":"public"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	withParallelStream(t, func(ctx context.Context, _ querier, _ db.Table, _ string, _ RowTransform) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	withTestWorkerSessions(t, stubQuerier{})
+	plan := &ParallelPlan{
+		cfg: config{}, outputDir: dir, tables: tables, stagingDir: staging, metaTmpPath: metaTmp,
+		startedAt: time.Now(), coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- plan.Run(ctx)
+	}()
+	<-started
+	cancel()
+	if err := <-errCh; err == nil {
+		t.Fatal("expected cancelled parallel dump error")
+	}
+	assertPriorArtifactsUnchanged(t, prior)
+	if _, err := os.Stat(metaTmp); err == nil {
+		t.Fatal("run-owned metadata tmp should be removed after cancel cleanup")
+	}
+}
+
+func TestParallelDumpCleanupSIGKILLPreservesDestination(t *testing.T) {
+	if os.Getenv("DOLLY_PARALLEL_CLEANUP_SIGKILL_CHILD") == "1" {
+		parallelDumpCleanupSIGKILLChild(t)
+		return
+	}
+
+	dir := t.TempDir()
+	prior := seedPriorParallelDumpArtifacts(t, dir)
+	readyFile := filepath.Join(dir, ".cleanup-ready")
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestParallelDumpCleanupSIGKILLPreservesDestination$", "-test.count=1")
+	cmd.Env = append(os.Environ(),
+		"DOLLY_PARALLEL_CLEANUP_SIGKILL_CHILD=1",
+		"DOLLY_PARALLEL_CLEANUP_DIR="+dir,
+		"DOLLY_PARALLEL_CLEANUP_READY="+readyFile,
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyFile); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(readyFile); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatal("child never signaled cleanup mid-boundary")
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitErr := cmd.Wait()
+	if waitErr == nil {
+		t.Fatal("expected child terminated by signal")
+	}
+
+	assertPriorArtifactsUnchanged(t, prior)
+	if matches, _ := filepath.Glob(filepath.Join(dir, parallelStagingPrefix+"*")); len(matches) > 0 {
+		t.Fatalf("staging should be removed before SIGKILL boundary, found %v", matches)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "metadata.json.tmp")); err == nil {
+		t.Log("run-owned metadata tmp may remain after SIGKILL mid-cleanup")
+	}
+}
+
+func parallelDumpCleanupSIGKILLChild(t *testing.T) {
+	dir := os.Getenv("DOLLY_PARALLEL_CLEANUP_DIR")
+	readyFile := os.Getenv("DOLLY_PARALLEL_CLEANUP_READY")
+	if dir == "" || readyFile == "" {
+		t.Fatal("missing child env")
+	}
+
+	tables := []db.Table{{Schema: "public", Name: "fail"}}
+	assignDataFiles(tables)
+	staging, err := os.MkdirTemp(dir, parallelStagingPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaTmp := filepath.Join(dir, "metadata.json.tmp")
+	if err := os.WriteFile(metaTmp, []byte(`{"schema":"public"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldRemoved := parallelTestHooks.onCleanupStagingRemoved
+	parallelTestHooks.onCleanupStagingRemoved = func() {
+		if err := os.WriteFile(readyFile, []byte("ready"), 0o600); err != nil {
+			os.Exit(2)
+		}
+		select {}
+	}
+	defer func() { parallelTestHooks.onCleanupStagingRemoved = oldRemoved }()
+
+	oldStream := parallelStreamTable
+	parallelStreamTable = func(context.Context, querier, db.Table, string, RowTransform) error {
+		return errParallelTestFailure
+	}
+	defer func() { parallelStreamTable = oldStream }()
+
+	oldOpener := parallelWorkerSessionOpener
+	parallelWorkerSessionOpener = func(context.Context, *sql.DB, string) (querier, func() error, error) {
+		return stubQuerier{}, func() error { return nil }, nil
+	}
+	defer func() { parallelWorkerSessionOpener = oldOpener }()
+
+	plan := &ParallelPlan{
+		cfg: config{}, outputDir: dir, tables: tables, stagingDir: staging, metaTmpPath: metaTmp,
+		startedAt: time.Now(), coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	_ = plan.Run(context.Background())
+	t.Fatal("expected child blocked until SIGKILL")
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestParallelDumpJoinsWorkerCloseAndCoordinatorCloseErrors(t *testing.T) {
