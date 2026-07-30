@@ -2,9 +2,39 @@
 
 All notable operator-facing changes to Dolly are documented here.
 
-## Unreleased
+## [0.3.0](https://github.com/VicenteOlmos/dolly/compare/v0.2.0...0af60f0) — Pending
 
-_No unreleased changes._
+### Runtime safety
+
+- **Local secret files** — rejects world-readable `config.jsonc` and `.env` before loading credentials; tightens owner-only permissions when possible (#55).
+- **Permission cache** — serializes concurrent clone preflight cache updates; persists cache atomically with portable file locking (#55).
+- **DSN parsing** — preserves configured statement timeouts for libpq keyword and URI connection strings (#55).
+- **Command timeouts** — enforces bounded timeouts on connection commands (#55).
+- **TUI worker delivery** — cancelled dump, restore, and clone jobs exit without blocked sends; progress backpressure drops safely under saturated channels (#55).
+
+### Clone safety
+
+- **Schema scope** — explicit `--schemas` overrides saved profile defaults; selected schemas apply to schema-replay and logical-stream planning (#56).
+- **Template SkipCreate** — rejects template clone when `clone.skip_create` is set (#56).
+- **Physical backup targets** — accepts preflight-approved empty target directories; rejects non-empty targets; forwards TLS parameters to `pg_basebackup` (#56).
+- **Sequence monotonicity** — schema-replay restores sequences once; logical-stream preserves monotonic sequence values after copied rows (#56).
+- **TUI clone targets** — refreshes target connection when strategy changes; warns when sanitization cannot apply to the selected strategy (#56).
+
+### Dump and restore safety
+
+- **Multi-schema dump** — selects multiple schemas in dump scope (#57).
+- **Empty artifact guard** — fails closed when dump would produce empty output (#57).
+- **Deterministic subsets** — capped child-table subset closure is repeatable across runs (#57).
+- **Sequence capture and sync** — fails closed on sequence capture errors; sequence synchronization never moves values backward (#57).
+- **Parallel dump artifacts** — preserves prior parallel dump directory contents on publish failure (#57).
+- **Partial-state manifest** — retains `.dolly-restore-partial-state.json` across parallel restore retries (#57).
+- **Schema capture** — publishes `schema.sql` via atomic replacement; orphaned temps isolated on interruption (#57).
+- **Trusted schema replay** — replays trusted `schema.sql` in a single transaction with rollback on statement error or cancellation (#57).
+
+### Verification
+
+- Windows amd64 build and test-compile coverage for runtime, clone, and dump/restore safety paths (#55, #56, #57).
+- PostgreSQL 16 integration coverage for permission cache concurrency, clone strategy contracts, parallel artifact preservation, partial-state retention, atomic schema capture, and transactional schema replay (#55, #56, #57).
 
 ## [0.2.0](https://github.com/VicenteOlmos/dolly/releases/tag/v0.2.0) — 2026-07-28
 
