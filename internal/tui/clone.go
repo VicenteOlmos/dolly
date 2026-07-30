@@ -123,6 +123,7 @@ func (c *cloneScreen) cycleStrategy(delta int) {
 		next = 0
 	}
 	c.draft.Strategy = cloneStrategyChoices[next]
+	c.resolveTargetDSN()
 }
 
 // cycleTargetSource cycles through target source: Current → Saved → Manual.
@@ -141,28 +142,7 @@ func (c *cloneScreen) cycleTargetSource(delta int) {
 
 // resolveTargetDSN sets TargetDSN based on the current TargetSource.
 func (c *cloneScreen) resolveTargetDSN() {
-	switch c.draft.TargetSource {
-	case TargetSourceSaved:
-		// If no profile is selected yet, try to pick the first one.
-		if c.draft.TargetProfileName == "" && c.store != nil {
-			profiles, err := c.store.List()
-			if err == nil && len(profiles) > 0 {
-				c.draft.TargetProfileName = profiles[0].Name
-				c.draft.TargetDSN = profileDSN(profiles[0])
-			}
-		} else if c.draft.TargetProfileName != "" && c.store != nil {
-			prof, err := c.store.Get(c.draft.TargetProfileName)
-			if err == nil {
-				c.draft.TargetDSN = profileDSN(prof)
-			}
-		}
-	case TargetSourceCurrent:
-		if c.getConnDSN != nil {
-			c.draft.TargetDSN = c.getConnDSN()
-		}
-	case TargetSourceManual:
-		// Keep whatever the user typed.
-	}
+	resolveCloneDraftTargetDSN(c.draft, c.getConnDSN, c.store)
 }
 
 // cycleSavedProfile advances TargetProfileName through saved profiles.

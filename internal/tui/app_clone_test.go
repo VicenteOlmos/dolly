@@ -431,3 +431,62 @@ func TestCloneSavedProfileDSNMasked(t *testing.T) {
 		t.Fatalf("view missing masked password:\n%s", view)
 	}
 }
+
+func TestAppCloneUnsanitizedWarningStrategies(t *testing.T) {
+	strategies := []string{"template", "logical-stream", "physical-backup"}
+	for _, strategy := range strategies {
+		t.Run(strategy, func(t *testing.T) {
+			t.Parallel()
+			runner := &schemasRecordingCloneRunner{}
+			app := cloneAppWithSession(t, runner)
+			app.cfg.Sanitization.Enabled = true
+			app.clone.Strategy = strategy
+
+			app = drainUpdate(app, ctrlEnter())
+
+			log := strings.Join(app.cloneLog, "\n")
+			if !strings.Contains(log, "warning: clone will copy unsanitized data") {
+				t.Fatalf("cloneLog missing unsanitized warning:\n%s", log)
+			}
+			if !strings.Contains(log, "strategy="+strategy) {
+				t.Fatalf("cloneLog missing strategy=%s:\n%s", strategy, log)
+			}
+			if strings.Contains(log, "secret") || strings.Contains(log, ":p@") {
+				t.Fatalf("cloneLog leaked credentials:\n%s", log)
+			}
+		})
+	}
+}
+
+func TestAppCloneSchemaReplayNoUnsanitizedWarning(t *testing.T) {
+	t.Parallel()
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	app.cfg.Sanitization.Enabled = true
+	app.clone.Strategy = "schema-replay"
+
+	app = drainUpdate(app, ctrlEnter())
+
+	log := strings.Join(app.cloneLog, "\n")
+	if strings.Contains(log, "warning: clone will copy unsanitized data") {
+		t.Fatalf("schema-replay with sanitization should not warn:\n%s", log)
+	}
+}
+
+func TestAppCloneStrategyCycleRefreshesTargetBeforeStart(t *testing.T) {
+	t.Parallel()
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	app.clone.TargetSource = TargetSourceCurrent
+	app.clone.TargetDSN = "postgres://stale@old-host/wrong"
+	cs := enterCloneForm(app)
+	cs.formField = 2
+	cs.cycleStrategy(1) // schema-replay -> template
+
+	app = drainUpdate(app, ctrlEnter())
+
+	want := app.conn.DSN()
+	if runner.lastDraft.TargetDSN != want {
+		t.Fatalf("runner TargetDSN = %q, want refreshed %q", runner.lastDraft.TargetDSN, want)
+	}
+}
