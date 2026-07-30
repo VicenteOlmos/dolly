@@ -92,13 +92,10 @@ func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inpu
 				Total:   ev.Total,
 				Elapsed: ev.Elapsed,
 			}
-			select {
-			case ch <- restoreProgressMsg{line: line, ev: localEv}:
-			case <-ctx.Done():
-			}
+			sendProgress(ctx, ch, restoreProgressMsg{line: line, ev: localEv})
 		}
 		err := runner.Run(ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress)
-		ch <- restoreResultMsg{err: err}
+		deliverResult(ctx, ch, restoreResultMsg{err: err})
 	}()
 	return waitRestoreCmd(ch), ch, cancel
 }
@@ -107,7 +104,7 @@ func waitRestoreCmd(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
-			return restoreResultMsg{err: fmt.Errorf("restore channel closed")}
+			return nil
 		}
 		return msg
 	}
