@@ -71,16 +71,16 @@ func TestApplySchemaSQLUsesOnErrorStop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(gotArgs) != 5 {
+	if len(gotArgs) != 6 {
 		t.Fatalf("args = %v", gotArgs)
 	}
-	if !reflect.DeepEqual(gotArgs[:2], []string{"-v", "ON_ERROR_STOP=1"}) {
-		t.Fatalf("args = %v, want ON_ERROR_STOP first", gotArgs)
+	if !reflect.DeepEqual(gotArgs[:3], []string{"-v", "ON_ERROR_STOP=1", "--single-transaction"}) {
+		t.Fatalf("args = %v, want ON_ERROR_STOP and --single-transaction first", gotArgs)
 	}
-	if gotArgs[2] != "-f" {
+	if gotArgs[3] != "-f" {
 		t.Fatalf("args = %v, want -f", gotArgs)
 	}
-	if strings.Contains(gotArgs[4], "secret") {
+	if strings.Contains(gotArgs[5], "secret") {
 		t.Fatalf("clean DSN leaked password: %v", gotArgs)
 	}
 	if !containsString(gotEnv, "PGPASSWORD=secret") {

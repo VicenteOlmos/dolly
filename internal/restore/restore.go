@@ -372,7 +372,7 @@ func applySchemaSQL(ctx context.Context, dsn, inputDir string) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"-v", "ON_ERROR_STOP=1", "-f", tmpPath, cleanDSN}
+	args := []string{"-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", tmpPath, cleanDSN}
 	env := stripSensitiveEnv(os.Environ())
 	if password != "" {
 		env = append(env, "PGPASSWORD="+password)
