@@ -844,6 +844,8 @@ func TestRestoreInvokesSequenceRestore(t *testing.T) {
 
 	// Sequences run inside the main transaction before commit.
 	mock.ExpectQuery(`SELECT tbl_ns.nspname, tbl.relname, a.attname`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column"}).AddRow("public", "users", "id"))
+	// Monotonic guard: current value (1) < dump value (99) → proceed.
+	mock.ExpectQuery(`SELECT last_value, is_called`).WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(1, true))
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 99, true\)`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
@@ -909,6 +911,8 @@ func TestRestoreSequenceFailureRollsBackMainTransaction(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"\."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT tbl_ns.nspname, tbl.relname, a.attname`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column"}).AddRow("public", "users", "id"))
+	// Monotonic guard: current value (1) < dump value (99) → proceed.
+	mock.ExpectQuery(`SELECT last_value, is_called`).WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(1, true))
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 99, true\)`).
 		WillReturnError(errors.New("setval denied"))
 	mock.ExpectRollback()

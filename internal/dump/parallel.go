@@ -415,9 +415,13 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 	var sequences []SequenceState
 	if !cfg.skipSequences {
 		seqs, err := captureSequences(ctx, q, seqSchemas)
-		if err == nil {
-			sequences = seqs
+		if err != nil {
+			return nil, nil, fmt.Errorf("capture sequences: %w", err)
 		}
+		if err := guardSequenceScope(seqs, cfg.schemas); err != nil {
+			return nil, nil, fmt.Errorf("capture sequences: %w", err)
+		}
+		sequences = seqs
 	}
 	if err := guardSelectedTables(tables, cfg.schemas); err != nil {
 		return nil, nil, err

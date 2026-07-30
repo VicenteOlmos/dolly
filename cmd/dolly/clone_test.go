@@ -188,7 +188,7 @@ func TestResolveCloneSchemasPrecedence(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.DefaultConfig()
 	cfg.Clone.Schemas = []string{"cfg_a", "cfg_b"}
-	stubCloneListSchemaNames(t, []string{"disc_a", "disc_b"}, nil)
+	stubCloneListSchemaNames(t, nil, nil)
 
 	tests := []struct {
 		name       string
@@ -200,14 +200,14 @@ func TestResolveCloneSchemasPrecedence(t *testing.T) {
 		{name: "prompt overrides config", flag: nil, fromPrompt: []string{"prompt_only"}, want: []string{"prompt_only"}},
 		{name: "config when no flag or prompt", flag: nil, fromPrompt: nil, want: []string{"cfg_a", "cfg_b"}},
 		{name: "prompt when no flag or config", flag: nil, fromPrompt: []string{"prompt_a"}, want: []string{"prompt_a"}},
-		{name: "discovery when all empty", flag: nil, fromPrompt: nil, want: []string{"disc_a", "disc_b"}},
+		{name: "public default when all empty", flag: nil, fromPrompt: nil, want: []string{"public"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			testCfg := config.DefaultConfig()
 			testCfg.Clone.Schemas = cfg.Clone.Schemas
-			if tt.name == "prompt when no flag or config" || tt.name == "discovery when all empty" {
+			if tt.name == "prompt when no flag or config" || tt.name == "public default when all empty" {
 				testCfg.Clone.Schemas = nil
 			}
 			got, err := resolveCloneSchemas(ctx, "postgres://u:p@h/db", tt.flag, testCfg, tt.fromPrompt)
@@ -223,6 +223,61 @@ func TestResolveCloneSchemasPrecedence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunCloneFFSchemasOverrideSavedProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	cfg := config.DefaultConfig()
+	cfg.SaveConnections = true
+	store, err := connections.OpenStore(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(connections.Connection{
+		Name: "prod", Host: "h-a", Port: "5432", Database: "db_a",
+		User: "u", Password: "p", Schemas: []string{"saved_only"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	defer func() { cloneRun = origRun }()
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		c := config.DefaultConfig()
+		c.SaveConnections = true
+		return c, nil
+	}
+	defer func() { cloneLoadConfig = origLoadConfig }()
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	defer func() { cloneIsTerminal = origIsTerminal }()
+
+	t.Chdir(dir)
+
+	err = runClone([]string{"-ff", "--connection", "prod", "--schemas", "cli_only"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(capturedOpts.SourceDSN, "h-a:5432/db_a") {
+		t.Fatalf("SourceDSN = %q", capturedOpts.SourceDSN)
+	}
+	got := dump.InspectSchemas(capturedOpts.DumpOpts...)
+	if len(got) != 1 || got[0] != "cli_only" {
+		t.Fatalf("dump schemas = %v, want [cli_only] (CLI flag overrides saved profile)", got)
+	}
+	rs := restore.InspectSchemas(capturedOpts.RestoreOpts...)
+	if len(rs) != 1 || rs[0] != "cli_only" {
+		t.Fatalf("restore schemas = %v, want [cli_only]", rs)
 	}
 }
 
@@ -339,9 +394,10 @@ func TestRunCloneFFDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runClone: %v", err)
 	}
+	// Default when no flag, no config, no profile: public
 	got := dump.InspectSchemas(capturedOpts.DumpOpts...)
-	if len(got) != 2 || got[0] != "app" || got[1] != "billing" {
-		t.Fatalf("dump schemas = %v, want discovered [app billing]", got)
+	if len(got) != 1 || got[0] != "public" {
+		t.Fatalf("dump schemas = %v, want [public] (default schema)", got)
 	}
 }
 
@@ -386,8 +442,11 @@ func TestRunCloneFFDefaults(t *testing.T) {
 	if capturedOpts.DumpDir != "" {
 		t.Fatalf("DumpDir = %q, want empty", capturedOpts.DumpDir)
 	}
-	if len(capturedOpts.RestoreOpts) != 0 {
-		t.Fatalf("expected no RestoreOpts, got %d", len(capturedOpts.RestoreOpts))
+	if len(capturedOpts.RestoreOpts) != 1 {
+		t.Fatalf("expected 1 RestoreOpts (default schemas), got %d", len(capturedOpts.RestoreOpts))
+	}
+	if got := dump.InspectSchemas(capturedOpts.DumpOpts...); len(got) != 1 || got[0] != "public" {
+		t.Fatalf("dump schemas = %v, want [public]", got)
 	}
 }
 
@@ -591,8 +650,8 @@ func TestRunCloneRestoreOptionsWired(t *testing.T) {
 	if len(capturedOpts.RestoreOpts) == 0 {
 		t.Fatal("expected RestoreOpts to be set")
 	}
-	if len(capturedOpts.RestoreOpts) != 2 {
-		t.Fatalf("expected 2 RestoreOpts, got %d", len(capturedOpts.RestoreOpts))
+	if len(capturedOpts.RestoreOpts) != 3 {
+		t.Fatalf("expected 3 RestoreOpts (schemas + replace + skip), got %d", len(capturedOpts.RestoreOpts))
 	}
 }
 

@@ -113,14 +113,14 @@ func resolveCloneSchemas(ctx context.Context, sourceDSN string, flagSchemas []st
 	if len(flagSchemas) > 0 {
 		return append([]string(nil), flagSchemas...), nil
 	}
-	// Interactive prompt (or saved-connection schemas) override config; -ff keeps flag > config > discovery.
 	if len(fromPrompt) > 0 {
 		return append([]string(nil), fromPrompt...), nil
 	}
 	if cfg != nil && len(cfg.Clone.Schemas) > 0 {
 		return append([]string(nil), cfg.Clone.Schemas...), nil
 	}
-	return cloneListSchemaNames(ctx, sourceDSN)
+	// Default to public — matches resolveEffectiveDumpSchemas contract.
+	return []string{"public"}, nil
 }
 
 func logCloneSchemas(schemas []string) {
@@ -276,7 +276,9 @@ func runClone(args []string) (err error) {
 	if err != nil {
 		return fmt.Errorf("resolve schemas: %w", err)
 	}
-	logCloneSchemas(schemas)
+	if !flags.JSON {
+		logCloneSchemas(schemas)
+	}
 
 	return runCloneExecute(ctx, flags, cfg, sourceDSN, cloneName, targetURL, schemas, strategy)
 }
@@ -331,7 +333,10 @@ func runCloneWithSource(ctx context.Context, flags cloneFlags, cfg *config.Confi
 		strategy = flags.Strategy
 	}
 
-	schemas := append([]string(nil), conn.Schemas...)
+	schemas := append([]string(nil), flags.Schemas...) // CLI --schemas first
+	if len(schemas) == 0 {
+		schemas = append([]string(nil), conn.Schemas...) // then saved profile
+	}
 	if len(schemas) == 0 {
 		var err error
 		schemas, err = resolveCloneSchemas(ctx, sourceDSN, flags.Schemas, cfg, nil)
@@ -339,7 +344,9 @@ func runCloneWithSource(ctx context.Context, flags cloneFlags, cfg *config.Confi
 			return fmt.Errorf("resolve schemas: %w", err)
 		}
 	}
-	logCloneSchemas(schemas)
+	if !flags.JSON {
+		logCloneSchemas(schemas)
+	}
 
 	return runCloneExecute(ctx, flags, cfg, sourceDSN, cloneName, targetURL, schemas, strategy)
 }
