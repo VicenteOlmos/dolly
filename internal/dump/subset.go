@@ -210,8 +210,16 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 		}
 
 		var queue []queueItem
-		for table, set := range visited {
-			for _, pk := range set.vals {
+		// Deterministic queue initialization: sort visited tables by key before
+		// adding their PKs. Without this, Go map iteration randomness causes
+		// different FK closure traversal order across repeated runs.
+		visitedKeys := make([]string, 0, len(visited))
+		for k := range visited {
+			visitedKeys = append(visitedKeys, k)
+		}
+		sort.Strings(visitedKeys)
+		for _, table := range visitedKeys {
+			for _, pk := range visited[table].vals {
 				queue = append(queue, queueItem{table: table, pk: pk, depth: 0})
 			}
 		}
@@ -884,6 +892,17 @@ func expandPercentClosure(
 		levelTables[table] = struct{}{}
 	}
 
+	// Deterministic level iteration: collect and sort level table keys
+	// so that parent-to-child edge exploration is repeatable.
+	getSortedLevelKeys := func(m map[string]struct{}) []string {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys
+	}
+
 	for depth := 0; depth < limits.MaxDepth && len(levelTables) > 0; depth++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -897,7 +916,7 @@ func expandPercentClosure(
 		addedThisLevel := make(map[string]struct{})
 		childSampled := make(map[string]struct{})
 
-		for table := range levelTables {
+		for _, table := range getSortedLevelKeys(levelTables) {
 			tbl := byName[table]
 			childPK, err := pkColumn(table)
 			if err != nil {
@@ -949,7 +968,14 @@ func expandPercentClosure(
 			}
 		}
 
-		for parentTable := range expandParents {
+		// Deterministic parent traversal: sort expandParents keys so that
+		// child-per-table sampling order is repeatable across runs.
+		expandKeys := make([]string, 0, len(expandParents))
+		for k := range expandParents {
+			expandKeys = append(expandKeys, k)
+		}
+		sort.Strings(expandKeys)
+		for _, parentTable := range expandKeys {
 			parentPKs := visited[parentTable].vals
 			if len(parentPKs) == 0 {
 				continue

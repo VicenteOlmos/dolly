@@ -4,6 +4,7 @@ package dump
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -314,6 +315,54 @@ func TestIntegrationSubsetDumpMaxTablesExceeded(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
 		t.Fatal("metadata.json should not be promoted on subset limit failure")
+	}
+}
+
+func TestIntegrationSubsetCappedChildDeterministicRepeated(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	ordersTable := fmt.Sprintf("det_orders_%d", suffix)
+	itemsTable := fmt.Sprintf("det_items_%d", suffix)
+
+	for _, q := range []string{
+		fmt.Sprintf(`CREATE TABLE %s (id SERIAL PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`, ordersTable),
+		fmt.Sprintf(`CREATE TABLE %s (id SERIAL PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES %s(id), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`, itemsTable, ordersTable),
+	} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS %s, %s CASCADE`, itemsTable, ordersTable))
+	})
+
+	var orderID int64
+	if err := conn.QueryRowContext(ctx, fmt.Sprintf(`INSERT INTO %s DEFAULT VALUES RETURNING id`, ordersTable)).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (order_id) VALUES ($1)`, itemsTable), orderID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	const capPerTable = 2
+	tables := ordersItemsSubsetTables(ordersTable, itemsTable)
+	cfg := cappedPercentSubsetConfig(capPerTable)
+	plan1, err := planSubset(ctx, conn, tables, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan2, err := planSubset(ctx, conn, tables, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(canonicalSubsetPlanFingerprint(plan1), canonicalSubsetPlanFingerprint(plan2)) {
+		t.Fatal("plan fingerprints differ on PG16")
+	}
+	if len(plan1.tables[tableKey("public", itemsTable)].pkValues) != capPerTable {
+		t.Fatalf("%s pk count = %d, want %d", itemsTable, len(plan1.tables[tableKey("public", itemsTable)].pkValues), capPerTable)
 	}
 }
 
