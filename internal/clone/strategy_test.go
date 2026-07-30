@@ -1402,6 +1402,27 @@ func TestCopyStreamCleanupUsesBoundedIndependentContext(t *testing.T) {
 	}
 }
 
+func expectRestoreOneSequence(
+	t *testing.T,
+	mock sqlmock.Sqlmock,
+	tgtLast int64,
+	tgtCalled bool,
+	setvalSQL string,
+) {
+	t.Helper()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT increment_by FROM pg_sequences`).
+		WillReturnRows(sqlmock.NewRows([]string{"increment_by"}).AddRow(1))
+	mock.ExpectExec(`ALTER SEQUENCE`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT last_value, is_called`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(tgtLast, tgtCalled))
+	if setvalSQL != "" {
+		mock.ExpectExec(setvalSQL).WillReturnResult(sqlmock.NewResult(1, 1))
+	}
+	mock.ExpectCommit()
+}
+
 func TestRestoreSequences(t *testing.T) {
 	srcDB, srcMock, err := sqlmock.New()
 	if err != nil {
@@ -1422,10 +1443,8 @@ func TestRestoreSequences(t *testing.T) {
 	srcMock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
 		WillReturnRows(rows)
 
-	tgtMock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 42, true\)`).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	tgtMock.ExpectExec(`SELECT setval\('"app"\."events_seq"'::regclass, 100, true\)`).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"public"\."users_id_seq"'::regclass, 42, true\)`)
+	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"app"\."events_seq"'::regclass, 100, true\)`)
 
 	err = restoreSequences(context.Background(), srcDB, tgtDB)
 	if err != nil {
@@ -1483,8 +1502,16 @@ func TestRestoreSequencesSetvalError(t *testing.T) {
 	srcMock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
 		WillReturnRows(rows)
 
+	tgtMock.ExpectBegin()
+	tgtMock.ExpectQuery(`SELECT increment_by FROM pg_sequences`).
+		WillReturnRows(sqlmock.NewRows([]string{"increment_by"}).AddRow(1))
+	tgtMock.ExpectExec(`ALTER SEQUENCE`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	tgtMock.ExpectQuery(`SELECT last_value, is_called`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(1, false))
 	tgtMock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 42, true\)`).
 		WillReturnError(errors.New("permission denied"))
+	tgtMock.ExpectRollback()
 
 	err = restoreSequences(context.Background(), srcDB, tgtDB)
 	if err == nil {
@@ -1515,9 +1542,7 @@ func TestRestoreSequencesQuotedNames(t *testing.T) {
 	srcMock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
 		WillReturnRows(rows)
 
-	// The SQL must use a safely quoted string literal with ::regclass, not bare identifiers.
-	tgtMock.ExpectExec(`SELECT setval\('"my""schema"\."user''s_seq"'::regclass, 7, true\)`).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"my""schema"\."user''s_seq"'::regclass, 7, true\)`)
 
 	err = restoreSequences(context.Background(), srcDB, tgtDB)
 	if err != nil {
@@ -1550,8 +1575,7 @@ func TestRestoreSequencesNeverCalled(t *testing.T) {
 	srcMock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
 		WillReturnRows(rows)
 
-	tgtMock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 1, false\)`).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	expectRestoreOneSequence(t, tgtMock, 1, false, "")
 
 	err = restoreSequences(context.Background(), srcDB, tgtDB)
 	if err != nil {
@@ -1563,6 +1587,38 @@ func TestRestoreSequencesNeverCalled(t *testing.T) {
 	if err := tgtMock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("target unmet expectations: %v", err)
 	}
+}
+
+func runRestoreSequencesCase(t *testing.T, tgtLast int64, tgtCalled bool, setvalSQL string) {
+	t.Helper()
+	srcDB, srcMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcDB.Close()
+	tgtDB, tgtMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tgtDB.Close()
+	srcMock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
+			AddRow("public", "users_id_seq", 10, 1))
+	expectRestoreOneSequence(t, tgtMock, tgtLast, tgtCalled, setvalSQL)
+	if err := restoreSequences(context.Background(), srcDB, tgtDB); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if err := srcMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("source: %v", err)
+	}
+	if err := tgtMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("target: %v", err)
+	}
+}
+
+func TestSequenceMonotonicRestore(t *testing.T) {
+	runRestoreSequencesCase(t, 10, false, `SELECT setval\('"public"\."users_id_seq"'::regclass, 10, true\)`)
+	runRestoreSequencesCase(t, 20, true, "")
 }
 
 func TestQuoteLiteral(t *testing.T) {
@@ -1642,8 +1698,8 @@ func TestSchemaReplayStrategyProgressEventOrdering(t *testing.T) {
 	if events[0].Current != 1 {
 		t.Fatalf("event[0] Current = %d, want 1", events[0].Current)
 	}
-	if events[0].Total != 5 {
-		t.Fatalf("event[0] Total = %d, want 5", events[0].Total)
+	if events[0].Total != 4 {
+		t.Fatalf("event[0] Total = %d, want 4", events[0].Total)
 	}
 	if events[0].Elapsed <= 0 {
 		t.Fatalf("event[0] Elapsed = %v, want > 0", events[0].Elapsed)
@@ -1960,7 +2016,7 @@ func TestSchemaReplayStrategyNoDropWhenSkipCreate(t *testing.T) {
 	}
 }
 
-func TestSchemaReplayStrategyInvokesRestoreSequences(t *testing.T) {
+func TestSequenceMonotonicSchemaReplayOnce(t *testing.T) {
 	origLookPath := lookPath
 	lookPath = func(file string) (string, error) { return "/usr/bin/" + file, nil }
 	defer func() { lookPath = origLookPath }()
@@ -1981,16 +2037,18 @@ func TestSchemaReplayStrategyInvokesRestoreSequences(t *testing.T) {
 	}
 	defer func() { dumpFunc = origDump }()
 
+	var restoreCalls int
 	origRestore := restoreFunc
 	restoreFunc = func(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...restore.Option) error {
+		restoreCalls++
 		return nil
 	}
 	defer func() { restoreFunc = origRestore }()
 
-	var restoreSeqCalled bool
+	var restoreSeqCalls int
 	origRestoreSeq := restoreSequencesFunc
 	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error {
-		restoreSeqCalled = true
+		restoreSeqCalls++
 		return nil
 	}
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
@@ -2007,7 +2065,10 @@ func TestSchemaReplayStrategyInvokesRestoreSequences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !restoreSeqCalled {
-		t.Fatal("restoreSequencesFunc was not called in schema-replay strategy")
+	if restoreCalls != 1 {
+		t.Fatalf("restoreFunc calls = %d, want 1", restoreCalls)
+	}
+	if restoreSeqCalls != 0 {
+		t.Fatalf("restoreSequencesFunc calls = %d, want 0 (restore.Restore already restores sequences)", restoreSeqCalls)
 	}
 }

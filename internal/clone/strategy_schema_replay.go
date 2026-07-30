@@ -32,7 +32,7 @@ func (s *SchemaReplayStrategy) Execute(ctx context.Context, opts Options) error 
 	}
 
 	startedAt := time.Now()
-	totalSteps := 5
+	totalSteps := 4
 
 	targetDSN := opts.TargetDSN
 	var err error
@@ -185,19 +185,6 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 	})
 	if err := restoreFunc(ctx, tgtDB, dumpDir, opts.RestoreOpts...); err != nil {
 		return fmt.Errorf("restore: %w", err)
-	}
-
-	// Restore sequence values so serial/identity-backed tables won't duplicate IDs.
-	step++
-	reportProgressEvent(opts, ProgressEvent{
-		Phase:   "restoring_sequences",
-		Step:    "restoring sequences",
-		Current: step,
-		Total:   totalSteps,
-		Elapsed: time.Since(startedAt),
-	})
-	if err := restoreSequencesFunc(ctx, srcDB, tgtDB); err != nil {
-		return fmt.Errorf("restore sequences: %w", err)
 	}
 
 	return nil

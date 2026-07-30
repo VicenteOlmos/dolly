@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/VicenteOlmos/dolly/internal/db"
 
@@ -719,5 +721,135 @@ func TestRunCloneWithDotenvProfile(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("target row count = %d, want 1", count)
+	}
+}
+
+func openSeqPair(t *testing.T) (srcDB, tgtDB *sql.DB) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("short")
+	}
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+	if !strings.Contains(dsn, "sslmode=") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + "sslmode=disable"
+	}
+	ctx := context.Background()
+	names := [2]string{
+		fmt.Sprintf("dolly_seq_src_%d", os.Getpid()),
+		fmt.Sprintf("dolly_seq_tgt_%d", os.Getpid()),
+	}
+	adminDSN, err := RewriteDSN(dsn, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = admin.Close() })
+	for _, name := range names {
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, name)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, name)); err != nil {
+			t.Fatal(err)
+		}
+		n := name
+		t.Cleanup(func() {
+			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, n))
+		})
+	}
+	dbs := make([]*sql.DB, 2)
+	for i, name := range names {
+		connDSN, err := RewriteDSN(dsn, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dbs[i], err = sql.Open("pgx", connDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx := i
+		t.Cleanup(func() { _ = dbs[idx].Close() })
+		if _, err := dbs[i].ExecContext(ctx, `CREATE SEQUENCE public.monotonic_seq START 1`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := dbs[0].ExecContext(ctx, `SELECT setval('public.monotonic_seq', 10, true)`); err != nil {
+		t.Fatal(err)
+	}
+	return dbs[0], dbs[1]
+}
+
+func TestRestoreSequencesPreservesCalledOnEqualPG16(t *testing.T) {
+	ctx := context.Background()
+	srcDB, tgtDB := openSeqPair(t)
+	if _, err := srcDB.ExecContext(ctx, `ALTER SEQUENCE public.monotonic_seq RESTART WITH 10`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tgtDB.ExecContext(ctx, `SELECT setval('public.monotonic_seq', 10, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreSequences(ctx, srcDB, tgtDB); err != nil {
+		t.Fatal(err)
+	}
+	var called bool
+	if err := tgtDB.QueryRowContext(ctx, `SELECT is_called FROM public.monotonic_seq`).Scan(&called); err != nil || !called {
+		t.Fatalf("is_called=%v err=%v", called, err)
+	}
+	var next int64
+	if err := tgtDB.QueryRowContext(ctx, `SELECT nextval('public.monotonic_seq')`).Scan(&next); err != nil || next != 11 {
+		t.Fatalf("nextval=%d err=%v", next, err)
+	}
+}
+
+func TestRestoreSequencesAdversarialConcurrentPG16(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srcDB, tgtDB := openSeqPair(t)
+	if _, err := tgtDB.ExecContext(ctx, `CREATE TABLE public.seq_observed (v bigint PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	loop := func(fn func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				if err := fn(); err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+	loop(func() error {
+		var v int64
+		if err := tgtDB.QueryRowContext(ctx, `SELECT nextval('public.monotonic_seq')`).Scan(&v); err != nil {
+			return fmt.Errorf("nextval: %w", err)
+		}
+		_, err := tgtDB.ExecContext(ctx, `INSERT INTO public.seq_observed (v) VALUES ($1)`, v)
+		return err
+	})
+	loop(func() error { return restoreSequences(ctx, srcDB, tgtDB) })
+	select {
+	case err := <-errCh:
+		cancel()
+		wg.Wait()
+		t.Fatal(err)
+	case <-time.After(10 * time.Second):
+		cancel()
+		wg.Wait()
 	}
 }

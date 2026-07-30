@@ -345,18 +345,79 @@ func restoreSequences(ctx context.Context, srcDB, tgtDB *sql.DB) error {
 			isCalled = false
 		}
 
-		setSQL := fmt.Sprintf(
-			"SELECT setval(%s::regclass, %d, %t)",
-			quoteLiteral(quoteQualifiedTable(schema, seqName)),
-			value,
-			isCalled,
-		)
-		if _, err := tgtDB.ExecContext(ctx, setSQL); err != nil {
-			return fmt.Errorf("setval %s.%s: %w", schema, seqName, err)
+		if err := restoreOneSequence(ctx, tgtDB, schema, seqName, value, isCalled); err != nil {
+			return err
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("list sequences: %w", err)
+	}
+	return nil
+}
+
+// restoreOneSequence applies source sequence state on the target without lowering
+// an already-advanced sequence or regressing is_called. Serialization uses a
+// transactional no-op ALTER SEQUENCE INCREMENT BY to block concurrent nextval
+// while target state is read and setval is applied.
+func restoreOneSequence(ctx context.Context, tgtDB *sql.DB, schema, seqName string, srcValue int64, srcCalled bool) error {
+	qualified := quoteQualifiedTable(schema, seqName)
+
+	tx, err := tgtDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction for %s.%s: %w", schema, seqName, err)
+	}
+	defer tx.Rollback()
+
+	var increment int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT increment_by FROM pg_sequences WHERE schemaname = $1 AND sequencename = $2`,
+		schema, seqName,
+	).Scan(&increment); err != nil {
+		return fmt.Errorf("read increment for %s.%s: %w", schema, seqName, err)
+	}
+
+	alterSQL := fmt.Sprintf("ALTER SEQUENCE %s INCREMENT BY %d", qualified, increment)
+	if _, err := tx.ExecContext(ctx, alterSQL); err != nil {
+		return fmt.Errorf("lock sequence %s.%s: %w", schema, seqName, err)
+	}
+
+	readSQL := fmt.Sprintf("SELECT last_value, is_called FROM %s", qualified)
+	var tgtLast sql.NullInt64
+	var tgtCalled bool
+	if err := tx.QueryRowContext(ctx, readSQL).Scan(&tgtLast, &tgtCalled); err != nil {
+		return fmt.Errorf("read target state for %s.%s: %w", schema, seqName, err)
+	}
+
+	if tgtLast.Valid && tgtLast.Int64 > srcValue {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit sequence restore for %s.%s: %w", schema, seqName, err)
+		}
+		return nil
+	}
+
+	applyValue := srcValue
+	applyCalled := srcCalled
+	if tgtLast.Valid && tgtLast.Int64 == srcValue {
+		applyCalled = tgtCalled || srcCalled
+		if tgtCalled == applyCalled {
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit sequence restore for %s.%s: %w", schema, seqName, err)
+			}
+			return nil
+		}
+	}
+
+	setSQL := fmt.Sprintf(
+		"SELECT setval(%s::regclass, %d, %t)",
+		quoteLiteral(qualified),
+		applyValue,
+		applyCalled,
+	)
+	if _, err := tx.ExecContext(ctx, setSQL); err != nil {
+		return fmt.Errorf("setval %s.%s: %w", schema, seqName, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sequence restore for %s.%s: %w", schema, seqName, err)
 	}
 	return nil
 }
