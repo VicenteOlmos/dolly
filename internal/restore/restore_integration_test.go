@@ -917,6 +917,81 @@ func TestIntegrationParallelRestorePartialFailure(t *testing.T) {
 	assertParallelParentSequenceBaseline(t, conn, ctx)
 }
 
+func TestIntegrationApplySchemaSQLSingleTransactionRollsBackOnError(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	dir := t.TempDir()
+
+	const table = "dolly_trusted_schema_fail_test"
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS public.`+table)
+	})
+
+	schemaSQL := fmt.Sprintf(`CREATE TABLE public.%s (id integer);
+SELECT * FROM dolly_nonexistent_trusted_schema_fail;`, table)
+	if err := os.WriteFile(filepath.Join(dir, "schema.sql"), []byte(schemaSQL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := applySchemaSQL(ctx, dsn, dir)
+	if err == nil {
+		t.Fatal("expected schema.sql statement error")
+	}
+
+	var regclass *string
+	if err := conn.QueryRowContext(ctx, `SELECT to_regclass('public.`+table+`')`).Scan(&regclass); err != nil {
+		t.Fatal(err)
+	}
+	if regclass != nil {
+		t.Fatalf("table %q remained after failed replay, regclass=%v", table, *regclass)
+	}
+}
+
+func TestIntegrationApplySchemaSQLSingleTransactionRollsBackOnCancel(t *testing.T) {
+	conn := openIntegrationDB(t)
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	dir := t.TempDir()
+
+	const table = "dolly_trusted_schema_cancel_test"
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS public.`+table)
+	})
+
+	schemaSQL := fmt.Sprintf(`CREATE TABLE public.%s (id integer);
+SELECT pg_sleep(120);`, table)
+	if err := os.WriteFile(filepath.Join(dir, "schema.sql"), []byte(schemaSQL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- applySchemaSQL(ctx, dsn, dir)
+	}()
+
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected cancellation error from schema replay")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("applySchemaSQL did not return after context cancellation")
+	}
+
+	var regclass *string
+	verifyCtx := context.Background()
+	if err := conn.QueryRowContext(verifyCtx, `SELECT to_regclass('public.`+table+`')`).Scan(&regclass); err != nil {
+		t.Fatal(err)
+	}
+	if regclass != nil {
+		t.Fatalf("table %q remained after canceled replay, regclass=%v", table, *regclass)
+	}
+}
+
 func TestIntegrationParallelRestoreRetryRetainsCommittedManifest(t *testing.T) {
 	conn := openIntegrationDB(t)
 	ctx := context.Background()
