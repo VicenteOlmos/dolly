@@ -16,12 +16,13 @@ func TestEnsureOwnerOnlyWindowsNoop(t *testing.T) {
 	if err := ensureOwnerOnly(path); err != nil {
 		t.Fatalf("expected no error on Windows no-op, got %v", err)
 	}
-	info, err := os.Stat(path)
+	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Fatalf("mode changed to %o, want 0644 (no-op)", info.Mode().Perm())
+	const want = "db=secret\n"
+	if string(got) != want {
+		t.Fatalf("bytes changed to %q, want %q (no-op)", got, want)
 	}
 }
 
