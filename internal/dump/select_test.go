@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -232,5 +233,31 @@ func TestPlanTableSelectionDeterministicProvenanceNoSecrets(t *testing.T) {
 	}
 	if prov.RequestedIncludes[0].Source != "--include-table" {
 		t.Fatalf("source = %q", prov.RequestedIncludes[0].Source)
+	}
+}
+
+func TestPlanTableSelectionDeterministicOutput(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "users"},
+		{Schema: "public", Name: "orders"},
+		{Schema: "public", Name: "audit_log"},
+	}
+	policy := &SelectionPolicy{Includes: []SelectorEntry{
+		{Table: QualifiedTable{Schema: "public", Name: "users"}},
+		{Table: QualifiedTable{Schema: "public", Name: "orders"}},
+	}}
+	filtered1, prov1, err := PlanTableSelection(tables, policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filtered2, prov2, err := PlanTableSelection(tables, policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(filtered1, filtered2) {
+		t.Fatalf("filtered differs: %+v vs %+v", filtered1, filtered2)
+	}
+	if !reflect.DeepEqual(prov1.Selected, prov2.Selected) {
+		t.Fatalf("selected differs: %v vs %v", prov1.Selected, prov2.Selected)
 	}
 }
