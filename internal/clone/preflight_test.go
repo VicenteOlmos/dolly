@@ -1091,3 +1091,34 @@ func TestValidateReplicationTargetDir(t *testing.T) {
 		}
 	})
 }
+
+func TestEnsureReplicationTargetDir(t *testing.T) {
+	t.Run("creates missing directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "new-data")
+		if err := ensureReplicationTargetDir(dir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("stat dir: %v", err)
+		}
+	})
+
+	t.Run("reuses empty directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := ensureReplicationTargetDir(dir); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects non-empty directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "leftover"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := ensureReplicationTargetDir(dir)
+		if err == nil || !strings.Contains(err.Error(), "not empty") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}

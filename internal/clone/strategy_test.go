@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -898,8 +899,8 @@ func TestReplicationStrategyRejectsCallerOwnedDirectoryBeforeRun(t *testing.T) {
 	}
 	runner := &mockCommandRunner{}
 	err := (&ReplicationStrategy{Runner: runner}).Execute(context.Background(), Options{SourceDSN: "postgres://u:p@h:5432/db", TargetDir: target})
-	if err == nil || !contains(err.Error(), "already exists") {
-		t.Fatalf("error = %v, want existing target failure", err)
+	if err == nil || !contains(err.Error(), "not empty") {
+		t.Fatalf("error = %v, want non-empty target failure", err)
 	}
 	if len(runner.runCalls) != 0 {
 		t.Fatalf("pg_basebackup ran for caller-owned target: %v", runner.runCalls)
@@ -907,6 +908,78 @@ func TestReplicationStrategyRejectsCallerOwnedDirectoryBeforeRun(t *testing.T) {
 	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep" {
 		t.Fatalf("caller-owned content changed: %q, %v", data, err)
 	}
+}
+
+func TestReplicationDirTLS(t *testing.T) {
+	t.Run("reuses empty existing directory", func(t *testing.T) {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		if err := os.Mkdir(dataDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		mockRunner := &mockCommandRunner{}
+		err := (&ReplicationStrategy{Runner: mockRunner}).Execute(context.Background(), Options{
+			SourceDSN: "postgres://repl:secret@db-host:5433/mydb",
+			TargetDir: dataDir,
+		})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if len(mockRunner.runCalls) != 1 {
+			t.Fatalf("expected 1 run call, got %d", len(mockRunner.runCalls))
+		}
+	})
+
+	t.Run("rejects non-empty before pg_basebackup", func(t *testing.T) {
+		target := filepath.Join(t.TempDir(), "data")
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, "leftover"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runner := &mockCommandRunner{}
+		err := (&ReplicationStrategy{Runner: runner}).Execute(context.Background(), Options{
+			SourceDSN: "postgres://u:p@h:5432/db",
+			TargetDir: target,
+		})
+		if err == nil || !contains(err.Error(), "not empty") {
+			t.Fatalf("error = %v, want non-empty failure", err)
+		}
+		if len(runner.runCalls) != 0 {
+			t.Fatalf("pg_basebackup ran: %v", runner.runCalls)
+		}
+	})
+
+	t.Run("forwards TLS env to pg_basebackup", func(t *testing.T) {
+		targetDir := t.TempDir()
+		dataDir := filepath.Join(targetDir, "data")
+		rootCert := "/tmp/ca.crt"
+		sourceDSN := "postgres://repl:secret@db-host:5433/mydb?sslmode=verify-full&sslrootcert=" + url.QueryEscape(rootCert) + "&channel_binding=require"
+		mockRunner := &mockCommandRunner{}
+		err := (&ReplicationStrategy{Runner: mockRunner}).Execute(context.Background(), Options{
+			SourceDSN: sourceDSN,
+			TargetDir: dataDir,
+		})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if len(mockRunner.runCalls) != 1 {
+			t.Fatalf("expected 1 run call, got %d", len(mockRunner.runCalls))
+		}
+		env := mockRunner.runCalls[0].env
+		if env["PGPASSWORD"] != "secret" {
+			t.Fatalf("PGPASSWORD = %q", env["PGPASSWORD"])
+		}
+		if env["PGSSLMODE"] != "verify-full" {
+			t.Fatalf("PGSSLMODE = %q", env["PGSSLMODE"])
+		}
+		if env["PGSSLROOTCERT"] != rootCert {
+			t.Fatalf("PGSSLROOTCERT = %q", env["PGSSLROOTCERT"])
+		}
+		if env["PGCHANNELBINDING"] != "require" {
+			t.Fatalf("PGCHANNELBINDING = %q", env["PGCHANNELBINDING"])
+		}
+	})
 }
 
 func sliceEqual(a, b []string) bool {
