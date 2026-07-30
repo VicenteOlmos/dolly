@@ -2,6 +2,7 @@ package dump
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
@@ -46,6 +47,26 @@ func buildFKGraph(tables []db.Table) (*fkGraph, error) {
 			g.childToParents[edge.childTable] = append(g.childToParents[edge.childTable], edge)
 			g.parentToChildren[edge.parentTable] = append(g.parentToChildren[edge.parentTable], edge)
 		}
+	}
+	// Deterministic edge ordering: sort each edge slice by childTable,
+	// then by childColumn. This guarantees that FK closure traversal
+	// (which iterates graph.parentToChildren and graph.childToParents via
+	// range loops) produces identical subsets across repeated runs.
+	for _, edges := range g.parentToChildren {
+		sort.Slice(edges, func(i, j int) bool {
+			if edges[i].childTable != edges[j].childTable {
+				return edges[i].childTable < edges[j].childTable
+			}
+			return edges[i].childColumn < edges[j].childColumn
+		})
+	}
+	for _, edges := range g.childToParents {
+		sort.Slice(edges, func(i, j int) bool {
+			if edges[i].parentTable != edges[j].parentTable {
+				return edges[i].parentTable < edges[j].parentTable
+			}
+			return edges[i].parentColumn < edges[j].parentColumn
+		})
 	}
 	return g, nil
 }

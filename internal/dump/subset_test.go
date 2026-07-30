@@ -1,7 +1,10 @@
 package dump
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1217,5 +1220,133 @@ func TestPlanSubsetChildClosureUnderMaxRows(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestSubsetClosureDeterministicRepeated(t *testing.T) {
+	const capPerTable = 2
+	const eligiblePerChild = 6
+
+	tables := ordersItemsSubsetTables("orders", "order_items")
+	wantItemPKs := []int64{106, 105}
+
+	runPlan := func() *planResult {
+		sqlDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sqlDB.Close()
+
+		mock.ExpectQuery(`ORDER BY`).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(10)))
+
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM "public"\."order_items" WHERE "order_id" IN \(\$1\)`).
+			WithArgs(int64(10)).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(eligiblePerChild))
+
+		itemRows := sqlmock.NewRows([]string{"id"})
+		for i := eligiblePerChild; i >= 1; i-- {
+			itemRows.AddRow(int64(100 + i)) // 106..101 eligible
+		}
+		mock.ExpectQuery(`SELECT "id" FROM "public"\."order_items" WHERE "order_id" IN \(\$1\) ORDER BY`).
+			WithArgs(int64(10)).
+			WillReturnRows(itemRows)
+
+		for _, id := range wantItemPKs {
+			mock.ExpectQuery(`SELECT "order_id" FROM "public"\."order_items" WHERE "id" = \$1`).
+				WithArgs(id).
+				WillReturnRows(sqlmock.NewRows([]string{"order_id"}).AddRow(int64(10)))
+		}
+
+		plan, err := planSubset(context.Background(), sqlDB, tables, cappedPercentSubsetConfig(capPerTable))
+		if err != nil {
+			t.Fatalf("planSubset: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unmet expectations: %v", err)
+		}
+		return plan
+	}
+
+	plan1 := runPlan()
+	plan2 := runPlan()
+
+	fp1 := canonicalSubsetPlanFingerprint(plan1)
+	fp2 := canonicalSubsetPlanFingerprint(plan2)
+	if !bytes.Equal(fp1, fp2) {
+		t.Fatalf("plan fingerprints differ:\n%s\nvs\n%s", fp1, fp2)
+	}
+
+	items := plan1.tables[tableKey("public", "order_items")]
+	if len(items.pkValues) != capPerTable {
+		t.Fatalf("order_items pk count = %d, want %d", len(items.pkValues), capPerTable)
+	}
+	for i, pk := range items.pkValues {
+		if fmt.Sprint(pk) != fmt.Sprint(wantItemPKs[i]) {
+			t.Fatalf("order_items pk[%d] = %v, want %v", i, pk, wantItemPKs[i])
+		}
+	}
+}
+
+type subsetPlanSnapshot struct {
+	TableOrder   []string            `json:"table_order"`
+	Tables       map[string][]string `json:"tables"`
+	RowsExported map[string]int      `json:"rows_exported"`
+}
+
+func canonicalSubsetPlanFingerprint(plan *planResult) []byte {
+	snap := subsetPlanSnapshot{
+		TableOrder:   append([]string(nil), plan.tableOrder...),
+		Tables:       make(map[string][]string, len(plan.tables)),
+		RowsExported: make(map[string]int, len(plan.rowsExported)),
+	}
+	for _, key := range plan.tableOrder {
+		tp := plan.tables[key]
+		pks := make([]string, len(tp.pkValues))
+		for i, v := range tp.pkValues {
+			pks[i] = fmt.Sprint(v)
+		}
+		snap.Tables[key] = pks
+		snap.RowsExported[key] = plan.rowsExported[key]
+	}
+	b, err := json.Marshal(snap)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func ordersItemsSubsetTables(orders, items string) []db.Table {
+	rc := int64(1)
+	return []db.Table{
+		{
+			Schema: "public", Name: orders, RowCount: &rc,
+			Columns: []db.Column{
+				{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1},
+				{Name: "created_at", DataType: "timestamp", OrdinalPosition: 2},
+			},
+		},
+		{
+			Schema: "public", Name: items,
+			Columns: []db.Column{
+				{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1},
+				{Name: "order_id", DataType: "integer", OrdinalPosition: 2},
+				{Name: "created_at", DataType: "timestamp", OrdinalPosition: 3},
+			},
+			ForeignKeys: []db.ForeignKey{{
+				ConstraintName: "order_items_order_id_fkey", ColumnName: "order_id",
+				ReferencedTableSchema: "public", ReferencedTableName: orders, ReferencedColumnName: "id",
+			}},
+		},
+	}
+}
+
+func cappedPercentSubsetConfig(capPerTable int) SubsetConfig {
+	return SubsetConfig{
+		Percent: 50,
+		Limits: SubsetLimits{
+			MaxDepth: 5, MaxTables: 10, MaxRows: 1000,
+			MaxRowsPerTable: capPerTable, MaxInListSize: 500,
+		},
 	}
 }
