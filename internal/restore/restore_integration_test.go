@@ -12,14 +12,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/testutil/pgintegration"
 )
 
-var integrationDB *sql.DB
+var (
+	integrationDB        *sql.DB
+	restoreIntegrationMu sync.Mutex
+)
 
 func TestMain(m *testing.M) {
 	flag.Parse()
@@ -41,6 +46,18 @@ func TestMain(m *testing.M) {
 
 func openIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
+	restoreIntegrationMu.Lock()
+	t.Cleanup(func() {
+		if integrationDB != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := pgintegration.Bootstrap(ctx, integrationDB); err != nil {
+				fmt.Fprintf(os.Stderr, "restore integration: reset fixtures: %v\n", err)
+			}
+			waitIntegrationDBIdle(integrationDB, 2*time.Second)
+		}
+		restoreIntegrationMu.Unlock()
+	})
 	if integrationDB == nil {
 		conn := pgintegration.Open(t)
 		pgintegration.ApplyFixtures(t, conn)
@@ -48,6 +65,16 @@ func openIntegrationDB(t *testing.T) *sql.DB {
 	}
 	pgintegration.ApplyFixtures(t, integrationDB)
 	return integrationDB
+}
+
+func waitIntegrationDBIdle(conn *sql.DB, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if conn.Stats().InUse == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestIntegrationRestoreSelectedSchemasSlowChunkDump(t *testing.T) {
@@ -681,6 +708,51 @@ func parallelRestoreDump(t *testing.T, conn *sql.DB) string {
 	return dir
 }
 
+func corruptParallelRestoreChildData(t *testing.T, dir string) {
+	t.Helper()
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range meta.Tables {
+		if table.Name != "dolly_par_restore_child" {
+			continue
+		}
+		childPath, err := resolveDataFile(dir, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(childPath, []byte("not-json\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatal("child data file missing")
+}
+
+func truncateParallelRestoreTables(t *testing.T, conn *sql.DB, ctx context.Context) {
+	t.Helper()
+	_, err := conn.ExecContext(ctx, `TRUNCATE dolly_par_restore_grandchild, dolly_par_restore_child, dolly_par_restore_parent RESTART IDENTITY CASCADE`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertParallelParentSequenceBaseline(t *testing.T, conn *sql.DB, ctx context.Context) {
+	t.Helper()
+	var seqLast int
+	var seqCalled bool
+	if err := conn.QueryRowContext(ctx, `SELECT last_value, is_called FROM dolly_par_restore_parent_id_seq`).Scan(&seqLast, &seqCalled); err != nil {
+		t.Fatal(err)
+	}
+	if seqLast != 1 || seqCalled {
+		t.Fatalf("parent sequence = (%d, called=%t), want (1, false) post-TRUNCATE baseline; sequence phase must not run", seqLast, seqCalled)
+	}
+	if seqLast == int(parallelRestoreParentSeqInjectedLast) {
+		t.Fatalf("parent sequence at injected metadata value %d; sequence phase ran", parallelRestoreParentSeqInjectedLast)
+	}
+}
+
 func parallelRestoreOpts(dsn, manifestPath string, workers int, schemas ...string) []Option {
 	opts := []Option{
 		WithWorkers(workers),
@@ -734,6 +806,7 @@ func TestIntegrationParallelRestoreSuccess(t *testing.T) {
 	if err := Restore(ctx, conn, dir, parallelRestoreOpts(dsn, manifestPath, 2, "public")...); err != nil {
 		t.Fatalf("parallel restore: %v", err)
 	}
+	waitIntegrationDBIdle(conn, 2*time.Second)
 	if _, err := os.Stat(manifestPath); err == nil {
 		t.Fatalf("manifest %q should be removed after success", manifestPath)
 	} else if !os.IsNotExist(err) {
@@ -781,35 +854,13 @@ func TestIntegrationParallelRestorePartialFailure(t *testing.T) {
 
 	dir := parallelRestoreDump(t, conn)
 	injectParallelRestoreParentSequenceMetadata(t, dir)
-	meta, err := dump.ReadMetadata(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var childPath string
-	for _, table := range meta.Tables {
-		if table.Name == "dolly_par_restore_child" {
-			childPath, err = resolveDataFile(dir, table)
-			if err != nil {
-				t.Fatal(err)
-			}
-			break
-		}
-	}
-	if childPath == "" {
-		t.Fatal("child data file missing")
-	}
-	if err := os.WriteFile(childPath, []byte("not-json\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = conn.ExecContext(ctx, `TRUNCATE dolly_par_restore_grandchild, dolly_par_restore_child, dolly_par_restore_parent RESTART IDENTITY CASCADE`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	corruptParallelRestoreChildData(t, dir)
+	truncateParallelRestoreTables(t, conn, ctx)
 
 	manifestPath := filepath.Join(dir, "parallel-fail-state.json")
 	dsn := os.Getenv(pgintegration.EnvDSN)
-	err = Restore(ctx, conn, dir, parallelRestoreOpts(dsn, manifestPath, 2)...)
+	err := Restore(ctx, conn, dir, parallelRestoreOpts(dsn, manifestPath, 2)...)
+	waitIntegrationDBIdle(conn, 2*time.Second)
 	if err == nil {
 		t.Fatal("expected parallel restore failure")
 	}
@@ -860,22 +911,66 @@ func TestIntegrationParallelRestorePartialFailure(t *testing.T) {
 	if parentCount != 2 {
 		t.Fatalf("parent count = %d, want 2 committed before child failure", parentCount)
 	}
-	if childCount != 0 {
-		t.Fatalf("child count = %d, want 0 after failed COPY", childCount)
+	if childCount != 0 || grandchildCount != 0 {
+		t.Fatalf("child=%d grandchild=%d, want 0 after failed COPY", childCount, grandchildCount)
 	}
-	if grandchildCount != 0 {
-		t.Fatalf("grandchild count = %d, want 0 because dependent level never started", grandchildCount)
-	}
+	assertParallelParentSequenceBaseline(t, conn, ctx)
+}
 
-	var seqLast int
-	var seqCalled bool
-	if err := conn.QueryRowContext(ctx, `SELECT last_value, is_called FROM dolly_par_restore_parent_id_seq`).Scan(&seqLast, &seqCalled); err != nil {
+func TestIntegrationParallelRestoreRetryRetainsCommittedManifest(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	setupParallelRestoreTables(t, conn, ctx)
+
+	dir := parallelRestoreDump(t, conn)
+	injectParallelRestoreParentSequenceMetadata(t, dir)
+	corruptParallelRestoreChildData(t, dir)
+	truncateParallelRestoreTables(t, conn, ctx)
+
+	manifestPath := filepath.Join(dir, "parallel-retry-state.json")
+	if err := WritePartialStateManifest(manifestPath, PartialStateManifest{
+		Committed: []string{"public.dolly_par_restore_parent"},
+		Pending:   []string{"public.dolly_par_restore_child", "public.dolly_par_restore_grandchild"},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if seqLast != 1 || seqCalled {
-		t.Fatalf("parent sequence = (%d, called=%t), want (1, false) post-TRUNCATE baseline; sequence phase must not run", seqLast, seqCalled)
+
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	err := Restore(ctx, conn, dir, parallelRestoreOpts(dsn, manifestPath, 2, "public")...)
+	waitIntegrationDBIdle(conn, 2*time.Second)
+	if err == nil {
+		t.Fatal("expected parallel restore retry failure")
 	}
-	if seqLast == int(parallelRestoreParentSeqInjectedLast) {
-		t.Fatalf("parent sequence at injected metadata value %d; sequence phase ran on failure", parallelRestoreParentSeqInjectedLast)
+
+	manifest, err := LoadPartialStateManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(manifest.Committed) != 1 || manifest.Committed[0] != "public.dolly_par_restore_parent" {
+		t.Fatalf("committed = %v, want retained seeded parent", manifest.Committed)
+	}
+	if len(manifest.Failed) != 1 || manifest.Failed[0].Table != "public.dolly_par_restore_child" {
+		t.Fatalf("failed = %+v, want child failure", manifest.Failed)
+	}
+	if len(manifest.Pending) != 1 || manifest.Pending[0] != "public.dolly_par_restore_grandchild" {
+		t.Fatalf("pending = %v, want grandchild only", manifest.Pending)
+	}
+
+	var parentCount, childCount, grandchildCount int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolly_par_restore_parent`).Scan(&parentCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolly_par_restore_child`).Scan(&childCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolly_par_restore_grandchild`).Scan(&grandchildCount); err != nil {
+		t.Fatal(err)
+	}
+	if parentCount != 0 {
+		t.Fatalf("parent count = %d, want 0 because seeded committed was not reloaded", parentCount)
+	}
+	if childCount != 0 || grandchildCount != 0 {
+		t.Fatalf("child=%d grandchild=%d, want 0 after failed retry", childCount, grandchildCount)
+	}
+	assertParallelParentSequenceBaseline(t, conn, ctx)
 }

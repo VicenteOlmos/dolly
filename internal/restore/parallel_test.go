@@ -350,6 +350,99 @@ func TestRunParallelRestore_sequenceGatingAndManifestRetention(t *testing.T) {
 	}
 }
 
+func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "state.json")
+	users := db.Table{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	posts := db.Table{Schema: "public", Name: "posts", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	meta := dump.Metadata{Schema: "public", Tables: []db.Table{users, posts}}
+	dataPaths := []string{filepath.Join(dir, "users.ndjson"), filepath.Join(dir, "posts.ndjson")}
+	levels := []RestoreLevel{
+		{Tables: []string{"public.users"}},
+		{Tables: []string{"public.posts"}},
+	}
+
+	seeded := PartialStateManifest{
+		Committed: []string{"public.users"},
+		Pending:   []string{"public.posts"},
+	}
+	if err := WritePartialStateManifest(manifest, seeded); err != nil {
+		t.Fatal(err)
+	}
+	seededRaw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var loaded []string
+	var seqRestoreCalled atomic.Bool
+	orig := parallelLoadTableCopy
+	origSeq := parallelRestoreSequences
+	origSync := parallelSyncSequences
+	parallelLoadTableCopy = func(_ context.Context, _ string, table db.Table, _ string) error {
+		if table.Name == "users" {
+			t.Fatalf("users already committed; must not reload on retry")
+		}
+		loaded = append(loaded, qualifiedLabel(table.Schema, table.Name))
+		return errors.New("copy posts failed")
+	}
+	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string) error {
+		seqRestoreCalled.Store(true)
+		t.Fatal("sequence restore must not run after retry failure")
+		return nil
+	}
+	parallelSyncSequences = func(context.Context, execQuerier, []string) error {
+		seqRestoreCalled.Store(true)
+		t.Fatal("sequence sync must not run after retry failure")
+		return nil
+	}
+	defer func() {
+		parallelLoadTableCopy = orig
+		parallelRestoreSequences = origSeq
+		parallelSyncSequences = origSync
+	}()
+
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	cfg := parallelTestCfg(manifest, 2)
+	err = runParallelRestore(context.Background(), &cfg, sqlDB, meta, dataPaths, levels, nil, 2, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "copy posts failed") {
+		t.Fatalf("err = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, []string{"public.posts"}) {
+		t.Fatalf("loaded = %v, want only pending table on retry", loaded)
+	}
+	if seqRestoreCalled.Load() {
+		t.Fatal("sequence restore/sync ran despite table failure")
+	}
+
+	got, err := LoadPartialStateManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Committed, []string{"public.users"}) {
+		t.Fatalf("committed = %v, want retained seeded state", got.Committed)
+	}
+	if len(got.Failed) != 1 || got.Failed[0].Table != "public.posts" {
+		t.Fatalf("failed = %+v", got.Failed)
+	}
+	if len(got.Pending) != 0 {
+		t.Fatalf("pending = %v", got.Pending)
+	}
+
+	var before PartialStateManifest
+	if err := json.Unmarshal(seededRaw, &before); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before.Committed, got.Committed) {
+		t.Fatalf("retry overwrote committed evidence: before=%v after=%v", before.Committed, got.Committed)
+	}
+}
+
 func TestRunParallelRestore_dottedIdentifiers(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "state.json")
