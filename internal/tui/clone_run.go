@@ -64,6 +64,9 @@ func cloneName(sourceDB, template string) string {
 }
 
 // startAnalyzeCmd runs the analyze preflight asynchronously.
+// The returned tea.Cmd is the sole terminal delivery path: exactly one
+// analyzeResultMsg per lifecycle (channel-less; safe drop is vacuously
+// non-blocking). analyzeSourceFunc must honor ctx cancellation.
 func startAnalyzeCmd(sqlDB *sql.DB, sourceDB, nameTpl string, schemas []string) (tea.Cmd, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := func() tea.Msg {
@@ -111,7 +114,7 @@ func waitCloneCmd(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
-			return cloneResultMsg{err: fmt.Errorf("clone channel closed")}
+			return nil
 		}
 		return msg
 	}
@@ -124,13 +127,10 @@ func startCloneCmd(runner CloneRunner, ctx context.Context, draft CloneDraft, sc
 		defer close(ch)
 		onProgress := func(ev CloneProgressEvent) {
 			line := formatCloneProgress(ev)
-			select {
-			case ch <- cloneProgressMsg{line: line, ev: ev}:
-			case <-ctx.Done():
-			}
+			sendProgress(ctx, ch, cloneProgressMsg{line: line, ev: ev})
 		}
 		err := runner.Run(ctx, draft, schemas, onProgress)
-		ch <- cloneResultMsg{err: err}
+		deliverResult(ctx, ch, cloneResultMsg{err: err})
 	}()
 	return waitCloneCmd(ch), ch, cancel
 }

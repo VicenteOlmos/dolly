@@ -107,7 +107,7 @@ func waitDumpCmd(ch <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
-			return dumpResultMsg{err: fmt.Errorf("dump channel closed")}
+			return nil
 		}
 		return msg
 	}
@@ -127,13 +127,10 @@ func startDumpCmd(runner DumpRunner, ctx context.Context, db *sql.DB, outputDir 
 				Total:   ev.Total,
 				Elapsed: ev.Elapsed,
 			}
-			select {
-			case ch <- dumpProgressMsg{line: line, ev: localEv}:
-			case <-ctx.Done():
-			}
+			sendProgress(ctx, ch, dumpProgressMsg{line: line, ev: localEv})
 		}
 		err := runner.Run(ctx, db, outputDir, draft, schemas, sourceDB, sourceDSN, onProgress)
-		ch <- dumpResultMsg{err: err}
+		deliverResult(ctx, ch, dumpResultMsg{err: err})
 	}()
 	return waitDumpCmd(ch), ch, cancel
 }
