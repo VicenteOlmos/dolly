@@ -50,7 +50,7 @@ jobs:
 
       - if: runner.os == 'Windows'
         name: Run Windows permission cache runtime tests
-        run: go test -race -count=1 -run 'TestPermissionCache(WindowsRuntime|ReplacementFailurePreservesBytes)$' ./internal/clone
+        run: go test -race -count=1 -run 'TestPermissionCache(WindowsRuntime|ReplacementFailurePreservesBytes|ConcurrentOutcomes)$' ./internal/clone
 
       - if: runner.os == 'Windows'
         name: Run Windows cache lock runtime tests
