@@ -518,6 +518,31 @@ func TestSchemaReplayStrategyWithoutProgressKeepsCommandOutput(t *testing.T) {
 	}
 }
 
+func TestTemplateStrategySkipCreateFailsClosed(t *testing.T) {
+	// Override sqlOpenDB to panic if the SkipCreate guard does not stop execution
+	// before any database access. With SkipCreate=true, template must fail before
+	// reaching the connection-open step.
+	origOpen := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		t.Fatal("sqlOpenDB must not be called when SkipCreate=true — template guard should return before DB access")
+		return nil, nil
+	}
+	defer func() { sqlOpenDB = origOpen }()
+
+	strat := &TemplateStrategy{}
+	err := strat.Execute(context.Background(), Options{
+		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
+		CloneName:  "db_clone",
+		SkipCreate: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for SkipCreate=true")
+	}
+	if !contains(err.Error(), "SkipCreate incompatible") {
+		t.Fatalf("error should mention SkipCreate incompatible: %v", err)
+	}
+}
+
 func TestTemplateStrategyExecute(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
