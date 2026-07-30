@@ -90,7 +90,11 @@ func TestCacheLockCloseReleaseOrdering(t *testing.T) {
 	var order []string
 
 	lockCacheRelease = func(f *os.File) error { order = append(order, "unlock"); return unlockErr }
-	lockCacheClose = func(f *os.File) error { order = append(order, "close"); return closeErr }
+	lockCacheClose = func(f *os.File) error {
+		_ = f.Close()
+		order = append(order, "close")
+		return closeErr
+	}
 
 	f, err := os.CreateTemp(t.TempDir(), "lc")
 	if err != nil {
