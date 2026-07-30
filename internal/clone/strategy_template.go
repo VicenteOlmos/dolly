@@ -18,6 +18,9 @@ func (s *TemplateStrategy) Execute(ctx context.Context, opts Options) error {
 	if opts.CloneName == "" {
 		return fmt.Errorf("clone name is required")
 	}
+	if opts.SkipCreate {
+		return fmt.Errorf("template requires target creation; SkipCreate incompatible")
+	}
 
 	startedAt := time.Now()
 
