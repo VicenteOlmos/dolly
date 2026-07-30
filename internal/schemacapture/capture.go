@@ -13,6 +13,8 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/schemasql"
 )
 
+const schemaCaptureTempPattern = ".schema.sql.tmp-*"
+
 var lookPath = exec.LookPath
 
 // runCommand is a test seam for pg_dump execution.
@@ -28,8 +30,16 @@ var runCommand = func(ctx context.Context, name string, args []string, env []str
 	return nil
 }
 
+// replaceFile is a test seam for atomic schema.sql publication.
+var replaceFile = atomicReplaceFile
+
 // Capture runs pg_dump --schema-only on dsn and writes a sanitized schema.sql.
 // When schemas is non-empty, each name is passed as a separate --schema argv pair.
+// pg_dump writes to a same-directory unguessable private temp; schema.sql is
+// replaced only after sanitize succeeds. Any error removes the run temp and
+// leaves prior schema.sql byte-for-byte unchanged. Host-process SIGKILL cannot
+// run deferred cleanup and may leave an orphaned run temp; prior schema.sql is
+// never published or corrupted.
 func Capture(ctx context.Context, dsn, outDir string, schemas []string) error {
 	if _, err := lookPath("pg_dump"); err != nil {
 		return fmt.Errorf("pg_dump not on PATH, schema.sql skipped")
@@ -48,40 +58,64 @@ func Capture(ctx context.Context, dsn, outDir string, schemas []string) error {
 		env = append(env, "PGPASSWORD="+password)
 	}
 
-	outPath := filepath.Join(outDir, "schema.sql")
-	f, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	finalPath := filepath.Join(outDir, "schema.sql")
+
+	tmp, err := os.CreateTemp(outDir, schemaCaptureTempPattern)
 	if err != nil {
-		return fmt.Errorf("create schema.sql: %w", err)
+		return fmt.Errorf("create schema capture temp: %w", err)
 	}
-	if err := os.Chmod(outPath, 0o600); err != nil {
-		_ = f.Close()
-		_ = os.Remove(outPath)
-		return fmt.Errorf("chmod schema.sql: %w", err)
+	tmpPath := tmp.Name()
+	committed := false
+	cleanup := func() {
+		if committed {
+			return
+		}
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}
+	defer cleanup()
+
+	if err := tmp.Chmod(0o600); err != nil {
+		return fmt.Errorf("chmod schema capture temp: %w", err)
 	}
 
-	if err := runCommand(ctx, "pg_dump", args, env, f); err != nil {
-		_ = f.Close()
-		_ = os.Remove(outPath)
+	if err := runCommand(ctx, "pg_dump", args, env, tmp); err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(outPath)
-		return fmt.Errorf("close schema.sql: %w", err)
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync schema capture temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close schema capture temp: %w", err)
 	}
 
-	raw, err := os.ReadFile(outPath)
+	raw, err := os.ReadFile(tmpPath)
 	if err != nil {
-		_ = os.Remove(outPath)
-		return fmt.Errorf("read schema.sql: %w", err)
+		return fmt.Errorf("read schema capture temp: %w", err)
 	}
 	sanitized, err := schemasql.Sanitize(raw)
 	if err != nil {
-		_ = os.Remove(outPath)
 		return fmt.Errorf("sanitize schema.sql: %w", err)
 	}
-	if err := os.WriteFile(outPath, sanitized, 0o600); err != nil {
-		_ = os.Remove(outPath)
-		return fmt.Errorf("write schema.sql: %w", err)
+	if err := os.WriteFile(tmpPath, sanitized, 0o600); err != nil {
+		return fmt.Errorf("write schema capture temp: %w", err)
 	}
+	if err := syncPath(tmpPath); err != nil {
+		return fmt.Errorf("sync schema capture temp: %w", err)
+	}
+
+	if err := replaceFile(tmpPath, finalPath); err != nil {
+		return fmt.Errorf("replace schema.sql: %w", err)
+	}
+	committed = true
 	return nil
+}
+
+func syncPath(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
