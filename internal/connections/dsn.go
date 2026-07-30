@@ -17,11 +17,23 @@ var subprocessQueryControls = map[string]bool{
 	"ssl_max_protocol_version": true, "ssl_min_protocol_version": true,
 	"sslmode": true, "sslnegotiation": true, "sslrootcert": true,
 	"target_session_attrs": true, "tcp_user_timeout": true,
+	"dbname": true, "database": true, "user": true,
 }
 
-// SubprocessDSN returns a PostgreSQL URL safe for command arguments and its
-// password for PGPASSWORD. It never returns the original DSN on parse failure.
+// SubprocessDSN returns a PostgreSQL URL or keyword conninfo safe for command
+// arguments and its password for PGPASSWORD. It never returns the original DSN
+// on parse failure.
 func SubprocessDSN(dsn string) (clean, password string, err error) {
+	if strings.Contains(dsn, "://") {
+		return subprocessURLDSN(dsn)
+	}
+	if strings.Contains(dsn, "=") {
+		return subprocessKeywordDSN(dsn)
+	}
+	return "", "", errors.New("invalid PostgreSQL DSN")
+}
+
+func subprocessURLDSN(dsn string) (clean, password string, err error) {
 	u, err := parsePostgresURL(dsn)
 	if err != nil {
 		return "", "", errors.New("invalid PostgreSQL DSN")
@@ -41,6 +53,47 @@ func SubprocessDSN(dsn string) (clean, password string, err error) {
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), password, nil
+}
+
+func subprocessKeywordDSN(dsn string) (clean, password string, err error) {
+	tokens, err := tokenizeKeywordDSN(dsn)
+	if err != nil {
+		return "", "", errors.New("invalid PostgreSQL DSN")
+	}
+	var b strings.Builder
+	b.Grow(len(dsn))
+	for _, tok := range tokens {
+		lower := strings.ToLower(tok.key)
+		switch lower {
+		case "password":
+			if password == "" {
+				password = libpqValueBytes(tok.rawValue)
+			}
+			continue
+		case "statement_timeout":
+			continue
+		}
+		if !subprocessQueryControls[lower] {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(tok.key)
+		b.WriteByte('=')
+		b.WriteString(tok.rawValue)
+	}
+	if b.Len() == 0 {
+		return "", "", errors.New("invalid PostgreSQL DSN")
+	}
+	return b.String(), password, nil
+}
+
+func libpqValueBytes(raw string) string {
+	if len(raw) >= 2 && raw[0] == '\'' && raw[len(raw)-1] == '\'' {
+		return strings.ReplaceAll(raw[1:len(raw)-1], "''", "'")
+	}
+	return raw
 }
 
 func parsePostgresURL(dsn string) (*url.URL, error) {

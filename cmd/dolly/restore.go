@@ -207,7 +207,11 @@ func runRestore(args []string) (err error) {
 	}
 
 	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
-		dsn = appendQueryParam(dsn, "statement_timeout", cfg.DB.StatementTimeout)
+		var err error
+		dsn, err = appendQueryParam(dsn, "statement_timeout", cfg.DB.StatementTimeout)
+		if err != nil {
+			return err
+		}
 	}
 
 	db, err := sql.Open("pgx", dsn)

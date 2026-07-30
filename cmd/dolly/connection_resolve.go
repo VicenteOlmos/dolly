@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"net/url"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
@@ -54,15 +53,7 @@ func resolveDataSource(cfg *config.Config, cwd, connection, dsn string) (resolve
 	return conn.DSN(), append([]string(nil), conn.Schemas...), nil
 }
 
-// appendQueryParam adds or overwrites a single query parameter in a PostgreSQL DSN URL.
-func appendQueryParam(dsn, key, value string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		// ponytail: DSN can't be parsed — return as-is; timeout won't apply.
-		return dsn
-	}
-	q := u.Query()
-	q.Set(key, value)
-	u.RawQuery = q.Encode()
-	return u.String()
+// appendQueryParam adds or overwrites a single query parameter in a PostgreSQL DSN.
+func appendQueryParam(dsn, key, value string) (string, error) {
+	return connections.SetDSNParam(dsn, key, value)
 }
