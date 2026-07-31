@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/clone"
 	"github.com/VicenteOlmos/dolly/internal/config"
@@ -1741,4 +1744,114 @@ func TestRunCloneFFConnectionBypassesDotenv(t *testing.T) {
 	if !strings.Contains(captured.SourceDSN, "h-a:5432/db_a") {
 		t.Fatalf("SourceDSN = %q", captured.SourceDSN)
 	}
+}
+
+const broadDotenvWarning = "warning: dotenv permissions allow group or other access; continuing without changing the file"
+
+type cwdDotenvSnap struct {
+	bytes []byte
+	mode  os.FileMode
+	mtime time.Time
+}
+
+func snapshotCwdDotenv(t *testing.T, path string) cwdDotenvSnap {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cwdDotenvSnap{bytes: b, mode: info.Mode(), mtime: info.ModTime()}
+}
+
+func assertCwdDotenvUnchanged(t *testing.T, path string, before cwdDotenvSnap) {
+	t.Helper()
+	afterBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before.bytes, afterBytes) {
+		t.Fatal(".env bytes changed")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != before.mode.Perm() {
+		t.Fatalf("mode changed %o -> %o", before.mode.Perm(), info.Mode().Perm())
+	}
+	if !info.ModTime().Equal(before.mtime) {
+		t.Fatal(".env mtime changed")
+	}
+}
+
+func TestCloneNoPermissionOptOutFlag(t *testing.T) {
+	out := captureStderr(printCloneUsage)
+	for _, forbidden := range []string{
+		"--skip-permission",
+		"--no-tighten",
+		"--ignore-permission",
+		"permission-enforcement",
+		"skip permission",
+	} {
+		if strings.Contains(strings.ToLower(out), forbidden) {
+			t.Fatalf("clone usage must not expose permission opt-out %q:\n%s", forbidden, out)
+		}
+	}
+	_, err := parseCloneFlags([]string{"--skip-permission"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("unexpected parse result for --skip-permission: %v", err)
+	}
+}
+
+func TestRunCloneFFBroadCwdDotenvNonMutating(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission-bit advisory not applicable on Windows")
+	}
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	rawURL := "postgres://dotenv-user:dotenv-secret@h-a:5432/db_a?sslmode=disable"
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("DB_URL="+rawURL+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotCwdDotenv(t, envPath)
+
+	for _, key := range []string{"DB_URL", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
+		t.Setenv(key, "")
+	}
+
+	stubCloneFFHarness(t)
+	captured := captureCloneRun(t)
+	useRealLoadDotEnv(t)
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		cfg := config.DefaultConfig()
+		cfg.Env.Path = ".env"
+		return cfg, nil
+	}
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+
+	leaks := []string{"dotenv-secret", rawURL, dir, envPath, ".env"}
+	var stderr string
+	stdout := captureStdout(func() {
+		stderr = captureStderr(func() {
+			if err := runClone([]string{"-ff"}); err != nil {
+				t.Fatalf("runClone: %v", err)
+			}
+		})
+	})
+	assertNotContainsAny(t, stderr, leaks...)
+	assertNotContainsAny(t, stdout, leaks...)
+
+	if n := strings.Count(stderr, broadDotenvWarning); n != 1 {
+		t.Fatalf("want exactly one broad dotenv warning, got %d in %q", n, stderr)
+	}
+	assertContainsAll(t, captured.SourceDSN, "sslmode=disable", "h-a:5432/db_a", "statement_timeout=5min", "dotenv-user")
+	assertCwdDotenvUnchanged(t, envPath, before)
 }

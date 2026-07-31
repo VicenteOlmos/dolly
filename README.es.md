@@ -13,8 +13,9 @@ Elija su ruta:
 
 | Si desea… | Comience aquí |
 |---|---|
+| Clonar su base de datos primero | [Inicio rápido: clonar](#inicio-rápido-clonar) — instale, agregue un `.env`, ejecute `dolly clone`. |
 | Trabajar de forma interactiva | `dolly tui` — conecte, inspeccione esquemas, cree volcados y clone desde una terminal real. |
-| Automatizar un flujo de trabajo | `dolly dump`, `dolly restore` y `dolly clone` — use un DSN o una conexión guardada. |
+| Automatizar volcado o restauración | `dolly dump`, `dolly restore` y `dolly clone` — use un DSN o una conexión guardada. |
 
 `dolly tui` no tiene flags, requiere una TTY y lee `config.jsonc` desde el directorio actual.
 
@@ -68,7 +69,43 @@ go install github.com/VicenteOlmos/dolly/cmd/dolly@latest
 go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
 ```
 
-## Primer flujo de trabajo
+<!-- readme:quick-start-clone -->
+## Inicio rápido: clonar
+
+1. **Instale Dolly** con los pasos de [Instalación](#instalación) anteriores.
+2. En el directorio de su proyecto, cree un archivo `.env` con una conexión compatible. Use `DB_URL` o las variables discretas `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER` y `DB_PASSWORD`:
+
+```bash
+DB_URL='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
+# o variables discretas:
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_NAME=mydb
+# DB_USER=user
+# DB_PASSWORD=pass
+```
+
+3. Ejecute:
+
+```bash
+dolly clone
+```
+
+Dolly descubre `.env` en el **directorio de trabajo actual** al resolver la base de datos origen. En Unix, si el archivo tiene permisos amplios (legible por grupo u otros), Dolly emite una advertencia y continúa **sin cambiar** bytes, modo, propietario ni marcas de tiempo de ese archivo.
+
+Para clonación automatizada con valores predeterminados de configuración:
+
+```bash
+dolly clone -ff
+```
+
+Opcional: `dolly config init` escribe `config.jsonc` para URL de destino, nombres de clon, estrategias y otros valores predeterminados.
+
+<!-- readme:security:dotenv-advisory -->
+Se recomiendan permisos solo para el propietario (por ejemplo `chmod 600 .env`) en archivos con secretos. Dolly no exige ni modifica permisos en archivos `.env` externos que descubre.
+<!-- /readme:security:dotenv-advisory -->
+
+## Más flujos de trabajo
 
 Cree una configuración local opcional y elija la ruta interactiva o automatizable.
 
@@ -77,7 +114,7 @@ dolly config init
 dolly tui
 ```
 
-Para un flujo de trabajo con la CLI, proporcione un DSN de PostgreSQL:
+Para volcado y restauración sin clonar, proporcione un DSN de PostgreSQL:
 
 ```bash
 export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
@@ -156,6 +193,10 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 Este modo puede dejar avances parciales si falla durante el proceso. Prefiera el modo predeterminado cuando necesite una reversión atómica.
 
 ### Estrategias de clonación
+
+<!-- readme:fidelity:schema-replay -->
+La estrategia predeterminada `schema-replay` recrea definiciones de esquema y objetos (incluidas definiciones de disparadores y vistas materializadas), restaura datos de tablas regulares y el estado de secuencias, y excluye propietarios, ACL, roles y tablespaces de ámbito de clúster. El contenido de vistas materializadas no se clona (solo definiciones). Los disparadores clonados pueden ejecutarse durante la restauración.
+<!-- /readme:fidelity:schema-replay -->
 
 | Estrategia | Cuándo usarla | Sanitización |
 |---|---|---|

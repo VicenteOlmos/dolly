@@ -13,8 +13,9 @@ Choose your path:
 
 | If you want to… | Start here |
 |---|---|
+| Clone your database first | [Quick start: clone](#quick-start-clone) — install, add a `.env`, run `dolly clone`. |
 | Work interactively | `dolly tui` — connect, inspect schemas, dump, and clone from a real terminal. |
-| Script a workflow | `dolly dump`, `dolly restore`, and `dolly clone` — use a DSN or saved connection. |
+| Script dump or restore | `dolly dump`, `dolly restore`, and `dolly clone` — use a DSN or saved connection. |
 
 `dolly tui` has no flags, requires a TTY, and reads `config.jsonc` from the current directory.
 
@@ -68,7 +69,43 @@ go install github.com/VicenteOlmos/dolly/cmd/dolly@latest
 go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
 ```
 
-## First workflow
+<!-- readme:quick-start-clone -->
+## Quick start: clone
+
+1. **Install Dolly** using the [Install](#install) steps above.
+2. In your project directory, create a `.env` file with a compatible connection. Use `DB_URL` or discrete `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` variables:
+
+```bash
+DB_URL='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
+# or discrete vars:
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_NAME=mydb
+# DB_USER=user
+# DB_PASSWORD=pass
+```
+
+3. Run:
+
+```bash
+dolly clone
+```
+
+Dolly discovers `.env` in the **current working directory** when resolving the source database. On Unix, if the file has broad permissions (group/other readable), Dolly emits one warning and continues **without changing** bytes, mode, owner, or timestamps on that file.
+
+For scripted clone with config defaults:
+
+```bash
+dolly clone -ff
+```
+
+Optional: `dolly config init` writes `config.jsonc` for target URL, clone naming, strategies, and other defaults.
+
+<!-- readme:security:dotenv-advisory -->
+Owner-only permissions (for example `chmod 600 .env`) are recommended for secret files. Dolly does not require or modify permissions on external `.env` files it discovers.
+<!-- /readme:security:dotenv-advisory -->
+
+## More workflows
 
 Create optional local configuration, then choose the interactive or scriptable route.
 
@@ -77,7 +114,7 @@ dolly config init
 dolly tui
 ```
 
-For a CLI workflow, pass a PostgreSQL DSN:
+For dump and restore without cloning, pass a PostgreSQL DSN:
 
 ```bash
 export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
@@ -271,6 +308,10 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 Serial `--no-transaction` mode can leave partial progress if it fails mid-way. Parallel restore (`--workers > 1`) always requires `--ack-partial-state` and writes a manifest until full success. Prefer the default when you need atomic rollback.
 
 ### Clone strategies
+
+<!-- readme:fidelity:schema-replay -->
+Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and excludes owners, **ACL**s, and **cluster-global** roles and tablespaces. **Materialized-view** contents are **not cloned** (definitions only). Cloned **triggers may fire** during restore.
+<!-- /readme:fidelity:schema-replay -->
 
 | Strategy | When | Sanitization |
 |---|---|---|
