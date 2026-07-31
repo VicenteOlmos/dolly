@@ -195,7 +195,7 @@ Este modo puede dejar avances parciales si falla durante el proceso. Prefiera el
 ### Estrategias de clonación
 
 <!-- readme:fidelity:schema-replay -->
-La estrategia predeterminada `schema-replay` recrea definiciones de esquema y objetos (incluidas definiciones de disparadores y vistas materializadas), restaura datos de tablas regulares y el estado de secuencias, y excluye propietarios, ACL y roles y tablespaces de ámbito de clúster. El contenido de vistas materializadas no se clona (solo definiciones). Los disparadores clonados pueden ejecutarse durante la restauración.
+La estrategia predeterminada `schema-replay` recrea definiciones de esquema y objetos (incluidas definiciones de disparadores y vistas materializadas), restaura datos de tablas regulares y el estado de secuencias, y excluye propietarios, ACL, roles y tablespaces de ámbito de clúster. El contenido de vistas materializadas no se clona (solo definiciones). Los disparadores clonados pueden ejecutarse durante la restauración.
 <!-- /readme:fidelity:schema-replay -->
 
 | Estrategia | Cuándo usarla | Sanitización |
