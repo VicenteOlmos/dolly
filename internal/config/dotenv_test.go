@@ -1,12 +1,15 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func clearEnv(t *testing.T, names EnvVarNames) {
@@ -26,6 +29,50 @@ func defaultNames() EnvVarNames {
 		NameVar:     "DB_NAME",
 		UserVar:     "DB_USER",
 		PasswordVar: "DB_PASSWORD",
+	}
+}
+
+type dotenvSnap struct {
+	bytes []byte
+	mode  os.FileMode
+	mtime time.Time
+}
+
+func snapshotDotenv(t *testing.T, path string, withBytes bool) dotenvSnap {
+	t.Helper()
+	var s dotenvSnap
+	if withBytes {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.bytes = b
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mode, s.mtime = info.Mode(), info.ModTime()
+	return s
+}
+
+func assertDotenvUnchanged(t *testing.T, path string, before dotenvSnap) {
+	t.Helper()
+	if before.bytes != nil {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before.bytes, b) {
+			t.Fatal("bytes changed")
+		}
+	}
+	after := snapshotDotenv(t, path, false)
+	if after.mode.Perm() != before.mode.Perm() {
+		t.Fatalf("mode changed %o -> %o", before.mode.Perm(), after.mode.Perm())
+	}
+	if !after.mtime.Equal(before.mtime) {
+		t.Fatal("mtime changed")
 	}
 }
 
@@ -273,7 +320,7 @@ func TestLoadDotEnvComponentsURLVarParsedToComponents(t *testing.T) {
 	}
 }
 
-func TestLoadDotEnvTightensBeforeRead(t *testing.T) {
+func TestLoadDotEnvDoesNotMutateBroadDotenv(t *testing.T) {
 	names := defaultNames()
 	clearEnv(t, names)
 
@@ -283,6 +330,7 @@ func TestLoadDotEnvTightensBeforeRead(t *testing.T) {
 	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	before := snapshotDotenv(t, dotenv, true)
 
 	dsn, err := LoadDotEnv(dotenv, names)
 	if err != nil {
@@ -291,102 +339,107 @@ func TestLoadDotEnvTightensBeforeRead(t *testing.T) {
 	if dsn != "postgres://u:p@host/db" {
 		t.Fatalf("expected URL DSN, got %q", dsn)
 	}
+	assertDotenvUnchanged(t, dotenv, before)
+}
+
+func TestReadDotEnvAdvisoryAndWriter(t *testing.T) {
+	dir := t.TempDir()
+	broad := filepath.Join(dir, "broad.env")
+	safe := filepath.Join(dir, "safe.env")
+	missing := filepath.Join(dir, "missing.env")
+	if err := os.WriteFile(broad, []byte("DB_HOST=myhost\nDB_NAME=mydb\nDB_USER=myuser\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(safe, []byte("DB_HOST=h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, path, wantHost string
+		useWriter, wantWarn  bool
+	}{
+		{"broad_warns_once", broad, "myhost", true, true},
+		{"safe_quiet", safe, "h", true, false},
+		{"missing_quiet", missing, "", true, false},
+		{"nil_writer", broad, "myhost", false, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var before dotenvSnap
+			if tt.wantWarn {
+				before = snapshotDotenv(t, tt.path, true)
+			}
+			var warnings bytes.Buffer
+			var writer io.Writer
+			if tt.useWriter {
+				writer = &warnings
+			}
+			env, err := readDotEnv(tt.path, writer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantHost == "" {
+				if env != nil {
+					t.Fatalf("expected nil env, got %v", env)
+				}
+			} else if env["DB_HOST"] != tt.wantHost {
+				t.Fatalf("DB_HOST=%q want %q", env["DB_HOST"], tt.wantHost)
+			}
+			got := strings.TrimSpace(warnings.String())
+			if tt.wantWarn {
+				if got != broadDotEnvPermissionsWarning {
+					t.Fatalf("warning=%q", got)
+				}
+				assertDotenvUnchanged(t, tt.path, before)
+			} else if warnings.Len() != 0 {
+				t.Fatalf("unexpected warning %q", warnings.String())
+			}
+		})
+	}
+	t.Run("parse_error_wrapped", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bad.env")
+		if err := os.WriteFile(path, []byte("DB_HOST=\nINVALID LINE\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := readDotEnv(path, nil)
+		if err == nil || !strings.Contains(err.Error(), "read .env") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+}
+
+func TestReadDotEnvWarningDoesNotLeakSecrets(t *testing.T) {
+	dir := t.TempDir()
+	dotenv := filepath.Join(dir, ".env")
+	if err := os.WriteFile(dotenv, []byte("DB_URL=postgres://leakuser:leakpass@leakhost:5432/leakdb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var warnings bytes.Buffer
+	if _, err := readDotEnv(dotenv, &warnings); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{dotenv, "leakuser", "leakpass", "leakhost", "leakdb", "postgres://", "DB_URL"} {
+		if strings.Contains(warnings.String(), forbidden) {
+			t.Fatalf("warning leaks %q", forbidden)
+		}
+	}
+}
+
+func TestReadDotEnvSymlinkNonMutation(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		return // Windows no-op preserves original mode
+		t.Skip("symlink metadata tests are Unix-focused")
 	}
-	info, err := os.Stat(dotenv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("file mode = %o, want 0600 after tighten", got)
-	}
-}
-
-func TestLoadDotEnvFailClosedBeforeRead(t *testing.T) {
-	names := defaultNames()
-	clearEnv(t, names)
-
 	dir := t.TempDir()
-	dotenv := filepath.Join(dir, ".env")
-	content := "DB_URL=postgres://u:p@host/db\n"
-	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
+	target := filepath.Join(dir, "target.env")
+	link := filepath.Join(dir, ".env")
+	if err := os.WriteFile(target, []byte("DB_HOST=symlink-host\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	orig := ensureOwnerOnlyImpl
-	ensureOwnerOnlyImpl = func(string) error {
-		return errors.New("injected tighten failure")
-	}
-	t.Cleanup(func() { ensureOwnerOnlyImpl = orig })
-
-	_, err := LoadDotEnv(dotenv, names)
-	if err == nil {
-		t.Fatal("expected error from injected tighten failure")
-	}
-	if !strings.Contains(err.Error(), "injected tighten failure") {
-		t.Fatalf("expected tighten error, got %v", err)
-	}
-	if strings.Contains(err.Error(), "read .env") {
-		t.Fatalf("godotenv.Read should not be reached before tighten: %v", err)
-	}
-}
-
-func TestLoadDotEnvComponentsFailClosedBeforeRead(t *testing.T) {
-	names := defaultNames()
-	clearEnv(t, names)
-
-	dir := t.TempDir()
-	dotenv := filepath.Join(dir, ".env")
-	content := "DB_HOST=myhost\nDB_PORT=5432\nDB_NAME=mydb\nDB_USER=myuser\nDB_PASSWORD=mypass\n"
-	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-
-	orig := ensureOwnerOnlyImpl
-	ensureOwnerOnlyImpl = func(string) error {
-		return errors.New("injected tighten failure")
+	beforeTarget := snapshotDotenv(t, target, true)
+	env, err := readDotEnv(link, &bytes.Buffer{})
+	if err != nil || env["DB_HOST"] != "symlink-host" {
+		t.Fatalf("env=%v err=%v", env, err)
 	}
-	t.Cleanup(func() { ensureOwnerOnlyImpl = orig })
-
-	_, _, _, _, _, err := LoadDotEnvComponents(dotenv, names)
-	if err == nil {
-		t.Fatal("expected error from injected tighten failure")
-	}
-	if !strings.Contains(err.Error(), "injected tighten failure") {
-		t.Fatalf("expected tighten error, got %v", err)
-	}
-	if strings.Contains(err.Error(), "read .env") {
-		t.Fatalf("godotenv.Read should not be reached before tighten: %v", err)
-	}
-}
-
-func TestLoadDotEnvComponentsTightensBeforeRead(t *testing.T) {
-	names := defaultNames()
-	clearEnv(t, names)
-
-	dir := t.TempDir()
-	dotenv := filepath.Join(dir, ".env")
-	content := "DB_HOST=myhost\nDB_PORT=5432\nDB_NAME=mydb\nDB_USER=myuser\nDB_PASSWORD=mypass\n"
-	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	host, port, name, user, password, err := LoadDotEnvComponents(dotenv, names)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if host != "myhost" || port != "5432" || name != "mydb" || user != "myuser" || password != "mypass" {
-		t.Fatalf("got host=%q port=%q name=%q user=%q password=%q", host, port, name, user, password)
-	}
-	if runtime.GOOS == "windows" {
-		return // Windows no-op preserves original mode
-	}
-	info, err := os.Stat(dotenv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("file mode = %o, want 0600 after tighten", got)
-	}
+	assertDotenvUnchanged(t, target, beforeTarget)
 }
