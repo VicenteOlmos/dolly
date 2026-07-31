@@ -7,6 +7,20 @@ import (
 	"os"
 )
 
+// dotenvPermissionAdvisory reports whether path has group or other permission
+// bits set. It performs os.Stat only and never mutates the file.
+// A missing file is not an error and is not considered broad.
+func dotenvPermissionAdvisory(path string) (broad bool, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	return info.Mode().Perm()&0o077 != 0, nil
+}
+
 // ensureOwnerOnly tightens path to owner-only (0600) before reading secret
 // bytes. A missing file is not an error (preserves default config and shell
 // env fallback).

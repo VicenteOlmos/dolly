@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/joho/godotenv"
 )
+
+const broadDotEnvPermissionsWarning = "warning: dotenv permissions allow group or other access; continuing without changing the file"
 
 // ErrSourceDSNNotFound is returned when neither DB_URL nor discrete DB_* vars resolve a DSN.
 var ErrSourceDSNNotFound = errors.New("source DSN not found")
@@ -24,6 +27,27 @@ type EnvVarNames struct {
 	PasswordVar string
 }
 
+func readDotEnv(path string, warnings io.Writer) (map[string]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+	broad, err := dotenvPermissionAdvisory(path)
+	if err != nil {
+		return nil, fmt.Errorf("tighten %s: %w", path, err)
+	}
+	if broad && warnings != nil {
+		_, _ = io.WriteString(warnings, broadDotEnvPermissionsWarning+"\n")
+	}
+	env, err := godotenv.Read(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read .env: %w", err)
+	}
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return env, nil
+}
+
 // LoadDotEnvComponents reads a .env file (if present) and returns the discrete
 // DB connection fields: host, port, name (database), user, and password.
 // If URLVar is set it is parsed to extract the components; otherwise discrete
@@ -31,19 +55,9 @@ type EnvVarNames struct {
 // fallback. Returns ErrSourceDSNNotFound when host, name, and user are all
 // empty after resolution.
 func LoadDotEnvComponents(path string, names EnvVarNames) (host, port, name, user, password string, err error) {
-	var env map[string]string
-	if path != "" {
-		if err := ensureOwnerOnly(path); err != nil {
-			return "", "", "", "", "", fmt.Errorf("tighten %s: %w", path, err)
-		}
-		env, err = godotenv.Read(path)
-		if err != nil && !os.IsNotExist(err) {
-			return "", "", "", "", "", fmt.Errorf("read .env: %w", err)
-		}
-		if os.IsNotExist(err) {
-			env = nil
-		}
-		err = nil
+	env, err := readDotEnv(path, os.Stderr)
+	if err != nil {
+		return "", "", "", "", "", err
 	}
 
 	get := func(key string) string {
@@ -93,19 +107,9 @@ func LoadDotEnvComponents(path string, names EnvVarNames) (host, port, name, use
 // A missing .env file is treated as a no-op so that existing shell env vars can
 // still be used.
 func LoadDotEnv(path string, names EnvVarNames) (string, error) {
-	var env map[string]string
-	if path != "" {
-		if err := ensureOwnerOnly(path); err != nil {
-			return "", fmt.Errorf("tighten %s: %w", path, err)
-		}
-		var err error
-		env, err = godotenv.Read(path)
-		if err != nil && !os.IsNotExist(err) {
-			return "", fmt.Errorf("read .env: %w", err)
-		}
-		if os.IsNotExist(err) {
-			env = nil
-		}
+	env, err := readDotEnv(path, os.Stderr)
+	if err != nil {
+		return "", err
 	}
 
 	get := func(key string) string {
