@@ -86,6 +86,30 @@ dolly dump list --output ./dolly_dump
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
 ```
 
+<!-- situation-guidance:start -->
+
+Dolly no inspecciona el tamaño de la base de datos ni las condiciones de red, ni ajusta los modos automáticamente. Considere los tamaños y las velocidades como cualitativos: el hardware, la forma del esquema, el ancho de fila y la latencia afectan los resultados.
+
+**¿No está seguro de qué elegir?** Use `dolly tui` para opciones guiadas. En la CLI, omitir flags de optimización mantiene los valores predeterminados seguros y seriales (`workers=1`, restore transaccional).
+
+| Situación | Recomendación | Motivo | Límite |
+|---|---|---|---|
+| <!-- situation:safe-default --> Dudas / camino más seguro | `dolly dump --dsn "$DB" --output ./dolly_dump` → `dolly restore --dsn "$TARGET_DB" --input ./dolly_dump/1` | Un worker por defecto; restore transaccional y atómico | Más lento que modos paralelos en bases grandes |
+| <!-- situation:small-database --> Base pequeña, copia directa | `dolly dump --dsn "$DB" --output ./dolly_dump` | Volcado completo con pocos flags | Se vuelve lento al crecer los datos |
+| <!-- situation:large-stable --> Tablas muy grandes donde la reanudabilidad importa más que la velocidad | `dolly dump ... --chunk-table public.large_table --workers 1` | Procesamiento por clave en fragmentos; reanudable, serial y sin snapshot compartido | Requiere clave primaria en cada tabla fragmentada |
+| <!-- situation:large-unreliable --> Datos grandes, enlace lento o inestable | `dolly dump ... --slow-connection --workers 1` | Fragmentos con puntos de control toleran fallos intermitentes | Cada tabla seleccionada necesita PK; no transaccional; incompatible con subconjunto y volcado paralelo |
+| <!-- situation:maximum-dump-speed --> Base grande, conexión estable, máximo rendimiento de volcado | `dolly dump ... --workers "$WORKERS"` | Snapshot consistente compartido entre workers de tabla | Elija entre 1 y 16 según pruebas; requiere `max_open_conns >= workers+1`; excluye slow/chunk/subconjunto/`--no-transaction` |
+| <!-- situation:maximum-restore-speed --> Máximo rendimiento de restore | **AVANZADO — NO ATÓMICO** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Restauración paralela de tablas tras reconocer riesgo de estado parcial | Sin reversión atómica; `on-conflict` debe ser `error`; no usar `--replace`, `--trust-schema-sql`, skip ni upsert |
+| <!-- situation:representative-sample --> Muestra para desarrollo/pruebas, no copia completa | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Raíces recientes más cierre de claves foráneas | No es representación estadística; el cierre puede superar el porcentaje |
+| <!-- situation:same-instance-clone --> Clonación más rápida en la misma instancia | `dolly clone --strategy template` | Copia por plantilla en un solo servidor PostgreSQL | Sin conexiones activas en el origen; sin sanitizar |
+| <!-- situation:cross-server-large-clone --> Copia grande entre servidores de una sola base | `dolly clone --strategy logical-stream` | Flujo lógico para copias remotas grandes | Sin sanitizar; no es copia física del clúster |
+
+`$WORKERS`, `$PERCENT` y `$ROW_CAP` son valores elegidos por el operador; Dolly no los establece automáticamente.
+
+Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para conocer los flags. Más detalle en [Flujos de trabajo y límites habituales](#flujos-de-trabajo-y-límites-habituales) y [Estrategias de clonación](#estrategias-de-clonación).
+
+<!-- situation-guidance:end -->
+
 ## Funcionalidades de Dolly
 
 | Comando | Propósito |
