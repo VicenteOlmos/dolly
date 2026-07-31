@@ -4,6 +4,16 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+## 0.3.1 (pending)
+
+### Runtime safety
+
+- **External dotenv files** — discovered dotenv files are read without changing permissions or metadata; broad Unix group/other permissions emit a constant redacted warning and loading continues (#114).
+
+### Onboarding
+
+- **Clone-first quick start** — bilingual README guidance makes install → current-directory database variables → `dolly clone` the primary onboarding path, with accurate default `schema-replay` fidelity boundaries (#115).
+
 ## [0.3.0](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.0) — 2026-07-30
 
 ### Runtime safety
