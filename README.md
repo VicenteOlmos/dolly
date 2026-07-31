@@ -87,6 +87,30 @@ dolly dump list --output ./dolly_dump
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
 ```
 
+<!-- situation-guidance:start -->
+
+Dolly does not inspect your database size or network conditions, and it does not auto-tune. Treat sizes and speeds as qualitative—hardware, schema shape, row width, and latency all affect outcomes.
+
+**Not sure what to pick?** Run `dolly tui` for guided choices. On the CLI, omitting optimization flags keeps safe serial defaults (`workers=1`, transactional restore).
+
+| Situation | Recommendation | Why | Tradeoff |
+|---|---|---|---|
+| <!-- situation:safe-default --> Unsure / want the safest path | `dolly dump --dsn "$DB" --output ./dolly_dump` → `dolly restore --dsn "$TARGET_DB" --input ./dolly_dump/1` | One worker by default; restore stays transactional and atomic | Slower than parallel modes on large databases |
+| <!-- situation:small-database --> Small database, straightforward copy | `dolly dump --dsn "$DB" --output ./dolly_dump` | Full dump with minimal flags | Gets slower as data grows |
+| <!-- situation:large-stable --> Very large named tables where resumability matters more than speed | `dolly dump ... --chunk-table public.large_table --workers 1` | Keyset chunking is resumable on a serial, non-snapshot path | Primary key required for each chunked table |
+| <!-- situation:large-unreliable --> Large data, slow or unreliable link | `dolly dump ... --slow-connection --workers 1` | Checkpointed chunks tolerate intermittent failures | Every selected table needs a PK; non-transactional; incompatible with subset and parallel dump |
+| <!-- situation:maximum-dump-speed --> Large database, stable connection, maximum dump throughput | `dolly dump ... --workers "$WORKERS"` | Shared consistent snapshot across parallel table workers | Tune empirically within 1–16; needs `max_open_conns >= workers+1`; excludes slow/chunk/subset/`--no-transaction` |
+| <!-- situation:maximum-restore-speed --> Maximum restore throughput | **ADVANCED — NON-ATOMIC** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Parallel table restore after acknowledging partial-state risk | No atomic rollback; `on-conflict` must be `error`; cannot use `--replace`, `--trust-schema-sql`, skip, or upsert |
+| <!-- situation:representative-sample --> Dev/test sample, not a full copy | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Recent-root selection plus FK closure | Not statistically representative; closure may exceed the target percent |
+| <!-- situation:same-instance-clone --> Fastest clone on the same instance | `dolly clone --strategy template` | Template database copy on one PostgreSQL server | Source must have no active connections; unsanitized |
+| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Unsanitized; not a physical cluster copy |
+
+`$WORKERS`, `$PERCENT`, and `$ROW_CAP` are operator-chosen values—Dolly does not set them automatically.
+
+See `dolly dump --help`, `dolly restore --help`, and `dolly clone --help` for flags. Copyable recipes remain in [Common workflows and limits](#common-workflows-and-limits).
+
+<!-- situation-guidance:end -->
+
 ### Choose a mode
 
 | If you need… | Use | Do not use when |
