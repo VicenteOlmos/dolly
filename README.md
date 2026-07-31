@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh 
 Pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.1.1 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.0 sh
 ```
 
 Default install path: `/usr/local/bin`. Set `DOLLY_INSTALL_DIR` to install elsewhere.
@@ -45,7 +45,7 @@ irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 Pin a release:
 
 ```powershell
-$env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.3.0"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
 Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it to your user `PATH`.
@@ -55,7 +55,7 @@ Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it
 | Topic | Detail |
 |---|---|
 | Latest release | Installers default to the latest [GitHub Release](https://github.com/VicenteOlmos/dolly/releases). |
-| Pin a version | Set `DOLLY_VERSION` (for example `0.1.1`) in the install command above. |
+| Pin a version | Set `DOLLY_VERSION` (for example `0.3.0`) in the install command above. |
 | SemVer tags | Release tags follow `vX.Y.Z`. Only the **latest release** receives security fixes. |
 | Immutable assets | Tags and release archives are never overwritten — use a new patch tag for fixes. |
 | Checksums | Each release ships `checksums.txt`; installers verify archives before install. |
