@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -117,8 +118,15 @@ func TestDotenvPermissionAdvisory(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var before dotenvSnap
+			var beforeUID, beforeGID int
 			if tt.checkMeta {
 				before = snapshotDotenv(t, tt.path, false)
+				info, err := os.Stat(tt.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st := info.Sys().(*syscall.Stat_t)
+				beforeUID, beforeGID = int(st.Uid), int(st.Gid)
 			}
 			got, err := dotenvPermissionAdvisory(tt.path)
 			if err != nil || got != tt.wantBroad {
@@ -126,6 +134,14 @@ func TestDotenvPermissionAdvisory(t *testing.T) {
 			}
 			if tt.checkMeta {
 				assertDotenvUnchanged(t, tt.path, before)
+				after, err := os.Stat(tt.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				st := after.Sys().(*syscall.Stat_t)
+				if int(st.Uid) != beforeUID || int(st.Gid) != beforeGID {
+					t.Fatal("owner changed")
+				}
 			}
 		})
 	}

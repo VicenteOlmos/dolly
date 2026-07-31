@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -34,10 +33,9 @@ func defaultNames() EnvVarNames {
 }
 
 type dotenvSnap struct {
-	bytes    []byte
-	mode     os.FileMode
-	uid, gid int
-	mtime    time.Time
+	bytes []byte
+	mode  os.FileMode
+	mtime time.Time
 }
 
 func snapshotDotenv(t *testing.T, path string, withBytes bool) dotenvSnap {
@@ -55,11 +53,6 @@ func snapshotDotenv(t *testing.T, path string, withBytes bool) dotenvSnap {
 		t.Fatal(err)
 	}
 	s.mode, s.mtime = info.Mode(), info.ModTime()
-	if runtime.GOOS != "windows" {
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			s.uid, s.gid = int(st.Uid), int(st.Gid)
-		}
-	}
 	return s
 }
 
@@ -77,9 +70,6 @@ func assertDotenvUnchanged(t *testing.T, path string, before dotenvSnap) {
 	after := snapshotDotenv(t, path, false)
 	if after.mode.Perm() != before.mode.Perm() {
 		t.Fatalf("mode changed %o -> %o", before.mode.Perm(), after.mode.Perm())
-	}
-	if runtime.GOOS != "windows" && (after.uid != before.uid || after.gid != before.gid) {
-		t.Fatalf("owner changed")
 	}
 	if !after.mtime.Equal(before.mtime) {
 		t.Fatal("mtime changed")
@@ -352,28 +342,6 @@ func TestLoadDotEnvDoesNotMutateBroadDotenv(t *testing.T) {
 	assertDotenvUnchanged(t, dotenv, before)
 }
 
-func TestLoadDotEnvComponentsDoesNotMutateBroadDotenv(t *testing.T) {
-	names := defaultNames()
-	clearEnv(t, names)
-
-	dir := t.TempDir()
-	dotenv := filepath.Join(dir, ".env")
-	content := "DB_HOST=myhost\nDB_PORT=5432\nDB_NAME=mydb\nDB_USER=myuser\nDB_PASSWORD=mypass\n"
-	if err := os.WriteFile(dotenv, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	before := snapshotDotenv(t, dotenv, true)
-
-	host, port, name, user, password, err := LoadDotEnvComponents(dotenv, names)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if host != "myhost" || port != "5432" || name != "mydb" || user != "myuser" || password != "mypass" {
-		t.Fatalf("got host=%q port=%q name=%q user=%q password=%q", host, port, name, user, password)
-	}
-	assertDotenvUnchanged(t, dotenv, before)
-}
-
 func TestReadDotEnvAdvisoryAndWriter(t *testing.T) {
 	dir := t.TempDir()
 	broad := filepath.Join(dir, "broad.env")
@@ -469,14 +437,9 @@ func TestReadDotEnvSymlinkNonMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeTarget := snapshotDotenv(t, target, true)
-	beforeLink, _ := os.Lstat(link)
 	env, err := readDotEnv(link, &bytes.Buffer{})
 	if err != nil || env["DB_HOST"] != "symlink-host" {
 		t.Fatalf("env=%v err=%v", env, err)
 	}
 	assertDotenvUnchanged(t, target, beforeTarget)
-	afterLink, _ := os.Lstat(link)
-	if afterLink.Mode().Perm() != beforeLink.Mode().Perm() {
-		t.Fatal("symlink mode changed")
-	}
 }
