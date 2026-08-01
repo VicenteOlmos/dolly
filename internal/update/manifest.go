@@ -89,3 +89,21 @@ func validateManifest(manifest updateManifest, capability string) error {
 	}
 	return nil
 }
+
+func validateManifestDigests(manifest updateManifest) error {
+	oldSHA, oldSize, err := fileDigest(manifest.Target)
+	if err != nil {
+		return fmt.Errorf("verify target digest: %w", err)
+	}
+	if oldSHA != manifest.OldSHA256 || oldSize != manifest.OldSize {
+		return fmt.Errorf("target digest mismatch")
+	}
+	newSHA, newSize, err := fileDigest(manifest.Candidate)
+	if err != nil {
+		return fmt.Errorf("verify candidate digest: %w", err)
+	}
+	if newSHA != manifest.NewSHA256 || newSize != manifest.NewSize {
+		return fmt.Errorf("candidate digest mismatch")
+	}
+	return nil
+}
