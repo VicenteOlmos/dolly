@@ -120,6 +120,103 @@ func releaseAssetCDNURL(assetName string) string {
 	return "https://release-assets.githubusercontent.com/mock/" + assetName
 }
 
+func mockReleaseClient(t *testing.T, assetName string, archive, checksums []byte, tag string) HTTPDoer {
+	t.Helper()
+	repo := defaultRepo
+	return roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		switch {
+		case strings.Contains(req.URL.Path, "/releases/latest"):
+			_ = json.NewEncoder(rec).Encode(releaseMetadata{
+				TagName: tag,
+				Assets: []releaseAsset{
+					{Name: assetName, BrowserDownloadURL: releaseAssetGitHubURL(repo, tag, assetName)},
+					{Name: "checksums.txt", BrowserDownloadURL: releaseAssetGitHubURL(repo, tag, "checksums.txt")},
+				},
+			})
+		case strings.Contains(req.URL.Path, "/releases/download/"):
+			if strings.HasSuffix(req.URL.Path, "/"+assetName) {
+				rec.Write(archive)
+			} else if strings.HasSuffix(req.URL.Path, "/checksums.txt") {
+				rec.Write(checksums)
+			} else {
+				rec.WriteHeader(http.StatusNotFound)
+			}
+		default:
+			rec.WriteHeader(http.StatusNotFound)
+		}
+		return rec.Result(), nil
+	})
+}
+
+func TestRunCurrentNoMutation(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("binary")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+
+	target := writeFakeBinary(t, t.TempDir(), "dolly", 0o755)
+	before := fileSHA256(t, target)
+
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.1"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+		CheckOnly:        true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != StatusCurrent {
+		t.Fatalf("status = %s, want current", result.Status)
+	}
+	if after := fileSHA256(t, target); after != before {
+		t.Fatal("target mutated on current")
+	}
+}
+
+func TestRunAvailableCheckVerifiesWithoutMutation(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho newer\n")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+
+	target := writeFakeBinary(t, t.TempDir(), "dolly", 0o755)
+	before := fileSHA256(t, target)
+
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+		CheckOnly:        true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != StatusAvailable {
+		t.Fatalf("status = %s, want available", result.Status)
+	}
+	if after := fileSHA256(t, target); after != before {
+		t.Fatal("target mutated on check")
+	}
+}
+
+func TestRunDevBuildRejected(t *testing.T) {
+	result, err := Run(context.Background(), Options{InstalledVersion: "dev"})
+	if err == nil {
+		t.Fatal("expected dev rejection")
+	}
+	if result == nil || result.Status != StatusFailed {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func writeFakeBinary(t *testing.T, dir, name string, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(dir, name)

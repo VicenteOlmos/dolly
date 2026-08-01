@@ -3,6 +3,7 @@
 package update
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -239,5 +240,66 @@ func TestApplyReplacementRejectsSymlinkTarget(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunRejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	real := writeFakeBinary(t, dir, "dolly-real", 0o755)
+	link := filepath.Join(dir, "dolly")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho newer\n")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+	realSHA := fileSHA256(t, real)
+
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       link,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("err = %v", err)
+	}
+	if result == nil || result.Status != StatusFailed {
+		t.Fatalf("result = %+v", result)
+	}
+	if got := fileSHA256(t, real); got != realSHA {
+		t.Fatal("real target mutated")
+	}
+}
+
+func TestRunUpdatedUnix(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho updated-run\n")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+
+	target := writeFakeBinary(t, t.TempDir(), "dolly", 0o755)
+	before := fileSHA256(t, target)
+
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != StatusUpdated {
+		t.Fatalf("status = %s, want updated", result.Status)
+	}
+	if after := fileSHA256(t, target); after == before {
+		t.Fatal("target not updated")
 	}
 }
