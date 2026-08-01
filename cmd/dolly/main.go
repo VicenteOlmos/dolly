@@ -34,6 +34,10 @@ func dispatch(args []string) int {
 		return 1
 	}
 
+	if handled, code := dispatchUpdateInternal(args); handled {
+		return code
+	}
+
 	if args[1] == "-h" || args[1] == "--help" {
 		printRootUsage()
 		return 0

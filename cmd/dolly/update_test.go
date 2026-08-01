@@ -365,3 +365,10 @@ func runUpdateWithClient(args []string, client update.HTTPDoer, cfg updateTestCo
 	}
 	return emitUpdateText(result, runErr)
 }
+
+func TestDispatchUpdateInternalHidden(t *testing.T) {
+	handled, code := dispatchUpdateInternal([]string{"dolly", "__update-helper"})
+	if !handled || code == 0 {
+		t.Fatalf("handled=%v code=%d, want handled failure", handled, code)
+	}
+}
