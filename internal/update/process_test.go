@@ -1,8 +1,10 @@
 package update
 
 import (
+	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,5 +52,25 @@ func TestWaitForPIDExitTimesOut(t *testing.T) {
 	err := defaultWaitForPIDExit(cmd.Process.Pid, 100*time.Millisecond)
 	if err == nil || err.Error() != "timed out waiting for pid "+strconv.Itoa(cmd.Process.Pid) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReportDurabilityAtomicPublish(t *testing.T) {
+	dir := t.TempDir()
+	if err := writePendingReport(dir, pendingReport{
+		Status:        StatusUpdated,
+		RemoteVersion: "v0.3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(reportTempPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("temp report should not remain after publish")
+	}
+	data, err := os.ReadFile(reportPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "updated") {
+		t.Fatalf("report = %s", string(data))
 	}
 }
