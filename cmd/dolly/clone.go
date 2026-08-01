@@ -78,12 +78,15 @@ func parseCloneFlags(args []string) (cloneFlags, error) {
 
 // Injectable seams for testing runClone without live PostgreSQL.
 var (
-	cloneLoadConfig   = config.LoadConfig
-	clonePromptSource = config.PromptSource
-	cloneIsTerminal   = config.IsStdinTerminal
-	cloneRun          = clone.Run
-	clonePingContext  = func(db *sql.DB, ctx context.Context) error { return db.PingContext(ctx) }
-	cloneLoadDotEnv   = config.LoadDotEnv
+	cloneLoadConfig    = config.LoadConfig
+	clonePromptSource  = config.PromptSource
+	cloneIsTerminal    = config.IsStdinTerminal
+	cloneRun           = clone.Run
+	clonePingContext   = func(db *sql.DB, ctx context.Context) error { return db.PingContext(ctx) }
+	cloneLoadDotEnv    = config.LoadDotEnv
+	cloneSignalContext = func() (context.Context, context.CancelFunc) {
+		return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	}
 )
 
 // cloneListSchemaNames lists non-system schemas on the source database.
@@ -172,14 +175,13 @@ func runClone(args []string) (err error) {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
 	if flags.Connection != "" {
 		conn, err := connections.Resolve(cfg, ".", flags.Connection)
 		if err != nil {
 			return err
 		}
+		ctx, cancel := cloneSignalContext()
+		defer cancel()
 		return runCloneWithSource(ctx, flags, cfg, conn)
 	}
 
@@ -267,6 +269,9 @@ func runClone(args []string) (err error) {
 			}
 		}
 	}
+
+	ctx, cancel := cloneSignalContext()
+	defer cancel()
 
 	if err := clone.ValidateCloneName(cloneName); err != nil {
 		return fmt.Errorf("validate clone name: %w", err)
