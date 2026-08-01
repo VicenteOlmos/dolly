@@ -63,3 +63,35 @@ func TestApplyReplacementWindowsDeferred(t *testing.T) {
 		t.Fatal("target mutated before helper runs")
 	}
 }
+
+func TestRunDeferredWindows(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("new-binary")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+
+	target := writeFakeBinary(t, t.TempDir(), "dolly.exe", 0o755)
+	before := fileSHA256(t, target)
+
+	oldStart := startDetachedProcess
+	startDetachedProcess = func(path string, argv []string) error { return nil }
+	t.Cleanup(func() { startDetachedProcess = oldStart })
+
+	result, err := Run(t.Context(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != StatusDeferred {
+		t.Fatalf("status = %s, want deferred", result.Status)
+	}
+	if after := fileSHA256(t, target); after != before {
+		t.Fatal("target mutated on deferred handoff")
+	}
+}
