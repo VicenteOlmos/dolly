@@ -62,6 +62,9 @@ func processExited(pid int) bool {
 		}
 		return false
 	}
+	if runtime.GOOS == "darwin" {
+		return darwinProcessExited(pid)
+	}
 	err := syscall.Kill(pid, 0)
 	if err == nil {
 		return false
