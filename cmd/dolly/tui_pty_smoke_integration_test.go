@@ -4,10 +4,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -207,4 +209,122 @@ func buildDollyBinary(t *testing.T) string {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
 	return bin
+}
+
+func TestTUIPTYCloneCtrlC(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PTY smoke in short mode")
+	}
+	if os.Getenv(envTUIPTYSmoke) != "1" {
+		t.Skipf("set %s=1 to run interactive PTY smoke", envTUIPTYSmoke)
+	}
+
+	bin := buildDollyBinary(t)
+	workDir := t.TempDir()
+
+	cmd := exec.Command(bin, "clone")
+	cmd.Dir = workDir
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + workDir,
+		"XDG_CONFIG_HOME=" + filepath.Join(workDir, "xdg"),
+		"TERM=xterm-256color",
+		"NO_COLOR=1",
+	}
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatalf("pty.Start: %v", err)
+	}
+
+	if err := pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80}); err != nil {
+		t.Fatalf("pty.Setsize: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+		close(done)
+	}()
+
+	t.Cleanup(func() {
+		_ = ptmx.Close()
+		select {
+		case <-done:
+			return
+		default:
+		}
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+	})
+
+	// Wait for first prompt output before sending Ctrl-C.
+	out := make(chan string, 16)
+	go func() {
+		readBuf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(readBuf)
+			if n > 0 {
+				out <- string(readBuf[:n])
+			}
+			if err != nil {
+				close(out)
+				return
+			}
+		}
+	}()
+
+	// Collect output until we see a prompt indicator (or timeout).
+	var buf bytes.Buffer
+	promptTimer := time.NewTimer(10 * time.Second)
+	defer promptTimer.Stop()
+waitLoop:
+	for {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				break waitLoop
+			}
+			buf.WriteString(chunk)
+			if strings.Contains(buf.String(), "ource") {
+				break waitLoop
+			}
+		case <-promptTimer.C:
+			t.Fatalf("timeout waiting for clone prompt\npartial output:\n%s", buf.String())
+		}
+	}
+
+	// Send Ctrl-C (becomes SIGINT to the child session leader).
+	if _, err := ptmx.Write([]byte("\x03")); err != nil {
+		t.Fatalf("write Ctrl-C: %v", err)
+	}
+
+	// Wait for process exit within 1 second.
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected non-zero exit after SIGINT")
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("expected ExitError, got %T: %v", err, err)
+		}
+		ws, ok := exitErr.Sys().(syscall.WaitStatus)
+		if !ok {
+			t.Fatalf("Sys() is not syscall.WaitStatus on this platform")
+		}
+		if !ws.Signaled() {
+			t.Fatal("expected signaled=true")
+		}
+		if ws.Signal() != syscall.SIGINT {
+			t.Fatalf("signal = %v, want syscall.SIGINT", ws.Signal())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("clone did not terminate within 1 second after Ctrl-C")
+	}
 }

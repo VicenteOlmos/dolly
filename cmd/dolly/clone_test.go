@@ -1855,3 +1855,167 @@ func TestRunCloneFFBroadCwdDotenvNonMutating(t *testing.T) {
 	assertContainsAll(t, captured.SourceDSN, "sslmode=disable", "h-a:5432/db_a", "statement_timeout=5min", "dotenv-user")
 	assertCwdDotenvUnchanged(t, envPath, before)
 }
+
+// --- Phase 1 RED tests: clone signal context ordering and cancellation ---
+
+func TestRunCloneInteractiveSignalContextAfterPrompt(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	var order []string
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return true }
+	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		return config.DefaultConfig(), nil
+	}
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+
+	origPrompt := clonePromptSource
+	clonePromptSource = func(r io.Reader, w io.Writer, defaults config.PromptDefaults, _ *config.SavedSourcePicker) (config.PromptResult, error) {
+		order = append(order, "prompt")
+		return config.PromptResult{
+			SourceDSN:     "postgres://u:p@h-a:5432/db_a?channel_binding=require&sslmode=verify-full",
+			SourceSchemas: []string{"public"},
+			CloneName:     "db_clone_x",
+			TargetURL:     "postgres://u:p@h-b:5432/db_tgt",
+			Strategy:      "template",
+		}, nil
+	}
+	t.Cleanup(func() { clonePromptSource = origPrompt })
+
+	origSignal := cloneSignalContext
+	cloneSignalContext = func() (context.Context, context.CancelFunc) {
+		order = append(order, "signal")
+		return context.Background(), func() {}
+	}
+	t.Cleanup(func() { cloneSignalContext = origSignal })
+
+	origRun := cloneRun
+	cloneRun = func(runCtx context.Context, opts clone.Options) error {
+		order = append(order, "run")
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	err := runClone([]string{})
+	if err != nil {
+		t.Fatalf("runClone: %v", err)
+	}
+	if len(order) != 3 || order[0] != "prompt" || order[1] != "signal" || order[2] != "run" {
+		t.Fatalf("order = %v, want [prompt signal run]", order)
+	}
+}
+
+func TestRunCloneConnectionSignalContextCancellable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	cfg := config.DefaultConfig()
+	cfg.SaveConnections = true
+	store, err := connections.OpenStore(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(connections.Connection{Name: "prod", Host: "h-a", Port: "5432", Database: "db_a", User: "u", Password: "p"}); err != nil {
+		t.Fatal(err)
+	}
+
+	stubCloneListSchemaNames(t, nil, nil)
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		c := config.DefaultConfig()
+		c.SaveConnections = true
+		return c, nil
+	}
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
+
+	promptCalled := false
+	origPrompt := clonePromptSource
+	clonePromptSource = func(r io.Reader, w io.Writer, defaults config.PromptDefaults, _ *config.SavedSourcePicker) (config.PromptResult, error) {
+		promptCalled = true
+		return config.PromptResult{}, nil
+	}
+	t.Cleanup(func() { clonePromptSource = origPrompt })
+
+	cancelledCtx, cancelFn := context.WithCancel(context.Background())
+	cancelFn()
+	origSignal := cloneSignalContext
+	cloneSignalContext = func() (context.Context, context.CancelFunc) {
+		return cancelledCtx, func() {}
+	}
+	t.Cleanup(func() { cloneSignalContext = origSignal })
+
+	origRun := cloneRun
+	cloneRun = func(runCtx context.Context, opts clone.Options) error {
+		return runCtx.Err()
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	t.Chdir(dir)
+	err = runClone([]string{"-ff", "--connection", "prod"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if promptCalled {
+		t.Fatal("clonePromptSource should not be called for --connection path")
+	}
+}
+
+func TestRunCloneFFSignalContextCancellable(t *testing.T) {
+	stubCloneFFHarness(t)
+
+	cancelledCtx, cancelFn := context.WithCancel(context.Background())
+	cancelFn()
+	origSignal := cloneSignalContext
+	cloneSignalContext = func() (context.Context, context.CancelFunc) {
+		return cancelledCtx, func() {}
+	}
+	t.Cleanup(func() { cloneSignalContext = origSignal })
+
+	origRun := cloneRun
+	cloneRun = func(runCtx context.Context, opts clone.Options) error {
+		return runCtx.Err()
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	err := runClone([]string{"-ff"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRunCloneFFJSONCancelEnvelope(t *testing.T) {
+	stubCloneFFHarness(t)
+
+	cancelledCtx, cancelFn := context.WithCancel(context.Background())
+	cancelFn()
+	origSignal := cloneSignalContext
+	cloneSignalContext = func() (context.Context, context.CancelFunc) {
+		return cancelledCtx, func() {}
+	}
+	t.Cleanup(func() { cloneSignalContext = origSignal })
+
+	origRun := cloneRun
+	cloneRun = func(runCtx context.Context, opts clone.Options) error {
+		return runCtx.Err()
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	var err error
+	stderr := captureStderr(func() {
+		err = runClone([]string{"-ff", "--json"})
+	})
+	if !errors.Is(err, errJSONHandled) {
+		t.Fatalf("err = %v, want errJSONHandled", err)
+	}
+	if !strings.Contains(stderr, `"ok": false`) || !strings.Contains(stderr, `"command": "clone"`) {
+		t.Fatalf("stderr missing JSON error envelope:\n%s", stderr)
+	}
+}
