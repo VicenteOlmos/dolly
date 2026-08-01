@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func processExited(pid int) bool {
+func darwinProcessExited(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	if err != nil {
 		errno, ok := err.(syscall.Errno)
