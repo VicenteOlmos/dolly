@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 type updateManifest struct {
@@ -85,6 +86,29 @@ func validateManifest(manifest updateManifest, capability string) error {
 	for _, p := range paths {
 		if p == "" {
 			return fmt.Errorf("manifest path is empty")
+		}
+	}
+	return validateExpectedManifestPaths(manifest)
+}
+
+func validateExpectedManifestPaths(manifest updateManifest) error {
+	dir := filepath.Dir(manifest.Target)
+	checks := map[string]string{
+		manifest.Candidate: candidatePath(dir),
+		manifest.Backup:    backupPath(dir),
+		manifest.Helper:    helperPath(dir),
+	}
+	for got, want := range checks {
+		canonGot, err := cleanAbsPath(got)
+		if err != nil {
+			return fmt.Errorf("resolve manifest path: %w", err)
+		}
+		canonWant, err := cleanAbsPath(want)
+		if err != nil {
+			return fmt.Errorf("resolve expected path: %w", err)
+		}
+		if canonGot != canonWant {
+			return fmt.Errorf("unexpected manifest path %q", got)
 		}
 	}
 	return nil
