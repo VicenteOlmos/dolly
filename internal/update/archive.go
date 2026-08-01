@@ -2,6 +2,7 @@ package update
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -68,6 +69,8 @@ func extractAndStage(archiveData []byte, assetName, goos, stageDir string) (stag
 	switch {
 	case strings.HasSuffix(assetName, ".tar.gz"):
 		binary, err = extractTarGz(archiveData, wantName)
+	case strings.HasSuffix(assetName, ".zip"):
+		binary, err = extractZip(archiveData, wantName)
 	default:
 		return "", "", fmt.Errorf("unsupported archive type %q", assetName)
 	}
@@ -144,6 +147,39 @@ func extractTarGz(data []byte, wantName string) ([]byte, error) {
 	return found, nil
 }
 
+func extractZip(data []byte, wantName string) ([]byte, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("open zip archive: %w", err)
+	}
+	var found []byte
+	for _, f := range zr.File {
+		if err := validateZipEntry(f, wantName); err != nil {
+			return nil, err
+		}
+		if found != nil {
+			return nil, fmt.Errorf("archive contains multiple executable files")
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil, fmt.Errorf("open zip member: %w", err)
+		}
+		body, err := io.ReadAll(io.LimitReader(rc, maxExpandedCandidate+1))
+		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read zip member: %w", err)
+		}
+		if int64(len(body)) > maxExpandedCandidate {
+			return nil, fmt.Errorf("archive member exceeds size limit")
+		}
+		found = body
+	}
+	if found == nil {
+		return nil, fmt.Errorf("archive did not contain %q", wantName)
+	}
+	return found, nil
+}
+
 func cleanArchiveName(name string) string {
 	name = strings.TrimPrefix(name, "./")
 	return filepath.ToSlash(filepath.Clean(name))
@@ -197,4 +233,33 @@ func validateArchiveHeader(name string, typ byte, wantName string) error {
 	default:
 		return fmt.Errorf("archive selected entry %q is not a regular file", name)
 	}
+}
+
+func validateZipEntry(f *zip.File, wantName string) error {
+	if err := validateArchivePathRaw(f.Name); err != nil {
+		return err
+	}
+	clean := cleanArchiveName(f.Name)
+	if clean == "." || clean == "" {
+		return fmt.Errorf("archive contains unexpected entry %q", f.Name)
+	}
+	if strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") || filepath.IsAbs(clean) {
+		return fmt.Errorf("archive path traversal rejected: %q", f.Name)
+	}
+	if strings.Count(clean, "/") > 0 {
+		return fmt.Errorf("archive contains nested path %q", f.Name)
+	}
+	if f.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("archive contains symlink %q", f.Name)
+	}
+	if f.UncompressedSize64 > uint64(maxExpandedCandidate) {
+		return fmt.Errorf("archive member exceeds size limit")
+	}
+	if clean != wantName {
+		return fmt.Errorf("unexpected archive member %q", f.Name)
+	}
+	if !f.Mode().IsRegular() {
+		return fmt.Errorf("archive selected entry %q is not a regular file", f.Name)
+	}
+	return nil
 }
