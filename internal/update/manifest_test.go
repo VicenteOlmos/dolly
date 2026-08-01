@@ -3,12 +3,12 @@ package update
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateManifestRejectsInvalidParentPID(t *testing.T) {
-	capability := strings.Repeat("a", 64)
+	capability := repeatChar('a', 64)
 	manifest := updateManifest{
 		Capability: capability,
 		ParentPID:  0,
@@ -22,12 +22,10 @@ func TestValidateManifestRejectsInvalidParentPID(t *testing.T) {
 	}
 }
 
-func TestValidateManifestDigestsRejectsMismatch(t *testing.T) {
+func TestHelperRejectsInvalidParentPIDWithoutMutation(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, "dolly")
-	if err := os.WriteFile(target, []byte("old-binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	target := writeFakeBinary(t, dir, "dolly.exe", 0o755)
+	beforeSHA := fileSHA256(t, target)
 	candidate := filepath.Join(dir, candidateBaseName)
 	if err := os.WriteFile(candidate, []byte("new-binary"), 0o755); err != nil {
 		t.Fatal(err)
@@ -41,21 +39,46 @@ func TestValidateManifestDigestsRejectsMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	capability := repeatChar('b', 64)
 	manifest := updateManifest{
-		Target:    target,
-		Candidate: candidate,
-		OldSHA256: oldSHA,
-		NewSHA256: strings.Repeat("d", 64),
-		OldSize:   oldSize,
-		NewSize:   newSize,
+		Capability:    capability,
+		ParentPID:     -1,
+		Target:        target,
+		Candidate:     candidate,
+		Backup:        backupPath(dir),
+		Helper:        helperPath(dir),
+		OldSHA256:     oldSHA,
+		NewSHA256:     newSHA,
+		OldSize:       oldSize,
+		NewSize:       newSize,
+		RemoteVersion: "v0.3.2",
 	}
-	if err := validateManifestDigests(manifest); err == nil || !strings.Contains(err.Error(), "candidate digest mismatch") {
-		t.Fatalf("err = %v", err)
+	manifestFile := manifestPath(dir)
+	if err := writeManifest(manifestFile, manifest); err != nil {
+		t.Fatal(err)
 	}
 
-	manifest.NewSHA256 = newSHA
-	manifest.OldSHA256 = strings.Repeat("e", 64)
-	if err := validateManifestDigests(manifest); err == nil || !strings.Contains(err.Error(), "target digest mismatch") {
-		t.Fatalf("err = %v", err)
+	var waitCalled bool
+	oldWait := waitForPIDExit
+	waitForPIDExit = func(pid int, timeout time.Duration) error {
+		waitCalled = true
+		return nil
+	}
+	t.Cleanup(func() { waitForPIDExit = oldWait })
+
+	if err := RunHelper(manifestFile, capability); err == nil {
+		t.Fatal("expected invalid parent pid failure")
+	}
+	if waitCalled {
+		t.Fatal("waitForPIDExit should not run for invalid parent pid")
+	}
+	if got := fileSHA256(t, target); got != beforeSHA {
+		t.Fatal("target mutated on invalid parent pid")
+	}
+	if _, err := os.Stat(backupPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("backup created on invalid parent pid")
+	}
+	if _, err := os.Stat(reportPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("report published on invalid parent pid")
 	}
 }

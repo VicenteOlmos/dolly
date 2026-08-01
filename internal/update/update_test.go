@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +118,25 @@ func releaseAssetGitHubURL(repo, tag, assetName string) string {
 
 func releaseAssetCDNURL(assetName string) string {
 	return "https://release-assets.githubusercontent.com/mock/" + assetName
+}
+
+func writeFakeBinary(t *testing.T, dir, name string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("old-binary"), mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func fileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func TestRunCurrentNoMutation(t *testing.T) {
@@ -303,13 +324,4 @@ func TestDownloadFollowsCDNRedirectFromGitHubURL(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
-}
-
-func writeFakeBinary(t *testing.T, dir, name string, mode os.FileMode) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("old-binary"), mode); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
