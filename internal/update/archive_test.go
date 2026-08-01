@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -63,10 +64,20 @@ func TestVerifyArchiveSHA256Mismatch(t *testing.T) {
 
 func TestExtractValidArchive(t *testing.T) {
 	content := []byte("#!/bin/sh\necho dolly\n")
-	archive := buildTarGz(t, "dolly", content)
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive []byte
+	execName := ExecutableBaseName(runtimeGOOS())
+	if strings.HasSuffix(assetName, ".zip") {
+		archive = buildZip(t, execName, content)
+	} else {
+		archive = buildTarGz(t, execName, content)
+	}
 
 	stageDir := t.TempDir()
-	path, sha, err := extractAndStage(archive, "dolly_linux_x86_64.tar.gz", "linux", stageDir)
+	path, sha, err := extractAndStage(archive, assetName, runtimeGOOS(), stageDir)
 	if err != nil {
 		t.Fatalf("extractAndStage: %v", err)
 	}
@@ -92,26 +103,44 @@ func TestExtractHostileArchive(t *testing.T) {
 	tests := []struct {
 		name    string
 		archive []byte
+		asset   string
+		goos    string
 	}{
 		{
 			name:    "tar absolute",
 			archive: buildTarGz(t, "/dolly", []byte("bad")),
+			asset:   "dolly_linux_x86_64.tar.gz",
+			goos:    "linux",
 		},
 		{
 			name:    "tar traversal",
 			archive: buildTarGz(t, "../dolly", []byte("bad")),
+			asset:   "dolly_linux_x86_64.tar.gz",
+			goos:    "linux",
 		},
 		{
 			name:    "tar nested",
 			archive: buildTarGz(t, "bin/dolly", []byte("bad")),
+			asset:   "dolly_linux_x86_64.tar.gz",
+			goos:    "linux",
+		},
+		{
+			name:    "zip traversal",
+			archive: buildZip(t, "../dolly.exe", []byte("bad")),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
 		},
 		{
 			name:    "tar symlink",
 			archive: buildTarGzTyped(t, "dolly", tar.TypeSymlink, nil),
+			asset:   "dolly_linux_x86_64.tar.gz",
+			goos:    "linux",
 		},
 		{
 			name:    "tar device",
 			archive: buildTarGzTyped(t, "dolly", tar.TypeChar, nil),
+			asset:   "dolly_linux_x86_64.tar.gz",
+			goos:    "linux",
 		},
 		{
 			name: "tar extra member",
@@ -119,6 +148,8 @@ func TestExtractHostileArchive(t *testing.T) {
 				{name: "dolly", typ: tar.TypeReg, content: []byte("ok")},
 				{name: "extra.txt", typ: tar.TypeReg, content: []byte("bad")},
 			}),
+			asset: "dolly_linux_x86_64.tar.gz",
+			goos:  "linux",
 		},
 		{
 			name: "tar duplicate executable",
@@ -126,12 +157,62 @@ func TestExtractHostileArchive(t *testing.T) {
 				{name: "dolly", typ: tar.TypeReg, content: []byte("one")},
 				{name: "dolly", typ: tar.TypeReg, content: []byte("two")},
 			}),
+			asset: "dolly_linux_x86_64.tar.gz",
+			goos:  "linux",
+		},
+		{
+			name:    "zip backslash traversal",
+			archive: buildZip(t, "..\\dolly.exe", []byte("bad")),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip windows drive",
+			archive: buildZip(t, "C:\\dolly.exe", []byte("bad")),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip directory executable name",
+			archive: buildZipWithMode(t, "dolly.exe/", os.ModeDir|0o755, nil),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip symlink executable name",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeSymlink|0o777, []byte("target")),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip char device executable name",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeDevice|0o200000|0o666, nil),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip block device executable name",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeDevice|0o666, nil),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip named pipe executable name",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeNamedPipe|0o666, nil),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
+		},
+		{
+			name:    "zip socket executable name",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeSocket|0o666, nil),
+			asset:   "dolly_windows_x86_64.zip",
+			goos:    "windows",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := extractAndStage(tt.archive, "dolly_linux_x86_64.tar.gz", "linux", t.TempDir())
+			_, _, err := extractAndStage(tt.archive, tt.asset, tt.goos, t.TempDir())
 			if err == nil {
 				t.Fatal("expected extraction failure")
 			}
@@ -139,14 +220,64 @@ func TestExtractHostileArchive(t *testing.T) {
 	}
 }
 
+func TestExtractRejectsWindowsZipSpecialMembers(t *testing.T) {
+	cases := []struct {
+		name    string
+		archive []byte
+	}{
+		{
+			name:    "directory",
+			archive: buildZipWithMode(t, "dolly.exe/", os.ModeDir|0o755, nil),
+		},
+		{
+			name:    "symlink",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeSymlink|0o777, []byte("target")),
+		},
+		{
+			name:    "device",
+			archive: buildZipWithMode(t, "dolly.exe", os.ModeDevice|0o666, nil),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stageDir := t.TempDir()
+			_, _, err := extractAndStage(tc.archive, "dolly_windows_x86_64.zip", "windows", stageDir)
+			if err == nil {
+				t.Fatal("expected extraction failure")
+			}
+			if _, err := os.Stat(candidatePath(stageDir)); !os.IsNotExist(err) {
+				t.Fatal("candidate staged for hostile zip entry")
+			}
+		})
+	}
+}
+
+func TestExtractHostileWindowsZipLeavesTargetUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	target := writeTestBinary(t, dir, "dolly.exe")
+	before := fileSHA256(t, target)
+	archive := buildZipWithMode(t, "dolly.exe", os.ModeDevice|0o666, nil)
+
+	_, _, err := extractAndStage(archive, "dolly_windows_x86_64.zip", "windows", dir)
+	if err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("err = %v", err)
+	}
+	if after := fileSHA256(t, target); after != before {
+		t.Fatal("target mutated on hostile zip extraction")
+	}
+	if _, err := os.Stat(candidatePath(dir)); !os.IsNotExist(err) {
+		t.Fatal("candidate staged for hostile zip entry")
+	}
+}
+
 func TestExtractRejectsValidBinaryPlusExtraMembers(t *testing.T) {
 	valid := []byte("#!/bin/sh\necho ok\n")
-	assertRejected := func(t *testing.T, archive []byte) {
+	assertRejected := func(t *testing.T, archive []byte, asset, goos, execName string) {
 		t.Helper()
 		dir := t.TempDir()
-		target := writeTestBinary(t, dir, "dolly")
+		target := writeTestBinary(t, dir, execName)
 		before := fileSHA256(t, target)
-		_, _, err := extractAndStage(archive, "dolly_linux_x86_64.tar.gz", "linux", dir)
+		_, _, err := extractAndStage(archive, asset, goos, dir)
 		if err == nil {
 			t.Fatal("expected extraction failure")
 		}
@@ -206,10 +337,74 @@ func TestExtractRejectsValidBinaryPlusExtraMembers(t *testing.T) {
 		},
 	}
 	for _, tc := range tarCases {
-		t.Run(tc.name, func(t *testing.T) {
-			assertRejected(t, tc.archive)
+		t.Run("tar/"+tc.name, func(t *testing.T) {
+			assertRejected(t, tc.archive, "dolly_linux_x86_64.tar.gz", "linux", "dolly")
 		})
 	}
+
+	zipCases := []struct {
+		name    string
+		archive []byte
+	}{
+		{
+			name: "extra directory",
+			archive: buildZipMulti(t, []zipEntry{
+				{name: "dolly.exe", mode: 0o755, content: valid},
+				{name: "extra/", mode: os.ModeDir | 0o755},
+			}),
+		},
+		{
+			name: "extra symlink",
+			archive: buildZipMulti(t, []zipEntry{
+				{name: "dolly.exe", mode: 0o755, content: valid},
+				{name: "extra", mode: os.ModeSymlink | 0o777, content: []byte("dolly.exe")},
+			}),
+		},
+		{
+			name: "extra char device",
+			archive: buildZipMulti(t, []zipEntry{
+				{name: "dolly.exe", mode: 0o755, content: valid},
+				{name: "extra", mode: os.ModeDevice | 0o200000 | 0o666},
+			}),
+		},
+		{
+			name: "extra block device",
+			archive: buildZipMulti(t, []zipEntry{
+				{name: "dolly.exe", mode: 0o755, content: valid},
+				{name: "extra", mode: os.ModeDevice | 0o666},
+			}),
+		},
+		{
+			name: "extra named pipe",
+			archive: buildZipMulti(t, []zipEntry{
+				{name: "dolly.exe", mode: 0o755, content: valid},
+				{name: "extra", mode: os.ModeNamedPipe | 0o666},
+			}),
+		},
+		{
+			name: "extra socket",
+			archive: buildZipMulti(t, []zipEntry{
+				{name: "dolly.exe", mode: 0o755, content: valid},
+				{name: "extra", mode: os.ModeSocket | 0o666},
+			}),
+		},
+	}
+	for _, tc := range zipCases {
+		t.Run("zip/"+tc.name, func(t *testing.T) {
+			assertRejected(t, tc.archive, "dolly_windows_x86_64.zip", "windows", "dolly.exe")
+		})
+	}
+}
+
+func runtimeGOOS() string {
+	asset, err := CurrentAsset()
+	if err != nil {
+		return runtime.GOOS
+	}
+	if strings.HasSuffix(asset, ".zip") {
+		return "windows"
+	}
+	return runtime.GOOS
 }
 
 func writeTestBinary(t *testing.T, dir, name string) string {
