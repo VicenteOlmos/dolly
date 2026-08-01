@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -116,4 +118,13 @@ func TestFetchLatestReleaseRejectsDirectCDNMetadataURL(t *testing.T) {
 
 func releaseAssetCDNURL(assetName string) string {
 	return "https://release-assets.githubusercontent.com/mock/" + assetName
+}
+
+func writeFakeBinary(t *testing.T, dir, name string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("old-binary"), mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

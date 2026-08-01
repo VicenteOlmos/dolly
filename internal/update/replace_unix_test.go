@@ -11,15 +11,6 @@ import (
 	"testing"
 )
 
-func writeFakeBinary(t *testing.T, dir, name string, mode os.FileMode) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("old-binary"), mode); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func mustPerm(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	info, err := os.Stat(path)
