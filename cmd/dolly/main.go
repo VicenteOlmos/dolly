@@ -12,6 +12,7 @@ import (
 )
 
 var errJSONHandled = errors.New("json error already emitted to stderr")
+var errTextHandled = errors.New("text error already emitted to stderr")
 
 // emitJSONError writes a JSON error envelope to w (stderr) when --json is active.
 func emitJSONError(w io.Writer, command, message string) {
