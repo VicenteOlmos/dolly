@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -47,6 +49,35 @@ func parseUpdateFlags(args []string) (updateFlags, error) {
 		return updateFlags{}, fmt.Errorf("unknown update argument %q", fs.Arg(0))
 	}
 	return flags, nil
+}
+
+func runUpdate(args []string) error {
+	flags, err := parseUpdateFlags(args)
+	if errors.Is(err, errHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	result, runErr := update.Run(ctx, update.Options{
+		InstalledVersion: version,
+		CheckOnly:        flags.check,
+	})
+	if runErr != nil && result == nil {
+		result = &update.Result{
+			OK:      false,
+			Command: "update",
+			Status:  update.StatusFailed,
+			Error:   runErr.Error(),
+		}
+	}
+
+	if flags.json {
+		return emitUpdateJSON(result, runErr)
+	}
+	return emitUpdateText(result, runErr)
 }
 
 func emitUpdateJSON(result *update.Result, runErr error) error {
