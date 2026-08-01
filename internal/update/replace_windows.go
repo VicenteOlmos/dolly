@@ -10,3 +10,7 @@ type replacementInput struct {
 	OldSize       int64
 	RemoteVersion string
 }
+
+func applyReplacement(input replacementInput) (Status, error) {
+	return prepareDeferredReplacement(input, defaultDeferredPrepOptions())
+}
