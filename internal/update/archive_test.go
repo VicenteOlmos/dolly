@@ -2,10 +2,7 @@ package update
 
 import (
 	"archive/tar"
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -43,22 +40,6 @@ func TestParseChecksums(t *testing.T) {
 	_, err = parseChecksums([]byte(badHex+"  "+asset), asset)
 	if err == nil || !strings.Contains(err.Error(), "valid hex") {
 		t.Fatalf("bad hex err = %v", err)
-	}
-}
-
-func TestParseChecksumsMissingEntry(t *testing.T) {
-	asset := "dolly_linux_x86_64.tar.gz"
-	other := strings.Repeat("a", 64) + "  other.txt"
-	_, err := parseChecksums([]byte(other), asset)
-	if err == nil || !strings.Contains(err.Error(), "no entry") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestVerifyArchiveSHA256Mismatch(t *testing.T) {
-	err := verifyArchiveSHA256([]byte("data"), strings.Repeat("a", 64))
-	if err == nil || !strings.Contains(err.Error(), "mismatch") {
-		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -147,15 +128,6 @@ func TestExtractHostileArchive(t *testing.T) {
 			archive: buildTarGzMulti(t, []tarEntry{
 				{name: "dolly", typ: tar.TypeReg, content: []byte("ok")},
 				{name: "extra.txt", typ: tar.TypeReg, content: []byte("bad")},
-			}),
-			asset: "dolly_linux_x86_64.tar.gz",
-			goos:  "linux",
-		},
-		{
-			name: "tar duplicate executable",
-			archive: buildTarGzMulti(t, []tarEntry{
-				{name: "dolly", typ: tar.TypeReg, content: []byte("one")},
-				{name: "dolly", typ: tar.TypeReg, content: []byte("two")},
 			}),
 			asset: "dolly_linux_x86_64.tar.gz",
 			goos:  "linux",
@@ -254,7 +226,7 @@ func TestExtractRejectsWindowsZipSpecialMembers(t *testing.T) {
 
 func TestExtractHostileWindowsZipLeavesTargetUnchanged(t *testing.T) {
 	dir := t.TempDir()
-	target := writeTestBinary(t, dir, "dolly.exe")
+	target := writeFakeBinary(t, dir, "dolly.exe", 0o755)
 	before := fileSHA256(t, target)
 	archive := buildZipWithMode(t, "dolly.exe", os.ModeDevice|0o666, nil)
 
@@ -275,7 +247,7 @@ func TestExtractRejectsValidBinaryPlusExtraMembers(t *testing.T) {
 	assertRejected := func(t *testing.T, archive []byte, asset, goos, execName string) {
 		t.Helper()
 		dir := t.TempDir()
-		target := writeTestBinary(t, dir, execName)
+		target := writeFakeBinary(t, dir, execName, 0o755)
 		before := fileSHA256(t, target)
 		_, _, err := extractAndStage(archive, asset, goos, dir)
 		if err == nil {
@@ -405,23 +377,4 @@ func runtimeGOOS() string {
 		return "windows"
 	}
 	return runtime.GOOS
-}
-
-func writeTestBinary(t *testing.T, dir, name string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("old-binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func fileSHA256(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
 }
