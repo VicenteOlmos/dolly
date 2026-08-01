@@ -7,17 +7,6 @@ import (
 	"testing"
 )
 
-// writeDeferredTestBinary is a local fixture until writeFakeBinary lands in
-// update_test.go (PR14). Remove when reconciling shared test helpers.
-func writeDeferredTestBinary(t *testing.T, dir, name string, mode os.FileMode) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("old-binary"), mode); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func TestDeferredLayoutForWindows(t *testing.T) {
 	dir := "/tmp/dolly-update"
 	layout := deferredLayoutFor(dir, "windows")
@@ -33,7 +22,7 @@ func TestDeferredLayoutForWindows(t *testing.T) {
 }
 
 func TestHelperArgvContract(t *testing.T) {
-	argv := helperArgv(`C:\bin\.dolly-update-helper.exe`, `C:\bin\.dolly-update-manifest.json`, strings.Repeat("a", 64))
+	argv := helperArgv(`C:\bin\.dolly-update-helper.exe`, `C:\bin\.dolly-update-manifest.json`, repeatChar('a', 64))
 	if len(argv) != 4 || argv[1] != "__update-helper" {
 		t.Fatalf("argv = %v", argv)
 	}
@@ -45,7 +34,7 @@ func TestHelperArgvContract(t *testing.T) {
 
 func TestPrepareDeferredReplacementLinux(t *testing.T) {
 	dir := t.TempDir()
-	target := writeDeferredTestBinary(t, dir, "dolly.exe", 0o755)
+	target := writeFakeBinary(t, dir, "dolly.exe", 0o755)
 	oldSHA, oldSize, err := fileDigest(target)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +91,7 @@ func TestPrepareDeferredReplacementLinux(t *testing.T) {
 
 func TestPrepareDeferredReplacementRejectsBadCandidatePath(t *testing.T) {
 	dir := t.TempDir()
-	target := writeDeferredTestBinary(t, dir, "dolly.exe", 0o755)
+	target := writeFakeBinary(t, dir, "dolly.exe", 0o755)
 	oldSHA, oldSize, err := fileDigest(target)
 	if err != nil {
 		t.Fatal(err)
