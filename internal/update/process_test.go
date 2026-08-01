@@ -23,15 +23,7 @@ func TestWaitForPIDExitBlocksUntilChildExits(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	reaped := make(chan struct{})
-	go func() {
-		defer close(reaped)
-		_ = cmd.Wait()
-	}()
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		<-reaped
-	})
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	start := time.Now()
 	if err := defaultWaitForPIDExit(cmd.Process.Pid, 5*time.Second); err != nil {
