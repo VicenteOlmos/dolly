@@ -251,12 +251,12 @@ func TestRunRejectsSymlinkTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assetName, err := AssetName("linux", "amd64")
+	assetName, err := CurrentAsset()
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := []byte("#!/bin/sh\necho newer\n")
-	archive := buildTarGz(t, "dolly", content)
+	archive := buildCurrentArchive(t, content)
 	checksums := []byte(checksumLine(assetName, archive))
 	realSHA := fileSHA256(t, real)
 
@@ -277,12 +277,12 @@ func TestRunRejectsSymlinkTarget(t *testing.T) {
 }
 
 func TestRunUpdatedUnix(t *testing.T) {
-	assetName, err := AssetName("linux", "amd64")
+	assetName, err := CurrentAsset()
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := []byte("#!/bin/sh\necho updated-run\n")
-	archive := buildTarGz(t, "dolly", content)
+	archive := buildCurrentArchive(t, content)
 	checksums := []byte(checksumLine(assetName, archive))
 
 	target := writeFakeBinary(t, t.TempDir(), "dolly", 0o755)
