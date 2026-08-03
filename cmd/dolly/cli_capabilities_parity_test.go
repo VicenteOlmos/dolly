@@ -67,3 +67,19 @@ func TestCLICatalogParityClone(t *testing.T) {
 		}
 	}
 }
+
+func TestCLICatalogParityUpdate(t *testing.T) {
+	fs := updateFlagSet(&updateFlags{})
+
+	got := flagSetNames(t, fs)
+	want := tui.FlagNames("update")
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("update flags: parser %v catalog %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("update flag[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

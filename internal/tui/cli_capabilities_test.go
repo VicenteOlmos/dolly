@@ -90,6 +90,20 @@ func TestRenderCLIHelpRequiredAndSubsetLabels(t *testing.T) {
 	if !strings.Contains(gotClone, "config.jsonc") {
 		t.Fatalf("missing clone config note: %s", gotClone)
 	}
+
+	update := catalogCommand("update")
+	gotUpdate := stripANSI(RenderCLIHelp(update, 80))
+	if update.ShellPolicy != ShellPolicyCLIOnly {
+		t.Fatalf("update ShellPolicy = %v, want CLIOnly", update.ShellPolicy)
+	}
+	for _, sub := range []string{"shell only", "hidden helper", "dolly update --check"} {
+		if !strings.Contains(gotUpdate, sub) {
+			t.Fatalf("update help missing %q: %s", sub, gotUpdate)
+		}
+	}
+	if strings.Contains(gotUpdate, "__update-helper") || strings.Contains(gotUpdate, "__update-cleanup") {
+		t.Fatalf("helper modes leaked into catalog help: %s", gotUpdate)
+	}
 }
 
 func catalogCommand(name string) CLICommand {
@@ -102,8 +116,8 @@ func catalogCommand(name string) CLICommand {
 }
 
 func TestHelpPageCountAndBindingsPage(t *testing.T) {
-	if HelpPageCount() != 5 {
-		t.Fatalf("HelpPageCount = %d, want 5", HelpPageCount())
+	if HelpPageCount() != 6 {
+		t.Fatalf("HelpPageCount = %d, want 6", HelpPageCount())
 	}
 	page0 := stripANSI(RenderHelpPaged(ScreenConnection, DumpStatusIdle, CloneStatusIdle, 0, 80, 24, false))
 	if !strings.Contains(page0, "Keyboard Help") {
@@ -116,7 +130,16 @@ func TestHelpPageCountAndBindingsPage(t *testing.T) {
 		t.Fatalf("page 0 missing keys help binding: %s", page0)
 	}
 
-	clonePage := HelpPageCount() - 1
+	clonePage := -1
+	for i, cmd := range CLICatalog() {
+		if cmd.Name == "clone" {
+			clonePage = i + 1
+			break
+		}
+	}
+	if clonePage < 0 {
+		t.Fatal("clone command missing from catalog")
+	}
 	gotClonePage := stripANSI(RenderHelpPaged(ScreenConnection, DumpStatusIdle, CloneStatusIdle, clonePage, 80, 24, false))
 	if !strings.Contains(gotClonePage, "dolly clone") {
 		t.Fatalf("clone help page %d missing dolly clone: %s", clonePage, gotClonePage)

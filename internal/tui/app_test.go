@@ -296,7 +296,16 @@ func TestAppHelpOverlay(t *testing.T) {
 		t.Fatalf("helpPage = %d, want 0 after p", app.helpPage)
 	}
 
-	clonePage := HelpPageCount() - 1
+	clonePage := -1
+	for i, cmd := range CLICatalog() {
+		if cmd.Name == "clone" {
+			clonePage = i + 1
+			break
+		}
+	}
+	if clonePage < 0 {
+		t.Fatal("clone command missing from catalog")
+	}
 	for app.helpPage != clonePage {
 		next, _ = app.Update(keyPress("n", 'n', 0))
 		app = next.(*App)
@@ -304,7 +313,14 @@ func TestAppHelpOverlay(t *testing.T) {
 	if app.helpPage != clonePage {
 		t.Fatalf("helpPage = %d, want clone CLI page %d", app.helpPage, clonePage)
 	}
-	cloneHelp := stripANSI(RenderCLIHelp(CLICatalog()[len(CLICatalog())-1], 60))
+	var cloneCmd CLICommand
+	for _, cmd := range CLICatalog() {
+		if cmd.Name == "clone" {
+			cloneCmd = cmd
+			break
+		}
+	}
+	cloneHelp := stripANSI(RenderCLIHelp(cloneCmd, 60))
 	if !strings.Contains(cloneHelp, "interactive dump + restore") {
 		t.Fatalf("clone CLI help missing summary: %s", cloneHelp)
 	}

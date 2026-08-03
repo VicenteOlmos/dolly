@@ -2,12 +2,12 @@
 │              __            ││ Clone          ││ Keyboard Help  ││ CLI catalog    │
 │       UooU\.'@@@@@@`.      ││                ││ ↑/↓ section ·  ││ n/p pages ·    │
 │       \__/(@@@@@@@@@@)     ││ Connect first  ││ Enter open ·   ││ dump · restore │
-│          (@@@@@@@@)        ││ (screen 1)     ││ Esc back · Tab ││ · clone · tui  │
-│          `YY~~~~YY'        ││                ││ within · g/F5  ││                │
-│           ||    ||         ││                ││ run            ││ F1/Esc close · │
-│                            ││                ││ (dump/clone)   ││ n/p pages ·    │
-│            dolly           ││                ││                ││ 1/5 Keys       │
-│                            ││                ││ 1-5  [global]  ││                │
+│          (@@@@@@@@)        ││ (screen 1)     ││ Esc back · Tab ││ · clone ·      │
+│          `YY~~~~YY'        ││                ││ within · g/F5  ││ update · tui   │
+│           ||    ||         ││                ││ run            ││                │
+│                            ││                ││ (dump/clone)   ││ F1/Esc close · │
+│            dolly           ││                ││                ││ n/p pages ·    │
+│                            ││                ││ 1-5  [global]  ││ 1/6 Keys       │
 │   1 connect                ││                ││ jump to screen ││                │
 │   2 schema                 ││                ││ Ctrl+Tab       ││                │
 │   3 dump                   ││                ││ [global]  next ││                │

@@ -171,6 +171,7 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. |
 | `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. |
 | `dolly config` | Create or inspect `config.jsonc` with `init` and `show`. |
+| `dolly update` | Install the latest stable GitHub release (`--check` verifies without replacing; Windows defers replacement to a hidden helper). |
 | `dolly version` | Print build version. |
 
 Run `dolly <command> --help` for command-specific flags.
@@ -353,7 +354,7 @@ Saved connections are off by default. Enable them explicitly:
 
 Then CLI commands can use `--connection <name>` instead of `--dsn`. Project-scoped stores are convenient but easier to commit by accident; encrypted stores need `DOLLY_CONNECTIONS_KEY`, and losing that key loses access to encrypted profiles.
 
-`dump`, `restore`, `clone`, and `version` accept `--json`:
+`dump`, `restore`, `clone`, `version`, and `update` accept `--json`:
 
 - Exit 0: success JSON on **stdout**.
 - Exit 1: `{"ok":false,"command":"...","error":"..."}` on **stderr**.
@@ -363,6 +364,12 @@ Then CLI commands can use `--connection <name>` instead of `--dsn`. Project-scop
 ```bash
 result=$(dolly dump --dsn "$DB" --output ./out --json 2>err.json) || { cat err.json; exit 1; }
 echo "$result"
+```
+
+Check for updates without replacing:
+
+```bash
+dolly update --check --json
 ```
 
 ## Development

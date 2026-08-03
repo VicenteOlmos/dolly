@@ -51,6 +51,16 @@ func dispatch(args []string) int {
 		return 0
 	}
 
+	if args[1] == "update" {
+		if err := runUpdate(args[2:]); err != nil {
+			if !errors.Is(err, errJSONHandled) && !errors.Is(err, errTextHandled) {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			return 1
+		}
+		return 0
+	}
+
 	// Best-effort bootstrap: write config.jsonc once if no config file exists.
 	// Non-fatal — defaults still apply when the write fails or the file exists.
 	_ = config.BootstrapConfig(config.ResolveConfigPath())

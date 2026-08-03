@@ -333,6 +333,79 @@ func TestRunUpdateDevJSONFailure(t *testing.T) {
 	}
 }
 
+func TestDispatchUpdateInternalHidden(t *testing.T) {
+	handled, code := dispatchUpdateInternal([]string{"dolly", "__update-helper"})
+	if !handled || code == 0 {
+		t.Fatalf("handled=%v code=%d, want handled failure", handled, code)
+	}
+}
+
+func TestDispatchUpdateHelpDoesNotExposeHelper(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	exit := dispatch([]string{"dolly", "update", "--help"})
+	w.Close()
+	os.Stderr = oldStderr
+
+	var stderr bytes.Buffer
+	_, _ = io.Copy(&stderr, r)
+	if exit != 0 {
+		t.Fatalf("exit = %d", exit)
+	}
+	if strings.Contains(stderr.String(), "__update-helper") {
+		t.Fatal("helper mode leaked into help")
+	}
+}
+
+func TestDispatchUpdateBeforeConfigBootstrap(t *testing.T) {
+	workDir := t.TempDir()
+	t.Chdir(workDir)
+
+	oldVersion := version
+	version = "0.3.2"
+	t.Cleanup(func() { version = oldVersion })
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	oldStderr := os.Stderr
+	sr, sw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = sw
+
+	exit := dispatch([]string{"dolly", "update", "--help"})
+	sw.Close()
+	w.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+
+	var stdout, stderr bytes.Buffer
+	_, _ = io.Copy(&stdout, r)
+	_, _ = io.Copy(&stderr, sr)
+
+	if exit != 0 {
+		t.Fatalf("exit = %d stderr=%s", exit, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "usage: dolly update") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+	if _, err := os.Stat("config.jsonc"); !os.IsNotExist(err) {
+		t.Fatalf("update help should not bootstrap config, stat err=%v", err)
+	}
+}
+
 type updateTestConfig struct {
 	installedVersion string
 	targetPath       string
@@ -366,9 +439,32 @@ func runUpdateWithClient(args []string, client update.HTTPDoer, cfg updateTestCo
 	return emitUpdateText(result, runErr)
 }
 
-func TestDispatchUpdateInternalHidden(t *testing.T) {
-	handled, code := dispatchUpdateInternal([]string{"dolly", "__update-helper"})
-	if !handled || code == 0 {
-		t.Fatalf("handled=%v code=%d, want handled failure", handled, code)
+func TestDispatchUpdateTextFailureSingleStderrLine(t *testing.T) {
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() { version = oldVersion })
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	exit := dispatch([]string{"dolly", "update"})
+	w.Close()
+	os.Stderr = oldStderr
+
+	if exit == 0 {
+		t.Fatal("expected failure exit code")
+	}
+	var stderr bytes.Buffer
+	_, _ = io.Copy(&stderr, r)
+	lines := strings.Split(strings.TrimSpace(stderr.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("stderr line count = %d, want 1; stderr=%q", len(lines), stderr.String())
+	}
+	if !strings.Contains(lines[0], "development build") {
+		t.Fatalf("stderr = %q", lines[0])
 	}
 }

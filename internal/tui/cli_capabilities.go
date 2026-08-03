@@ -122,6 +122,20 @@ func CLICatalog() []CLICommand {
 				"dolly clone -ff",
 			},
 		},
+		{
+			Name:        "update",
+			Short:       "install the latest stable GitHub release",
+			ShellPolicy: ShellPolicyCLIOnly,
+			Flags: []CLIFlag{
+				{Name: "check", Description: "discover and verify a newer release without replacing the executable"},
+				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
+			},
+			ConfigNote: "On Windows, replacement is deferred to a hidden helper after exit. Re-run update to consume the completion report.",
+			Examples: []string{
+				"dolly update --check",
+				"dolly update --check --json",
+			},
+		},
 	}
 }
 
@@ -244,7 +258,7 @@ func RenderHelpSplit(screen Screen, dumpStatus DumpStatus, cloneStatus CloneStat
 	var right string
 	if page == 0 {
 		right = StyleHeader.Render("CLI catalog") + "\n" +
-			StyleMuted.Render("n/p pages · dump · restore · clone · tui") + "\n\n" +
+			StyleMuted.Render("n/p pages · dump · restore · clone · update · tui") + "\n\n" +
 			helpPageFooter(page, total)
 	} else {
 		right = RenderCLIHelp(CLICatalog()[page-1], rightW) + "\n" + helpPageFooter(page, total)
