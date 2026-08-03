@@ -4,7 +4,7 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
-## [0.3.3] — pending
+## [0.3.3](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.3) — 2026-08-03
 
 ### Release integrity
 
