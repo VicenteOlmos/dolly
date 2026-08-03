@@ -76,6 +76,9 @@ jobs:
       - if: runner.os != 'Windows'
         run: sh test/install-behavior.sh
 
+      - if: runner.os != 'Windows'
+        run: sh test/release-tag-behavior.sh
+
       - if: runner.os == 'Windows'
         run: pwsh -NoProfile -File test/install-behavior.ps1
 
