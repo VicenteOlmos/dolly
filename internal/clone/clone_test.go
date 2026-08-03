@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/dump"
@@ -676,5 +678,106 @@ func TestRunCreatesTempChildUnderDumpDir(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("expected base dir to be empty after Run, got %d entries", len(entries))
+	}
+}
+
+func TestRunMaxOpenConnsSequentialRestore(t *testing.T) {
+	const baseline = 42
+	MaxOpenConns = baseline
+	t.Cleanup(func() { MaxOpenConns = 5 })
+
+	origPF := preflightFunc
+	seen := 0
+	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) error {
+		seen = MaxOpenConns
+		return errors.New("stop after preflight")
+	}
+	defer func() { preflightFunc = origPF }()
+
+	err := Run(context.Background(), Options{
+		SourceDSN:    "postgres://u:p@h-a:5432/db_src",
+		CloneName:    "db_clone",
+		Strategy:     "schema-replay",
+		MaxOpenConns: 3,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if seen != 3 {
+		t.Fatalf("during run MaxOpenConns = %d, want 3", seen)
+	}
+	if MaxOpenConns != baseline {
+		t.Fatalf("after run MaxOpenConns = %d, want baseline %d", MaxOpenConns, baseline)
+	}
+}
+
+func TestRunMaxOpenConnsConcurrentIsolation(t *testing.T) {
+	const baseline = 99
+	MaxOpenConns = baseline
+	t.Cleanup(func() { MaxOpenConns = 5 })
+
+	origPF := preflightFunc
+	defer func() { preflightFunc = origPF }()
+
+	start := make(chan struct{})
+	observed := make(chan int, 16)
+	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) error {
+		observed <- MaxOpenConns
+		<-start
+		return errors.New("stop after preflight")
+	}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		want := i + 2
+		go func(mc int) {
+			defer wg.Done()
+			_ = Run(context.Background(), Options{
+				SourceDSN:    "postgres://u:p@h-a:5432/db_src",
+				CloneName:    fmt.Sprintf("db_clone_%d", mc),
+				Strategy:     "schema-replay",
+				MaxOpenConns: mc,
+			})
+		}(want)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	close(start)
+	wg.Wait()
+
+	close(observed)
+	got := make(map[int]int)
+	for v := range observed {
+		got[v]++
+	}
+	for i := 0; i < workers; i++ {
+		want := i + 2
+		if got[want] != 1 {
+			t.Fatalf("MaxOpenConns %d observed %d times, want 1", want, got[want])
+		}
+	}
+	if MaxOpenConns != baseline {
+		t.Fatalf("after concurrent runs MaxOpenConns = %d, want baseline %d", MaxOpenConns, baseline)
+	}
+}
+
+func TestEffectiveRunMaxOpenConns(t *testing.T) {
+	tests := []struct {
+		name string
+		opts Options
+		want int
+	}{
+		{name: "zero uses default", opts: Options{}, want: 5},
+		{name: "negative uses default", opts: Options{MaxOpenConns: -1}, want: 5},
+		{name: "custom", opts: Options{MaxOpenConns: 9}, want: 9},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effectiveRunMaxOpenConns(tt.opts); got != tt.want {
+				t.Fatalf("effectiveRunMaxOpenConns() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
