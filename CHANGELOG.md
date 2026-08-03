@@ -4,6 +4,16 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+## [0.3.2] — pending
+
+### Runtime safety
+
+- **Clone cancellation** — `dolly clone` cancels execution and source analysis on Ctrl-C and SIGTERM (#122).
+
+### Self-update
+
+- **`dolly update`** — installs the latest stable GitHub release after checksum verification; `dolly update --check` verifies without replacing; Windows defers replacement to a hidden helper when the executable is locked (#142).
+
 ## [0.3.1](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.1) — 2026-07-31
 
 ### Runtime safety
