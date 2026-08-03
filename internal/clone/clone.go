@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/VicenteOlmos/dolly/internal/db" // registers pgx driver
@@ -40,6 +41,8 @@ type Options struct {
 	// Use ProgressEvent instead. Kept for one minor version for backward compatibility.
 	ProgressFn      func(string)
 	PermissionCache PermissionCacheConfig
+	// MaxOpenConns limits sql.DB pool size for this run. Zero or negative uses 5.
+	MaxOpenConns int
 }
 
 // CloneName replaces "{db}" in template with sourceDB.
@@ -50,9 +53,19 @@ func CloneName(sourceDB, template string) string {
 	return strings.ReplaceAll(template, "{db}", sourceDB)
 }
 
-// MaxOpenConns controls sql.DB pool size for clone database connections.
-// Set from the CLI or TUI before calling Run. Default is 5.
+// MaxOpenConns is legacy internal bridge state read by sqlOpenDB.
+// Callers configure each run through Options.MaxOpenConns; Run snapshots and
+// restores this package variable under maxOpenConnsMu. Default is 5.
 var MaxOpenConns = 5
+
+var maxOpenConnsMu sync.Mutex
+
+func effectiveRunMaxOpenConns(opts Options) int {
+	if opts.MaxOpenConns > 0 {
+		return opts.MaxOpenConns
+	}
+	return 5
+}
 
 // sqlOpenDB is overridable for testing CreateDatabase with go-sqlmock.
 var sqlOpenDB = func(dsn string) (*sql.DB, error) {
@@ -135,6 +148,14 @@ func Run(ctx context.Context, opts Options) error {
 	if err := ValidateCloneName(opts.CloneName); err != nil {
 		return fmt.Errorf("validate clone name: %w", err)
 	}
+
+	maxOpenConnsMu.Lock()
+	prevMaxOpenConns := MaxOpenConns
+	MaxOpenConns = effectiveRunMaxOpenConns(opts)
+	defer func() {
+		MaxOpenConns = prevMaxOpenConns
+		maxOpenConnsMu.Unlock()
+	}()
 
 	// Strategy dispatch path. Empty strategy defaults to schema-replay.
 	strategy := opts.Strategy

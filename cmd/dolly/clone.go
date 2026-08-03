@@ -401,6 +401,11 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		return fmt.Errorf("permission cache config: %w", err)
 	}
 
+	maxConns := cfg.DB.MaxOpenConns
+	if maxConns <= 0 {
+		maxConns = 5
+	}
+
 	targetDir := cfg.Clone.TargetDir
 	if flags.TargetDir != "" {
 		targetDir = flags.TargetDir
@@ -424,16 +429,13 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		RestoreOpts:     restoreOpts,
 		Strategy:        strategy,
 		PermissionCache: permCache,
+		MaxOpenConns:    maxConns,
 		ProgressEvent: func(ev clone.ProgressEvent) {
 			if flags.JSON {
 				return
 			}
 			_ = Render(os.Stderr, ev, isStderrTerminal(os.Stderr.Fd()))
 		},
-	}
-
-	if cfg.DB.MaxOpenConns > 0 {
-		clone.MaxOpenConns = cfg.DB.MaxOpenConns
 	}
 
 	if err := cloneRun(ctx, opts); err != nil {
