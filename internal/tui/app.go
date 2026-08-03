@@ -79,16 +79,28 @@ type App struct {
 }
 
 func NewApp() *App {
-	return NewAppWithOptions(postgresSchemaLoader{}, productionDumpRunner{}, productionRestoreRunner{}, productionCloneRunner{}, nil, nil, false)
+	return NewAppWithOptions(defaultPostgresSchemaLoader(), productionDumpRunner{}, productionRestoreRunner{}, productionCloneRunner{}, nil, nil, false)
 }
 
 func NewAppWithLoader(loader SchemaLoader) *App {
 	return NewAppWithOptions(loader, productionDumpRunner{}, productionRestoreRunner{}, productionCloneRunner{}, nil, nil, false)
 }
 
+func postgresSchemaLoaderFromConfig(cfg *config.Config) postgresSchemaLoader {
+	if cfg == nil {
+		return defaultPostgresSchemaLoader()
+	}
+	return postgresSchemaLoader{
+		dbConnOptions: dbConnOptions{
+			statementTimeout: cfg.DB.StatementTimeout,
+			maxOpenConns:     cfg.DB.MaxOpenConns,
+		},
+	}
+}
+
 // NewAppFromConfig builds the TUI with a loaded config and saved-connection store.
 func NewAppFromConfig(store connections.ConnectionStore, saveConnections bool, cfg *config.Config, cfgPath string) *App {
-	app := NewAppWithOptions(postgresSchemaLoader{}, productionDumpRunner{}, productionRestoreRunner{}, productionCloneRunner{}, nil, store, saveConnections)
+	app := NewAppWithOptions(postgresSchemaLoaderFromConfig(cfg), productionDumpRunner{}, productionRestoreRunner{}, productionCloneRunner{}, nil, store, saveConnections)
 	app.cfg = cfg
 	app.cfgPath = cfgPath
 	if cfg != nil {

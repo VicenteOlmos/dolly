@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
@@ -53,6 +54,38 @@ func (m mockSchemaLoader) ConnectForSchemaPicker(_ context.Context, _ string) (*
 
 func (m mockSchemaLoader) Ping(_ context.Context, _ string) error {
 	return m.pingErr
+}
+
+func TestNewAppFromConfigUsesConfigAwareLoader(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.DB.MaxOpenConns = 12
+	cfg.DB.StatementTimeout = "2min"
+
+	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
+	loader, ok := app.loader.(postgresSchemaLoader)
+	if !ok {
+		t.Fatalf("loader type = %T, want postgresSchemaLoader", app.loader)
+	}
+	if loader.maxOpenConns != 12 {
+		t.Fatalf("maxOpenConns = %d, want 12", loader.maxOpenConns)
+	}
+	if loader.statementTimeout != "2min" {
+		t.Fatalf("statementTimeout = %q, want 2min", loader.statementTimeout)
+	}
+}
+
+func TestNewAppUsesDefaultPoolSize(t *testing.T) {
+	app := NewApp()
+	loader, ok := app.loader.(postgresSchemaLoader)
+	if !ok {
+		t.Fatalf("loader type = %T, want postgresSchemaLoader", app.loader)
+	}
+	if loader.effectiveMaxOpenConns() != 5 {
+		t.Fatalf("effectiveMaxOpenConns = %d, want 5", loader.effectiveMaxOpenConns())
+	}
+	if loader.statementTimeout != "" {
+		t.Fatalf("statementTimeout = %q, want empty", loader.statementTimeout)
+	}
 }
 
 func drainUpdate(app *App, msg tea.Msg) *App {

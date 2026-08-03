@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/VicenteOlmos/dolly/internal/connections"
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
@@ -42,7 +43,32 @@ type SchemaLoader interface {
 	Ping(ctx context.Context, dsn string) error
 }
 
-type postgresSchemaLoader struct{}
+type dbConnOptions struct {
+	statementTimeout string
+	maxOpenConns     int
+}
+
+func (o dbConnOptions) effectiveMaxOpenConns() int {
+	if o.maxOpenConns <= 0 {
+		return 5
+	}
+	return o.maxOpenConns
+}
+
+func (o dbConnOptions) prepareDSN(dsn string) (string, error) {
+	if o.statementTimeout == "" || o.statementTimeout == "0" {
+		return dsn, nil
+	}
+	return connections.SetDSNParam(dsn, "statement_timeout", o.statementTimeout)
+}
+
+type postgresSchemaLoader struct {
+	dbConnOptions
+}
+
+func defaultPostgresSchemaLoader() postgresSchemaLoader {
+	return postgresSchemaLoader{dbConnOptions: dbConnOptions{maxOpenConns: 5}}
+}
 
 // ensureConnectTimeout injects connect_timeout=10 into the DSN unless it is
 // already present. Handles both URL form (postgres://...) and libpq keyword
@@ -73,31 +99,35 @@ func ensureConnectTimeout(dsn string) string {
 	return dsn
 }
 
-func openAndPing(ctx context.Context, dsn string) (*sql.DB, error) {
-	conn, err := sql.Open("pgx", ensureConnectTimeout(dsn))
+func (l postgresSchemaLoader) openAndPing(ctx context.Context, dsn string) (*sql.DB, error) {
+	prepared, err := l.prepareDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("configure connection: %s", connections.RedactMessage(err.Error()))
+	}
+	conn, err := sql.Open("pgx", ensureConnectTimeout(prepared))
 	if err != nil {
 		return nil, fmt.Errorf("open connection: %w", err)
 	}
-	conn.SetMaxOpenConns(5)
+	conn.SetMaxOpenConns(l.effectiveMaxOpenConns())
 	conn.SetConnMaxIdleTime(5 * time.Minute)
 	conn.SetConnMaxLifetime(30 * time.Minute)
 	if err := conn.PingContext(ctx); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("ping: %w", err)
+		return nil, fmt.Errorf("ping: %s", connections.RedactMessage(err.Error()))
 	}
 	return conn, nil
 }
 
-func (postgresSchemaLoader) Ping(ctx context.Context, dsn string) error {
-	conn, err := openAndPing(ctx, dsn)
+func (l postgresSchemaLoader) Ping(ctx context.Context, dsn string) error {
+	conn, err := l.openAndPing(ctx, dsn)
 	if err != nil {
 		return err
 	}
 	return conn.Close()
 }
 
-func (postgresSchemaLoader) ConnectAndLoad(ctx context.Context, dsn string, schemas []string) (*sql.DB, []db.Table, error) {
-	conn, err := openAndPing(ctx, dsn)
+func (l postgresSchemaLoader) ConnectAndLoad(ctx context.Context, dsn string, schemas []string) (*sql.DB, []db.Table, error) {
+	conn, err := l.openAndPing(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -109,12 +139,12 @@ func (postgresSchemaLoader) ConnectAndLoad(ctx context.Context, dsn string, sche
 	return conn, tables, nil
 }
 
-func (postgresSchemaLoader) LoadTables(ctx context.Context, dbConn *sql.DB, schemas []string) ([]db.Table, error) {
+func (l postgresSchemaLoader) LoadTables(ctx context.Context, dbConn *sql.DB, schemas []string) ([]db.Table, error) {
 	return db.LoadPostgresSchemas(ctx, dbConn, schemas)
 }
 
-func (postgresSchemaLoader) ConnectForSchemaPicker(ctx context.Context, dsn string) (*sql.DB, []string, error) {
-	conn, err := openAndPing(ctx, dsn)
+func (l postgresSchemaLoader) ConnectForSchemaPicker(ctx context.Context, dsn string) (*sql.DB, []string, error) {
+	conn, err := l.openAndPing(ctx, dsn)
 	if err != nil {
 		return nil, nil, err
 	}
