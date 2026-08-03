@@ -4,7 +4,13 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
-## [0.3.2] — pending
+## [0.3.3] — pending
+
+### Release integrity
+
+- **Immutable fix-forward** — v0.3.3 republishes verified v0.3.2 functionality as a fresh immutable release; public v0.3.2 remains available unchanged.
+
+## [0.3.2](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.2) — 2026-08-03
 
 ### Runtime safety
 
