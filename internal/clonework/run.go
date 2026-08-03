@@ -9,6 +9,7 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/clone"
 	"github.com/VicenteOlmos/dolly/internal/config"
+	"github.com/VicenteOlmos/dolly/internal/connections"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/restore"
 )
@@ -64,6 +65,35 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 		targetURL = cfg.Clone.TargetURL
 	}
 
+	sourceDSN := p.SourceDSN
+	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
+		var err error
+		sourceDSN, err = connections.SetDSNParam(sourceDSN, "statement_timeout", cfg.DB.StatementTimeout)
+		if err != nil {
+			return fmt.Errorf("configure source connection: %w", err)
+		}
+		if targetURL != "" {
+			targetURL, err = connections.SetDSNParam(targetURL, "statement_timeout", cfg.DB.StatementTimeout)
+			if err != nil {
+				return fmt.Errorf("configure target connection: %w", err)
+			}
+		}
+	}
+
+	permCache, err := clone.NewPermissionCacheConfig(
+		cfg.Clone.Preflight.CachePermissions,
+		cfg.Clone.Preflight.CachePermissionsPath,
+		cfg.Clone.Preflight.CachePermissionsTTL,
+	)
+	if err != nil {
+		return fmt.Errorf("permission cache config: %w", err)
+	}
+
+	maxConns := cfg.DB.MaxOpenConns
+	if maxConns <= 0 {
+		maxConns = 5
+	}
+
 	strategy := strings.TrimSpace(p.Strategy)
 	if strategy == "" {
 		strategy = cfg.Clone.Strategy
@@ -86,15 +116,17 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	}
 
 	opts := clone.Options{
-		SourceDSN:   p.SourceDSN,
-		CloneName:   cloneName,
-		TargetDSN:   targetURL,
-		SkipCreate:  cfg.Clone.SkipCreate,
-		DumpDir:     cfg.Clone.DumpDir,
-		TargetDir:   cfg.Clone.TargetDir,
-		DumpOpts:    dumpOpts,
-		RestoreOpts: restoreOpts,
-		Strategy:    strategy,
+		SourceDSN:       sourceDSN,
+		CloneName:       cloneName,
+		TargetDSN:       targetURL,
+		SkipCreate:      cfg.Clone.SkipCreate,
+		DumpDir:         cfg.Clone.DumpDir,
+		TargetDir:       cfg.Clone.TargetDir,
+		DumpOpts:        dumpOpts,
+		RestoreOpts:     restoreOpts,
+		Strategy:        strategy,
+		PermissionCache: permCache,
+		MaxOpenConns:    maxConns,
 	}
 
 	return runInProcess(ctx, opts, onProgress)

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/clone"
 	"github.com/VicenteOlmos/dolly/internal/db"
@@ -229,5 +230,168 @@ func TestRunRejectsInvalidCloneName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "validate clone name") {
 		t.Fatalf("error = %q, want 'validate clone name'", err.Error())
+	}
+}
+
+func TestRunPropagatesStatementTimeoutAndMaxOpenConns(t *testing.T) {
+	dir := t.TempDir()
+	cfgJSON := `{
+		"db":{"statement_timeout":"5min","max_open_conns":7},
+		"clone":{"target_url":"postgres://u:p@h/target"}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	orig := runInProcess
+	defer func() { runInProcess = orig }()
+
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error {
+		got = opts
+		return nil
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src?sslmode=disable",
+		TargetDSN: "postgres://u:p@h/other?sslmode=disable",
+		Schemas:   []string{"public"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.SourceDSN, "statement_timeout=5min") {
+		t.Fatalf("SourceDSN = %q, want statement_timeout", got.SourceDSN)
+	}
+	if !strings.Contains(got.TargetDSN, "statement_timeout=5min") {
+		t.Fatalf("TargetDSN = %q, want statement_timeout", got.TargetDSN)
+	}
+	if got.MaxOpenConns != 7 {
+		t.Fatalf("MaxOpenConns = %d, want 7", got.MaxOpenConns)
+	}
+}
+
+func TestRunPropagatesPermissionCacheConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgJSON := `{
+		"clone":{
+			"preflight":{
+				"cache_permissions":true,
+				"cache_permissions_path":"/tmp/cache.yaml",
+				"cache_permissions_ttl":"12h"
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	orig := runInProcess
+	defer func() { runInProcess = orig }()
+
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error {
+		got = opts
+		return nil
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src",
+		Schemas:   []string{"public"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !got.PermissionCache.Enabled {
+		t.Fatal("expected permission cache enabled")
+	}
+	if got.PermissionCache.Path != "/tmp/cache.yaml" {
+		t.Fatalf("cache path = %q, want /tmp/cache.yaml", got.PermissionCache.Path)
+	}
+	if got.PermissionCache.TTL != 12*time.Hour {
+		t.Fatalf("cache TTL = %v, want 12h", got.PermissionCache.TTL)
+	}
+}
+
+func TestRunRejectsInvalidPermissionCacheTTLBeforeClone(t *testing.T) {
+	dir := t.TempDir()
+	cfgJSON := `{"clone":{"preflight":{"cache_permissions":true,"cache_permissions_ttl":"nope"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	orig := runInProcess
+	called := false
+	runInProcess = func(_ context.Context, _ clone.Options, _ func(clone.ProgressEvent)) error {
+		called = true
+		return nil
+	}
+	defer func() { runInProcess = orig }()
+
+	err = Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src",
+		Schemas:   []string{"public"},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected invalid TTL error")
+	}
+	if !strings.Contains(err.Error(), "permission cache config") {
+		t.Fatalf("error = %q, want permission cache config", err.Error())
+	}
+	if called {
+		t.Fatal("clone runner should not run when TTL is invalid")
+	}
+}
+
+func TestRunDefaultMaxOpenConnsWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	orig := runInProcess
+	defer func() { runInProcess = orig }()
+
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error {
+		got = opts
+		return nil
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src",
+		Schemas:   []string{"public"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxOpenConns != 5 {
+		t.Fatalf("MaxOpenConns = %d, want default 5", got.MaxOpenConns)
 	}
 }
