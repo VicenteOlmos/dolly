@@ -2,12 +2,12 @@
 │              __            ││ Connection     ││ Keyboard Help  ││ CLI catalog    │
 │       UooU\.'@@@@@@`.      ││ 1-5 menu · ?   ││ ↑/↓ section ·  ││ n/p pages ·    │
 │       \__/(@@@@@@@@@@)     ││ info · F1 keys ││ Enter open ·   ││ dump · restore │
-│          (@@@@@@@@)        ││                ││ Esc back · Tab ││ · clone · tui  │
-│          `YY~~~~YY'        ││ Host: [*]      ││ within · g/F5  ││                │
-│           ||    ||         ││ Port:          ││ run            ││ F1/Esc close · │
-│                            ││ Database:      ││ (dump/clone)   ││ n/p pages ·    │
-│            dolly           ││ User:          ││                ││ 1/5 Keys       │
-│                            ││ Password:      ││ 1-5  [global]  ││                │
+│          (@@@@@@@@)        ││                ││ Esc back · Tab ││ · clone ·      │
+│          `YY~~~~YY'        ││ Host: [*]      ││ within · g/F5  ││ update · tui   │
+│           ||    ||         ││ Port:          ││ run            ││                │
+│                            ││ Database:      ││ (dump/clone)   ││ F1/Esc close · │
+│            dolly           ││ User:          ││                ││ n/p pages ·    │
+│                            ││ Password:      ││ 1-5  [global]  ││ 1/6 Keys       │
 │ > 1 connect                ││ SSLMODE:       ││ jump to screen ││                │
 │   2 schema                 ││                ││ Ctrl+Tab       ││                │
 │   3 dump                   ││                ││ [global]  next ││                │

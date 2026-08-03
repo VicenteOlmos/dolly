@@ -58,6 +58,7 @@ func TestPrintRootUsage(t *testing.T) {
 		"clone",
 		"tui",
 		"config",
+		"update",
 		"dolly <command> --help",
 	} {
 		if !strings.Contains(out, sub) {
@@ -111,6 +112,24 @@ func TestPrintTUIUsage(t *testing.T) {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("tui usage missing %q:\n%s", sub, out)
 		}
+	}
+}
+
+func TestPrintUpdateUsage(t *testing.T) {
+	out := captureStderr(printUpdateUsage)
+	for _, sub := range []string{
+		"usage: dolly update",
+		"--check",
+		"--json",
+		"hidden helper",
+		"No force or downgrade",
+	} {
+		if !strings.Contains(out, sub) {
+			t.Fatalf("update usage missing %q:\n%s", sub, out)
+		}
+	}
+	if strings.Contains(out, "__update-helper") || strings.Contains(out, "__update-cleanup") {
+		t.Fatalf("helper modes leaked into update help:\n%s", out)
 	}
 }
 

@@ -30,6 +30,7 @@ func printRootUsage() {
 	fmt.Fprintln(os.Stderr, "  tui      interactive terminal cockpit")
 	fmt.Fprintln(os.Stderr, "  clone    interactive dump + restore")
 	fmt.Fprintln(os.Stderr, "  config   manage config.jsonc (run 'dolly config --help')")
+	fmt.Fprintln(os.Stderr, "  update   install the latest stable release")
 	fmt.Fprintln(os.Stderr, "  version  print build version")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Run 'dolly <command> --help' for command-specific flags.")
