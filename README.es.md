@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh 
 Fijar una versión:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.2 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.3 sh
 ```
 
 Ruta de instalación predeterminada: `/usr/local/bin`. Defina `DOLLY_INSTALL_DIR` para instalar en otra ubicación.
@@ -46,7 +46,7 @@ irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 Fijar una versión:
 
 ```powershell
-$env:DOLLY_VERSION="0.3.2"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.3.3"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
 Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el instalador la agrega al `PATH` del usuario.
@@ -56,7 +56,7 @@ Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el ins
 | Tema | Detalle |
 |---|---|
 | Última versión | Los instaladores usan por defecto la última [GitHub Release](https://github.com/VicenteOlmos/dolly/releases). |
-| Fijar una versión | Defina `DOLLY_VERSION` (por ejemplo `0.3.2`) en el comando de instalación anterior. |
+| Fijar una versión | Defina `DOLLY_VERSION` (por ejemplo `0.3.3`) en el comando de instalación anterior. |
 | Etiquetas SemVer | Las etiquetas de versión siguen `vX.Y.Z`. Solo la **última versión** recibe correcciones de seguridad. |
 | Activos inmutables | Las etiquetas y los archivos de versión no se sobrescriben; use una nueva etiqueta de parche para correcciones. |
 | Sumas de verificación | Cada versión incluye `checksums.txt`; los instaladores verifican los archivos antes de instalar. |
