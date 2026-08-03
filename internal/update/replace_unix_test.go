@@ -12,30 +12,12 @@ import (
 	"testing"
 )
 
-func mustPerm(t *testing.T, path string) os.FileMode {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Mode().Perm()
-}
-
-func mustSize(t *testing.T, path string) int64 {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Size()
-}
-
-func copyExecutableTarget(t *testing.T, dir string) string {
-	t.Helper()
+func TestRunUpdatedWithCopiedExecutableE2E(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	dir := t.TempDir()
 	target := filepath.Join(dir, "dolly")
 	src, err := os.Open(exe)
 	if err != nil {
@@ -53,7 +35,30 @@ func copyExecutableTarget(t *testing.T, dir string) string {
 	if err := dst.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return target
+	beforeSHA := fileSHA256(t, target)
+
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho copied-exe-e2e\n")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != StatusUpdated {
+		t.Fatalf("status = %s, want updated", result.Status)
+	}
+	if after := fileSHA256(t, target); after == beforeSHA {
+		t.Fatal("target not updated")
+	}
 }
 
 func TestApplyReplacementPreservesExactUnixMode(t *testing.T) {
@@ -119,13 +124,96 @@ func TestApplyReplacementFailureLeavesTargetUnchanged(t *testing.T) {
 	}
 }
 
-func TestApplyReplacementWithCopiedExecutable(t *testing.T) {
+func mustPerm(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
+}
+
+func TestRunUpdatedExecutesCopiedBinary(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
-	target := copyExecutableTarget(t, dir)
+	target := filepath.Join(dir, "dolly")
+	src, err := os.Open(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		t.Fatal(err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "dolly-updated-exec-marker"
+	content := []byte("#!/bin/sh\necho " + marker + "\n")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != StatusUpdated {
+		t.Fatalf("status = %s, want updated", result.Status)
+	}
+
+	out, err := exec.Command(target).Output()
+	if err != nil {
+		t.Fatalf("execute updated binary: %v", err)
+	}
+	if !strings.Contains(string(out), marker) {
+		t.Fatalf("output = %q, want marker %q", string(out), marker)
+	}
+}
+
+func TestApplyReplacementWithCopiedExecutable(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "dolly")
+	src, err := os.Open(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		t.Fatal(err)
+	}
+	if err := dst.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	oldSHA := fileSHA256(t, target)
 	candidate := filepath.Join(dir, candidateBaseName)
-	marker := "dolly-updated-exec-marker"
-	newContent := []byte("#!/bin/sh\necho " + marker + "\n")
+	newContent := []byte("#!/bin/sh\necho copied-exe-replace\n")
 	if err := os.WriteFile(candidate, newContent, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -147,13 +235,15 @@ func TestApplyReplacementWithCopiedExecutable(t *testing.T) {
 	if got := fileSHA256(t, target); got != newSHA {
 		t.Fatalf("target sha = %s, want %s", got, newSHA)
 	}
-	out, err := exec.Command(target).Output()
+}
+
+func mustSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("execute updated binary: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(out), marker) {
-		t.Fatalf("output = %q, want marker %q", string(out), marker)
-	}
+	return info.Size()
 }
 
 func TestApplyReplacementUnixUpdatesTarget(t *testing.T) {
@@ -189,6 +279,31 @@ func TestApplyReplacementUnixUpdatesTarget(t *testing.T) {
 	}
 }
 
+func TestApplyReplacementPreservesTargetBeforeRename(t *testing.T) {
+	dir := t.TempDir()
+	target := writeFakeBinary(t, dir, "dolly", 0o755)
+	before := fileSHA256(t, target)
+
+	candidate := filepath.Join(dir, candidateBaseName)
+	if err := os.WriteFile(candidate, []byte("new-binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := applyReplacement(replacementInput{
+		Target:       target,
+		Candidate:    candidate,
+		CandidateSHA: strings.Repeat("a", 64),
+		OldSHA:       before,
+		OldSize:      mustSize(t, target),
+	})
+	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := fileSHA256(t, target); got != before {
+		t.Fatal("target mutated before rename")
+	}
+}
+
 func TestApplyReplacementReportsPermissionRemediation(t *testing.T) {
 	dir := t.TempDir()
 	target := writeFakeBinary(t, dir, "dolly", 0o755)
@@ -217,29 +332,6 @@ func TestApplyReplacementReportsPermissionRemediation(t *testing.T) {
 	}
 	if got := fileSHA256(t, target); got != oldSHA {
 		t.Fatal("target mutated on permission failure")
-	}
-}
-
-func TestApplyReplacementRejectsSymlinkTarget(t *testing.T) {
-	dir := t.TempDir()
-	real := writeFakeBinary(t, dir, "dolly-real", 0o755)
-	link := filepath.Join(dir, "dolly")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	candidate := filepath.Join(dir, candidateBaseName)
-	if err := os.WriteFile(candidate, []byte("new"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, err := applyReplacement(replacementInput{
-		Target:       link,
-		Candidate:    candidate,
-		CandidateSHA: fileSHA256(t, candidate),
-		OldSHA:       fileSHA256(t, real),
-		OldSize:      10,
-	})
-	if err == nil || !strings.Contains(err.Error(), "symlink") {
-		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -273,6 +365,29 @@ func TestRunRejectsSymlinkTarget(t *testing.T) {
 	}
 	if got := fileSHA256(t, real); got != realSHA {
 		t.Fatal("real target mutated")
+	}
+}
+
+func TestApplyReplacementRejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	real := writeFakeBinary(t, dir, "dolly-real", 0o755)
+	link := filepath.Join(dir, "dolly")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(dir, candidateBaseName)
+	if err := os.WriteFile(candidate, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := applyReplacement(replacementInput{
+		Target:       link,
+		Candidate:    candidate,
+		CandidateSHA: fileSHA256(t, candidate),
+		OldSHA:       fileSHA256(t, real),
+		OldSize:      10,
+	})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
