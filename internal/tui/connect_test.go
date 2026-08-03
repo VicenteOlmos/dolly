@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 func TestConnectionDraftDSN(t *testing.T) {
@@ -67,6 +70,113 @@ func TestConnectionDraftDSN(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDBConnOptionsPrepareDSN(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    dbConnOptions
+		dsn     string
+		want    []string
+		lacks   []string
+		wantErr bool
+	}{
+		{
+			name: "enabled timeout injects param",
+			opts: dbConnOptions{statementTimeout: "5min"},
+			dsn:  "postgres://u:p@host/db?sslmode=disable",
+			want: []string{"statement_timeout=5min"},
+		},
+		{
+			name:  "disabled timeout unchanged",
+			opts:  dbConnOptions{statementTimeout: "0"},
+			dsn:   "postgres://u:p@host/db?sslmode=disable",
+			want:  []string{"sslmode=disable"},
+			lacks: []string{"statement_timeout"},
+		},
+		{
+			name:    "malformed dsn fails closed",
+			opts:    dbConnOptions{statementTimeout: "5min"},
+			dsn:     "not-a-valid-dsn",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.opts.prepareDSN(tt.dsn)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, part := range tt.want {
+				if !strings.Contains(got, part) {
+					t.Fatalf("prepareDSN() = %q, missing %q", got, part)
+				}
+			}
+			for _, part := range tt.lacks {
+				if strings.Contains(got, part) {
+					t.Fatalf("prepareDSN() = %q, contains forbidden %q", got, part)
+				}
+			}
+		})
+	}
+}
+
+func TestDBConnOptionsEffectiveMaxOpenConns(t *testing.T) {
+	tests := []struct {
+		name string
+		opts dbConnOptions
+		want int
+	}{
+		{name: "default", opts: dbConnOptions{}, want: 5},
+		{name: "zero", opts: dbConnOptions{maxOpenConns: 0}, want: 5},
+		{name: "negative", opts: dbConnOptions{maxOpenConns: -1}, want: 5},
+		{name: "custom", opts: dbConnOptions{maxOpenConns: 12}, want: 12},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.opts.effectiveMaxOpenConns(); got != tt.want {
+				t.Fatalf("effectiveMaxOpenConns() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostgresSchemaLoaderMalformedDSNRedactsSecrets(t *testing.T) {
+	secret := "s3cret-p@ss"
+	dsn := "postgres://user:" + secret + "@localhost/db"
+	loader := postgresSchemaLoader{dbConnOptions: dbConnOptions{statementTimeout: "5min"}}
+	_, err := loader.openAndPing(context.Background(), "not-valid|"+dsn)
+	if err == nil {
+		t.Fatal("expected error for malformed DSN")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, secret) {
+		t.Fatalf("error leaked password: %q", msg)
+	}
+	if !strings.Contains(msg, "configure connection") {
+		t.Fatalf("error = %q, want configure connection prefix", msg)
+	}
+}
+
+func TestPostgresSchemaLoaderPrepareDSNUsesSetDSNParam(t *testing.T) {
+	loader := postgresSchemaLoader{dbConnOptions: dbConnOptions{statementTimeout: "2min"}}
+	got, err := loader.prepareDSN("host=localhost port=5432 dbname=mydb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := connections.SetDSNParam("host=localhost port=5432 dbname=mydb", "statement_timeout", "2min")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("prepareDSN() = %q, want %q", got, want)
 	}
 }
 
