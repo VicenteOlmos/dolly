@@ -1240,6 +1240,167 @@ func TestScopedSourcePrivilegeFailures(t *testing.T) {
 	})
 }
 
+func TestScopedTargetDerivedScanners(t *testing.T) {
+	ctx := context.Background()
+	scope := []string{"app", "core"}
+
+	type scanFn func(source, other *sql.DB) error
+
+	scanners := []struct {
+		name           string
+		scopedNeedle   string
+		unscopedNeedle string
+		resultColumn   string
+		scanScoped     scanFn
+		scanUnscoped   scanFn
+	}{
+		{
+			name:           "required_extensions",
+			scopedNeedle:   `e.extname[\s\S]*n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `SELECT extname[\s\S]*FROM pg_extension`,
+			resultColumn:   "extname",
+			scanScoped: func(source, other *sql.DB) error {
+				return scanRequiredExtensions(ctx, source, other, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(source, other *sql.DB) error {
+				return scanRequiredExtensions(ctx, source, other, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "target_extension_restore",
+			scopedNeedle:   `e.extname[\s\S]*n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `SELECT extname[\s\S]*FROM pg_extension`,
+			resultColumn:   "extname",
+			scanScoped: func(source, target *sql.DB) error {
+				return scanTargetExtensionRestore(ctx, source, target, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(source, target *sql.DB) error {
+				return scanTargetExtensionRestore(ctx, source, target, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "target_extension_admin",
+			scopedNeedle:   `e.extname[\s\S]*n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `SELECT extname[\s\S]*FROM pg_extension`,
+			resultColumn:   "extname",
+			scanScoped: func(source, admin *sql.DB) error {
+				return scanTargetExtensionAdminHeuristic(ctx, source, admin, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(source, admin *sql.DB) error {
+				return scanTargetExtensionAdminHeuristic(ctx, source, admin, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "target_schema_restore",
+			scopedNeedle:   `n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `SELECT DISTINCT n.nspname`,
+			resultColumn:   "nspname",
+			scanScoped: func(source, target *sql.DB) error {
+				return scanTargetSchemaRestore(ctx, source, target, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(source, target *sql.DB) error {
+				return scanTargetSchemaRestore(ctx, source, target, "reader", "schema-replay", nil)
+			},
+		},
+	}
+
+	for _, tt := range scanners {
+		t.Run(tt.name+"/scoped_predicate", func(t *testing.T) {
+			source, sourceMock := newSQLMock(t)
+			defer source.Close()
+			other, otherMock := newSQLMock(t)
+			defer other.Close()
+
+			sourceMock.ExpectQuery(tt.scopedNeedle).WithArgs(scope).
+				WillReturnRows(sqlmock.NewRows([]string{tt.resultColumn}))
+			if tt.name == "required_extensions" {
+				// no target probes
+			} else if tt.name == "target_extension_admin" {
+				// admin heuristic only lists source extensions
+			} else if tt.name == "target_schema_restore" {
+				// schema restore stops when no source schemas
+			} else {
+				_ = otherMock
+			}
+
+			if err := tt.scanScoped(source, other); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if err := sourceMock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+
+		t.Run(tt.name+"/unscoped_no_extra_args", func(t *testing.T) {
+			source, sourceMock := newSQLMock(t)
+			defer source.Close()
+			other, _ := newSQLMock(t)
+			defer other.Close()
+
+			sourceMock.ExpectQuery(tt.unscopedNeedle).
+				WillReturnRows(sqlmock.NewRows([]string{tt.resultColumn}))
+			if err := tt.scanUnscoped(source, other); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if err := sourceMock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestScopedTargetDerivedFailures(t *testing.T) {
+	ctx := context.Background()
+	scope := []string{"app"}
+
+	t.Run("required extension in selected schema", func(t *testing.T) {
+		source, sourceMock := newSQLMock(t)
+		defer source.Close()
+		avail, availMock := newSQLMock(t)
+		defer avail.Close()
+
+		sourceMock.ExpectQuery(`n.nspname = ANY\(\$1::text\[\]`).
+			WithArgs(scope).
+			WillReturnRows(sqlmock.NewRows([]string{"extname"}).AddRow("postgis"))
+		availMock.ExpectQuery(`pg_available_extensions`).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+		err := scanRequiredExtensions(ctx, source, avail, "reader", "schema-replay", scope)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "postgis") {
+			t.Fatalf("error %q missing extension", err.Error())
+		}
+	})
+
+	t.Run("target schema restore checks selected schema only", func(t *testing.T) {
+		source, sourceMock := newSQLMock(t)
+		defer source.Close()
+		target, targetMock := newSQLMock(t)
+		defer target.Close()
+
+		sourceMock.ExpectQuery(`n.nspname = ANY\(\$1::text\[\]`).
+			WithArgs(scope).
+			WillReturnRows(sqlmock.NewRows([]string{"nspname"}).AddRow("app"))
+		targetMock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM pg_namespace WHERE nspname = \$1\)`).
+			WithArgs("app").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		targetMock.ExpectQuery(`has_database_privilege\(current_database\(\), 'CREATE'\)`).
+			WillReturnRows(sqlmock.NewRows([]string{"ok"}).AddRow(true))
+
+		if err := scanTargetSchemaRestore(ctx, source, target, "reader", "schema-replay", scope); err != nil {
+			t.Fatalf("missing schema with CREATE should pass: %v", err)
+		}
+		if err := sourceMock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+		if err := targetMock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestValidateReplicationTargetDir(t *testing.T) {
 	t.Run("non-existent path", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "new-data")
