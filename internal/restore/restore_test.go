@@ -138,6 +138,8 @@ func TestRestoreFullFlow(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	mock.ExpectBegin()
 
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -305,6 +307,8 @@ func TestRestoreWithSchemasUsesINFilter(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("app").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "app"."orders"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
@@ -375,6 +379,8 @@ func TestRestoreWithProgressCallbacks(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WillReturnRows(colsRows)
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectBegin()
 
@@ -447,6 +453,8 @@ func TestRestoreSilentByDefault(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
@@ -484,6 +492,8 @@ func TestRestoreWithoutProgressSilent(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -542,6 +552,8 @@ func TestRestoreDuplicateKeyRollsBack(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).
@@ -605,6 +617,8 @@ func TestRestoreProgressFailurePreservesSemantics(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	// Simulate a failure on INSERT: progress callback fires for table_start,
 	// then the insert fails and the transaction rolls back.
@@ -718,6 +732,8 @@ func TestRestoreSortsByForeignKey(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	// INSERTs must be categories first (parent), then items (child).
 	// If sorting didn't happen, items would be first and mock fails.
 
@@ -776,6 +792,8 @@ func TestRestoreReplaceTruncatesChildrenBeforeParents(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WillReturnRows(colsRows)
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`TRUNCATE TABLE "public"\."categories", "public"\."items"`).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -838,6 +856,8 @@ func TestRestoreInvokesSequenceRestore(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -908,6 +928,8 @@ func TestRestoreSequenceFailureRollsBackMainTransaction(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"\."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT tbl_ns.nspname, tbl.relname, a.attname`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column"}).AddRow("public", "users", "id"))
@@ -944,6 +966,8 @@ func TestRestoreSyncSequenceFailureRollsBackMainTransaction(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"\."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))

@@ -46,6 +46,13 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 	// fetchAllForeignKeys (1 query).
 	srcMock.ExpectQuery(`tc\.constraint_type = 'FOREIGN KEY'[\s\S]*table_schema IN \(\$1[\s\S]*ORDER BY tc\.table_schema, tc\.table_name, tc\.constraint_name, kcu\.column_name`).
 		WillReturnRows(allFks)
+	// fetchUniqueIndexes (from LoadPostgresSchemas in db package, 1 query).
+	srcMock.ExpectQuery(`pg_index[\s\S]*indisunique`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "relname", "index_name", "index_oid", "indisprimary",
+		"indisvalid", "indisready", "amname", "has_predicate",
+		"is_expression", "indnkeyatts", "attname", "is_nullable", "pos",
+		"attnum", "opclass_oid", "collation_oid", "optval",
+	}))
 	// loadAllSchemaColumns (1 query).
 	srcMock.ExpectQuery(`FROM information_schema.columns[\s\S]*table_schema IN \(\$1[\s\S]*ORDER BY table_schema, table_name, ordinal_position`).
 		WillReturnRows(allDDLCols)

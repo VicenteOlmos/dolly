@@ -503,6 +503,7 @@ func TestRestoreSerialWorkersUnchanged(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
 		AddRow("public", "users", "id", "integer", "NO", 1, true))
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
+	emptyUniqueIndexMock(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
@@ -561,4 +562,5 @@ func mockSchemaIntrospection(mock sqlmock.Sqlmock, tables []db.Table) {
 	}
 	mock.ExpectQuery(`SELECT c\.table_schema`).WillReturnRows(cols)
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
+	emptyUniqueIndexMock(mock)
 }

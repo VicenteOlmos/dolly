@@ -39,6 +39,8 @@ func TestDumpFullFlow(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	streamRows := sqlmock.NewRows([]string{"id", "name"}).
 		AddRow(1, "v1").
 		AddRow(2, "v2")
@@ -90,6 +92,8 @@ func TestDumpWithSchemasMulti(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("app", "billing").WillReturnRows(allCols)
 	allFks := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("app", "billing").WillReturnRows(allFks)
+
+	emptyUniqueIndexMock(mock)
 	for _, id := range []int{1, 2} {
 		streamRows := sqlmock.NewRows([]string{"id"}).AddRow(id)
 		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
@@ -151,6 +155,8 @@ func TestDumpEmptyTable(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	streamRows := sqlmock.NewRows([]string{"id"})
 	mock.ExpectQuery("SELECT .* FROM .*").
 		WillReturnRows(streamRows)
@@ -204,6 +210,7 @@ func TestDumpCompleteDataFilesAreDeterministic(t *testing.T) {
 		mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).AddRow("public", "users", 1))
 		mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).AddRow("public", "users", "id", "integer", "NO", 1, true))
 		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
+		emptyUniqueIndexMock(mock)
 		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 		mock.ExpectCommit()
 		if err := Dump(context.Background(), sqlDB, dir, WithoutSequences()); err != nil {
@@ -244,6 +251,8 @@ func TestDumpSnapshotConsistency(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	streamRows := sqlmock.NewRows([]string{"id"}).
 		AddRow(1)
 	mock.ExpectQuery("SELECT .* FROM .*").
@@ -283,6 +292,8 @@ func TestDumpWithoutTransaction(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	streamRows := sqlmock.NewRows([]string{"id"})
 	mock.ExpectQuery("SELECT .* FROM .*").
 		WillReturnRows(streamRows)
@@ -320,6 +331,8 @@ func TestDumpErrorContext(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectQuery("SELECT .* FROM .*").
 		WillReturnError(context.Canceled)
@@ -366,6 +379,8 @@ func TestDumpWithProgressCallbacks(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	streamRows := sqlmock.NewRows([]string{"id"}).
 		AddRow(1)
@@ -432,6 +447,8 @@ func TestDumpWithProgressCallbacksMultiTable(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(allCols)
 	allFks := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(allFks)
+
+	emptyUniqueIndexMock(mock)
 
 	for range 3 {
 		streamRows := sqlmock.NewRows([]string{"id"})
@@ -514,6 +531,8 @@ func TestDumpWithProgressObserverPanic(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	streamRows := sqlmock.NewRows([]string{"id"}).
 		AddRow(1)
 	mock.ExpectQuery("SELECT .* FROM .*").
@@ -558,6 +577,8 @@ func TestDumpSanitizedVsUnsanitized(t *testing.T) {
 
 		fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+		emptyUniqueIndexMock(mock)
 
 		streamRows := sqlmock.NewRows([]string{"id", "name", "email"}).
 			AddRow(1, "Alice", "alice@corp.test")
@@ -676,6 +697,8 @@ func TestDumpCapturesSequences(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
 		AddRow("public", "users_id_seq", 42, 1)
 	mock.ExpectQuery(`SELECT schemaname, sequencename`).
@@ -732,6 +755,8 @@ func TestDumpWithTableSelectionFiltersBeforeMetadata(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	streamRows := sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2)
 	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
 
@@ -785,6 +810,8 @@ func TestDumpWithTableSelectionIncludeMissFailsBeforeOutput(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	policy := SelectionPolicy{
 		Includes: []SelectorEntry{{Table: QualifiedTable{Schema: "public", Name: "missing"}}},
@@ -861,6 +888,8 @@ func TestDumpExcludeAllSelectionFailsBeforeOutput(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	policy := SelectionPolicy{
 		Excludes: []SelectorEntry{
@@ -939,6 +968,8 @@ func TestDumpWithoutTableSelectionUnchanged(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	for range 2 {
 		streamRows := sqlmock.NewRows([]string{"id"}).AddRow(1)
 		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
@@ -984,6 +1015,8 @@ func TestDumpChunkDispatchUsesSlowOnlyForNamedTables(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	mock.ExpectQuery("SELECT .* FROM .*").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
@@ -1032,6 +1065,8 @@ func TestDumpChunkMissFailsBeforeMetadata(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
 		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "missing"}}))
@@ -1102,6 +1137,8 @@ func TestDumpChunkTableResumeNoDuplicates(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	rows1 := sqlmock.NewRows([]string{"id", "name"})
 	for i := 1; i <= chunkSize; i++ {
 		rows1.AddRow(i, fmt.Sprintf("v%d", i))
@@ -1135,6 +1172,7 @@ func TestDumpChunkTableResumeNoDuplicates(t *testing.T) {
 		AddRow("public", "users", "id", "integer", "NO", 1, true).
 		AddRow("public", "users", "name", "text", "NO", 2, false))
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
+	emptyUniqueIndexMock(mock)
 	mock.ExpectQuery("SELECT .* FROM .* WHERE .* > .* ORDER BY .* LIMIT").
 		WithArgs(int64(chunkSize)).
 		WillReturnRows(resumeRows)
@@ -1193,6 +1231,8 @@ func TestDumpCaptureSequencesQueryErrorFailsClosed(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	// pg_sequences query fails (e.g. unreadable system view)
 	mock.ExpectQuery(`SELECT schemaname, sequencename`).
 		WillReturnError(fmt.Errorf("simulated pg_sequences failure"))
@@ -1242,6 +1282,8 @@ func TestDumpCaptureSequencesScopeErrorFailsClosed(t *testing.T) {
 
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
 
 	// pg_sequences returns a sequence from a schema outside cfg.schemas (public)
 	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
