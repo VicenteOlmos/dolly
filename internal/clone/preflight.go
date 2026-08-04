@@ -276,7 +276,8 @@ func runPermissionChecks(
 	}
 	needsSchemaReplayChecks := strategy == "schema-replay"
 	if needsSchemaReplayChecks {
-		if err := scanSourceClonePrivileges(ctx, sourceConn, role, strategy); err != nil {
+		effectiveScope := canonicalizeEffectiveScope(SchemasFromOptions(opts))
+		if err := scanSourceClonePrivileges(ctx, sourceConn, role, strategy, effectiveScope); err != nil {
 			return "", err
 		}
 		availConn := sourceConn
@@ -583,35 +584,50 @@ const userSchemaFilter = `
 		  AND n.nspname NOT LIKE 'pg_temp_%'
 		  AND n.nspname NOT LIKE 'pg_toast_%'`
 
+func scopedNamespacePredicate(column string, scope []string) (string, []any) {
+	if len(scope) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf(" AND %s = ANY($1::text[])", column), []any{scope}
+}
+
+func queryRowContextOptional(ctx context.Context, dbConn *sql.DB, query string, args []any) *sql.Row {
+	if len(args) == 0 {
+		return dbConn.QueryRowContext(ctx, query)
+	}
+	return dbConn.QueryRowContext(ctx, query, args...)
+}
+
 const userRelationFilter = `
 		  AND c.relname NOT LIKE 'pg_toast_%'`
 
-func scanSourceClonePrivileges(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
-	if err := scanRelationReadPrivileges(ctx, dbConn, role, strategy); err != nil {
+func scanSourceClonePrivileges(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	if err := scanRelationReadPrivileges(ctx, dbConn, role, strategy, scope); err != nil {
 		return err
 	}
-	if err := scanForeignKeyReferencedRead(ctx, dbConn, role, strategy); err != nil {
+	if err := scanForeignKeyReferencedRead(ctx, dbConn, role, strategy, scope); err != nil {
 		return err
 	}
-	if err := scanSequencePrivileges(ctx, dbConn, role, strategy); err != nil {
+	if err := scanSequencePrivileges(ctx, dbConn, role, strategy, scope); err != nil {
 		return err
 	}
-	if err := scanSchemaUsage(ctx, dbConn, role, strategy); err != nil {
+	if err := scanSchemaUsage(ctx, dbConn, role, strategy, scope); err != nil {
 		return err
 	}
-	if err := scanTypeUsage(ctx, dbConn, role, strategy); err != nil {
+	if err := scanTypeUsage(ctx, dbConn, role, strategy, scope); err != nil {
 		return err
 	}
-	return scanFunctionVisibility(ctx, dbConn, role, strategy)
+	return scanFunctionVisibility(ctx, dbConn, role, strategy, scope)
 }
 
-func scanSchemaUsage(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
+func scanSchemaUsage(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 	var schema string
-	err := dbConn.QueryRowContext(ctx, `
+	err := queryRowContextOptional(ctx, dbConn, `
 		SELECT n.nspname
 		FROM pg_namespace n
 		WHERE TRUE
-		`+userSchemaFilter+`
+		`+userSchemaFilter+scopePred+`
 		  AND EXISTS (
 		    SELECT 1 FROM pg_class c
 		    WHERE c.relnamespace = n.oid
@@ -619,8 +635,7 @@ func scanSchemaUsage(ctx context.Context, dbConn *sql.DB, role, strategy string)
 		  )
 		  AND NOT has_schema_privilege(n.oid, 'USAGE')
 		ORDER BY n.nspname
-		LIMIT 1`,
-	).Scan(&schema)
+		LIMIT 1`, scopeArgs).Scan(&schema)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -636,19 +651,19 @@ func scanSchemaUsage(ctx context.Context, dbConn *sql.DB, role, strategy string)
 	}
 }
 
-func scanTypeUsage(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
+func scanTypeUsage(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 	var schema, typ string
-	err := dbConn.QueryRowContext(ctx, `
+	err := queryRowContextOptional(ctx, dbConn, `
 		SELECT n.nspname, t.typname
 		FROM pg_type t
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
 		WHERE TRUE
-		`+userSchemaFilter+`
+		`+userSchemaFilter+scopePred+`
 		  AND t.typtype IN ('c', 'd', 'e')
 		  AND NOT has_type_privilege(t.oid, 'USAGE')
 		ORDER BY n.nspname, t.typname
-		LIMIT 1`,
-	).Scan(&schema, &typ)
+		LIMIT 1`, scopeArgs).Scan(&schema, &typ)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -664,22 +679,22 @@ func scanTypeUsage(ctx context.Context, dbConn *sql.DB, role, strategy string) e
 	}
 }
 
-func scanFunctionVisibility(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
+func scanFunctionVisibility(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 	var schema, fn string
-	err := dbConn.QueryRowContext(ctx, `
+	err := queryRowContextOptional(ctx, dbConn, `
 		SELECT n.nspname, p.proname
 		FROM pg_proc p
 		INNER JOIN pg_namespace n ON n.oid = p.pronamespace
 		WHERE TRUE
-		`+userSchemaFilter+`
+		`+userSchemaFilter+scopePred+`
 		  AND p.prokind IN ('f', 'p')
 		  AND NOT (
 		    pg_has_role(current_user, p.proowner, 'USAGE')
 		    OR (SELECT rolsuper FROM pg_roles WHERE rolname = current_user)
 		  )
 		ORDER BY n.nspname, p.proname
-		LIMIT 1`,
-	).Scan(&schema, &fn)
+		LIMIT 1`, scopeArgs).Scan(&schema, &fn)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -867,18 +882,18 @@ func scanTargetExtensionAdminHeuristic(ctx context.Context, sourceConn, adminCon
 	return nil
 }
 
-func scanRelationReadPrivileges(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
+func scanRelationReadPrivileges(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 	var schema, name, kind string
-	err := dbConn.QueryRowContext(ctx, `
+	err := queryRowContextOptional(ctx, dbConn, `
 		SELECT n.nspname, c.relname, c.relkind
 		FROM pg_class c
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relkind IN ('r', 'p', 'v', 'm')
-		`+userSchemaFilter+userRelationFilter+`
+		`+userSchemaFilter+userRelationFilter+scopePred+`
 		  AND NOT has_table_privilege(c.oid, 'SELECT')
 		ORDER BY n.nspname, c.relname
-		LIMIT 1`,
-	).Scan(&schema, &name, &kind)
+		LIMIT 1`, scopeArgs).Scan(&schema, &name, &kind)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -894,9 +909,10 @@ func scanRelationReadPrivileges(ctx context.Context, dbConn *sql.DB, role, strat
 	}
 }
 
-func scanForeignKeyReferencedRead(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
+func scanForeignKeyReferencedRead(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 	var fromSchema, fromTable, refSchema, refTable string
-	err := dbConn.QueryRowContext(ctx, `
+	err := queryRowContextOptional(ctx, dbConn, `
 		SELECT n.nspname, c.relname, ref_n.nspname, ref_c.relname
 		FROM pg_constraint con
 		INNER JOIN pg_class c ON c.oid = con.conrelid
@@ -904,7 +920,7 @@ func scanForeignKeyReferencedRead(ctx context.Context, dbConn *sql.DB, role, str
 		INNER JOIN pg_class ref_c ON ref_c.oid = con.confrelid
 		INNER JOIN pg_namespace ref_n ON ref_n.oid = ref_c.relnamespace
 		WHERE con.contype = 'f'
-		`+userSchemaFilter+`
+		`+userSchemaFilter+scopePred+`
 		  AND c.relname NOT LIKE 'pg_toast_%'
 		  AND ref_c.relname NOT LIKE 'pg_toast_%'
 		  AND ref_n.nspname NOT IN ('pg_catalog', 'information_schema')
@@ -912,8 +928,7 @@ func scanForeignKeyReferencedRead(ctx context.Context, dbConn *sql.DB, role, str
 		  AND ref_n.nspname NOT LIKE 'pg_toast_%'
 		  AND NOT has_table_privilege(ref_c.oid, 'SELECT')
 		ORDER BY n.nspname, c.relname
-		LIMIT 1`,
-	).Scan(&fromSchema, &fromTable, &refSchema, &refTable)
+		LIMIT 1`, scopeArgs).Scan(&fromSchema, &fromTable, &refSchema, &refTable)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -967,22 +982,22 @@ func scanRequiredExtensions(ctx context.Context, sourceConn, availConn *sql.DB, 
 	return nil
 }
 
-func scanSequencePrivileges(ctx context.Context, dbConn *sql.DB, role, strategy string) error {
+func scanSequencePrivileges(ctx context.Context, dbConn *sql.DB, role, strategy string, scope []string) error {
+	scopePred, scopeArgs := scopedNamespacePredicate("ps.schemaname", scope)
 	var schema, name string
-	err := dbConn.QueryRowContext(ctx, `
+	err := queryRowContextOptional(ctx, dbConn, `
 		SELECT ps.schemaname, ps.sequencename
 		FROM pg_sequences ps
 		WHERE ps.schemaname NOT IN ('pg_catalog', 'information_schema')
 		  AND ps.schemaname NOT LIKE 'pg_temp_%'
 		  AND ps.schemaname NOT LIKE 'pg_toast_%'
-		  AND ps.sequencename NOT LIKE 'pg_toast_%'
+		  AND ps.sequencename NOT LIKE 'pg_toast_%'`+scopePred+`
 		  AND NOT has_sequence_privilege(
 		    (quote_ident(ps.schemaname) || '.' || quote_ident(ps.sequencename))::regclass,
 		    'USAGE'
 		  )
 		ORDER BY ps.schemaname, ps.sequencename
-		LIMIT 1`,
-	).Scan(&schema, &name)
+		LIMIT 1`, scopeArgs).Scan(&schema, &name)
 	if err == sql.ErrNoRows {
 		return nil
 	}

@@ -1058,6 +1058,188 @@ func TestPreflightMatrix(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeEffectiveScope(t *testing.T) {
+	got := canonicalizeEffectiveScope([]string{"app", "core", "app"})
+	want := []string{"app", "core"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+	if canonicalizeEffectiveScope(nil) != nil {
+		t.Fatal("nil scope should stay nil")
+	}
+	if canonicalizeEffectiveScope([]string{}) != nil {
+		t.Fatal("empty scope should become nil")
+	}
+}
+
+func TestScopedSourcePrivilegeScanners(t *testing.T) {
+	ctx := context.Background()
+	scope := []string{"app", "core"}
+
+	type scanFn func(*sql.DB) error
+
+	scanners := []struct {
+		name           string
+		scopedNeedle   string
+		unscopedNeedle string
+		scanScoped     scanFn
+		scanUnscoped   scanFn
+	}{
+		{
+			name:           "relation",
+			scopedNeedle:   `n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `SELECT n.nspname, c.relname, c.relkind`,
+			scanScoped: func(db *sql.DB) error {
+				return scanRelationReadPrivileges(ctx, db, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(db *sql.DB) error {
+				return scanRelationReadPrivileges(ctx, db, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "foreign_key",
+			scopedNeedle:   `n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `FROM pg_constraint con`,
+			scanScoped: func(db *sql.DB) error {
+				return scanForeignKeyReferencedRead(ctx, db, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(db *sql.DB) error {
+				return scanForeignKeyReferencedRead(ctx, db, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "sequence",
+			scopedNeedle:   `ps.schemaname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `FROM pg_sequences ps`,
+			scanScoped: func(db *sql.DB) error {
+				return scanSequencePrivileges(ctx, db, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(db *sql.DB) error {
+				return scanSequencePrivileges(ctx, db, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "schema",
+			scopedNeedle:   `n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `FROM pg_namespace n`,
+			scanScoped: func(db *sql.DB) error {
+				return scanSchemaUsage(ctx, db, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(db *sql.DB) error {
+				return scanSchemaUsage(ctx, db, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "type",
+			scopedNeedle:   `n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `FROM pg_type t`,
+			scanScoped: func(db *sql.DB) error {
+				return scanTypeUsage(ctx, db, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(db *sql.DB) error {
+				return scanTypeUsage(ctx, db, "reader", "schema-replay", nil)
+			},
+		},
+		{
+			name:           "function",
+			scopedNeedle:   `n.nspname = ANY\(\$1::text\[\]`,
+			unscopedNeedle: `FROM pg_proc p`,
+			scanScoped: func(db *sql.DB) error {
+				return scanFunctionVisibility(ctx, db, "reader", "schema-replay", scope)
+			},
+			scanUnscoped: func(db *sql.DB) error {
+				return scanFunctionVisibility(ctx, db, "reader", "schema-replay", nil)
+			},
+		},
+	}
+
+	for _, tt := range scanners {
+		t.Run(tt.name+"/scoped_predicate", func(t *testing.T) {
+			db, mock := newSQLMock(t)
+			defer db.Close()
+			mock.ExpectQuery(tt.scopedNeedle).WithArgs(scope).WillReturnError(sql.ErrNoRows)
+			if err := tt.scanScoped(db); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+
+		t.Run(tt.name+"/unscoped_no_extra_args", func(t *testing.T) {
+			db, mock := newSQLMock(t)
+			defer db.Close()
+			mock.ExpectQuery(tt.unscopedNeedle).WillReturnError(sql.ErrNoRows)
+			if err := tt.scanUnscoped(db); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestScopedSourcePrivilegeFailures(t *testing.T) {
+	ctx := context.Background()
+	scope := []string{"app"}
+
+	t.Run("selected inaccessible relation", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		defer db.Close()
+		mock.ExpectQuery(`n.nspname = ANY\(\$1::text\[\]`).
+			WithArgs(scope).
+			WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relkind"}).AddRow("app", "secret", "r"))
+		err := scanRelationReadPrivileges(ctx, db, "reader", "schema-replay", scope)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		var pe *PreflightError
+		if !errors.As(err, &pe) || pe.Kind != PreflightPermission {
+			t.Fatalf("got %v", err)
+		}
+		if !strings.Contains(err.Error(), "app.secret") {
+			t.Fatalf("error %q missing object", err.Error())
+		}
+	})
+
+	t.Run("fk selected origin references unselected table", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		defer db.Close()
+		mock.ExpectQuery(`n.nspname = ANY\(\$1::text\[\]`).
+			WithArgs(scope).
+			WillReturnRows(sqlmock.NewRows([]string{"from_schema", "from_table", "ref_schema", "ref_table"}).
+				AddRow("app", "users", "audit", "events"))
+		err := scanForeignKeyReferencedRead(ctx, db, "reader", "schema-replay", scope)
+		if err == nil {
+			t.Fatal("expected error for inaccessible referenced table")
+		}
+		if !strings.Contains(err.Error(), "audit.events") {
+			t.Fatalf("error %q missing referenced table", err.Error())
+		}
+	})
+
+	t.Run("fk unselected origin ignored", func(t *testing.T) {
+		db, mock := newSQLMock(t)
+		defer db.Close()
+		mock.ExpectQuery(`n.nspname = ANY\(\$1::text\[\]`).
+			WithArgs(scope).
+			WillReturnError(sql.ErrNoRows)
+		err := scanForeignKeyReferencedRead(ctx, db, "reader", "schema-replay", scope)
+		if err != nil {
+			t.Fatalf("unselected-origin FK should be ignored: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestValidateReplicationTargetDir(t *testing.T) {
 	t.Run("non-existent path", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "new-data")
