@@ -4,6 +4,17 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+### Runtime safety
+
+- **Updater rollback** — Windows helper revalidates target and candidate after parent exit; trusts only verified backups; joins rollback failures and preserves recovery artifacts (#185).
+- **TUI database runtime config** — TUI sessions honor configured PostgreSQL statement timeout and custom pool limits with fail-closed redacted errors (#186).
+- **Run-scoped clone pool config** — Clone pool size travels through `clone.Options` with per-run serialization so sequential and concurrent runs cannot leak global bridge state (#187).
+- **TUI clone runtime config** — TUI clone applies configured timeouts and permission-cache enablement, path, and TTL before side effects (#188).
+
+### Release integrity
+
+- **Stable exact-main tag enforcement** — Shared `scripts/validate-release-tag.sh` accepts only stable `vX.Y.Z` tags whose commit matches protected `main`; PR CI and Release workflow share the same admission contract (#189).
+
 ## [0.3.3](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.3) — 2026-08-03
 
 ### Release integrity

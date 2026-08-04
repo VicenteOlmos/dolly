@@ -60,19 +60,19 @@ Before the first local commit:
 
 ## Public release steps
 
-The repo is `VicenteOlmos/dolly`. Use **release-first** ordering: build and verify the release while the repository stays private, then change visibility only after every gate passes.
+The repository is public (`VicenteOlmos/dolly`) with protected `main`. Publication is fail-closed: every gate must pass on the exact commit SHA before tagging, and operator documentation that references a new version advances only after independent public proof.
 
-1. Merge green changes to protected `main` on the remote. CI must pass on that exact commit SHA.
-2. Apply the GitHub safeguard checklist (Unit D): repository metadata, pinned Actions policy, `release` environment, Dependabot alerts, secret scanning/push protection, and private vulnerability reporting. CodeQL analysis runs after the repo is public (task 4.5).
-3. While the repository remains **private**, push an annotated tag `vX.Y.Z` (for example `v0.1.1`) from the green protected `main` tip. Do not overwrite an existing tag.
-4. Let the `Release` workflow build and publish assets to GitHub Releases. Verify all seven release assets (six archives plus `checksums.txt`), archive contents (`dolly` / `dolly.exe`), and `dolly version` match the tag — still private.
-5. Complete the maintainer pre-public checklist (branch/tag rulesets, first-time fork approval policy, and remaining Unit D gates from tasks 4.1–4.4).
-6. Change repository visibility from **Private** to **Public** only after every prior gate is green.
-7. Run anonymous post-public verification: clone, raw installer URLs, release downloads/checksums, public CI on a pull request, and security reporting links (task 4.5).
+1. Merge green changes to protected `main`. CI and CodeQL must pass on that exact commit SHA.
+2. Freeze the candidate SHA: confirm local `main` equals `origin/main` at the candidate commit, the worktree is clean, no open release delivery is in progress, and the target tag does not already exist locally or on GitHub.
+3. Run pre-tag verification on the frozen SHA: `make preflight`, full race suite, PostgreSQL 16 serial integration tests, installer behavior suites, and both release policy tests (`sh test/release-workflow.sh`, `sh test/release-tag-behavior.sh`). Record evidence.
+4. Push an annotated stable tag `vX.Y.Z` (for example `v0.3.4`) from the verified protected `main` tip only. CI runs `test/release-tag-behavior.sh`, which exercises the shared `scripts/validate-release-tag.sh` contract; only the Release workflow invokes that validator with live SHAs for stable/exact-main admission at publication. Do not overwrite an existing tag.
+5. Let the `Release` workflow build, attest, and publish assets to GitHub Releases. Verify the run completes, `gh release verify` passes, and the release is latest stable, non-draft, non-prerelease, immutable, and attested.
+6. Collect independent public proof: exactly seven nonempty release assets (six archives plus `checksums.txt`), checksum matrix SHA-256 match, safe single-executable archives, six `go version -m` results at the release version and candidate commit, Unix/PowerShell pinned and latest installs, and updater state (`previous→available`, `current→current`).
+7. Finalize operator documentation only after proof: move changelog bullets from `Unreleased` to the canonical linked/dated release section and advance README install pins/examples. Rerun exact-main CI on the docs PR.
 
 Optional local rebuild before tagging: `scripts/build-release-assets.sh dist` (override metadata with `VERSION`, `COMMIT`, `DATE` env vars).
 
-The release workflow is tag-only on purpose. Tags and release assets are **immutable** once observers may rely on them. After the repository is public, never overwrite a published `vX.Y.Z` tag or its archives; publish a new patch tag (for example `v0.1.2`) from a fixed commit on protected `main`.
+The release workflow is tag-only on purpose. Tags and release assets are **immutable** once observers may rely on them. Never overwrite a published `vX.Y.Z` tag or its archives; publish a new patch tag (for example `v0.3.5`) from a fixed commit on protected `main`.
 
 ### Release assets
 
@@ -123,18 +123,20 @@ $env:DOLLY_VERSION="0.1.1"; irm https://raw.githubusercontent.com/VicenteOlmos/d
 
 **Never force-push `main`** to undo a release or disclosed secret.
 
-### Pre-public failure (repository still private)
+### Pre-tag failure
 
-No public consumer has observed the release yet. You may stop, remove the newly created private GitHub Release, delete the bad annotated tag (`git push --delete origin vX.Y.Z`), and revert preparatory settings or drafts. Fix the issue on a branch from protected `main`, merge through the normal PR process, and restart the release-first checklist from a clean gate.
+Stop before pushing the annotated tag to the remote. You may delete an unpushed local tag only (`git tag -d vX.Y.Z`). Fix the issue on a branch from protected `main`, merge through the normal PR process, and restart the public release checklist from a clean gate.
 
-### Post-public failure (repository public or assets observed)
+Any failure after the tag is pushed to the public remote is post-publication. Do not delete, overwrite, or reuse the remote tag or release; publish a new patch version (for example `v0.3.5`) per the steps below.
+
+### Post-public failure (tag pushed to public remote)
 
 Published tags and release assets are **immutable**. Do **not** delete, overwrite, or reuse a published `vX.Y.Z` tag as rollback — mirrors, caches, and installers may already hold the bad artifacts.
 
-1. Contain impact: restrict visibility or Actions if needed; revoke or delist unsafe assets where GitHub allows.
+1. Contain impact: disable or restrict affected workflows or assets where GitHub allows.
 2. Fix the issue on a branch from protected `main` and merge through the normal PR process.
 3. Rotate any exposed credentials and record impact.
-4. Tag a new patch version (for example `v0.1.2`) from the green protected `main` tip.
+4. Tag a new patch version (for example `v0.3.5`) from the green protected `main` tip.
 5. Push the annotated tag; the `Release` workflow publishes fresh immutable assets.
 6. Verify installers pin or resolve the new release and that `checksums.txt` matches downloaded archives.
 
