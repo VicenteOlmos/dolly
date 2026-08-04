@@ -366,10 +366,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		}
 	}
 
-	chunkSet, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)
+	chunkPlans, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)
 	if err != nil {
 		return err
 	}
+	chunkSet := executableChunkSet(chunkPlans)
 	if cfg.provenance != nil && len(chunkProv.Requested) > 0 {
 		cfg.provenance.ChunkTables = &chunkProv
 	}
@@ -460,6 +461,18 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 
 func hasChunkPolicy(cfg *config) bool {
 	return cfg.chunkPolicy != nil && len(cfg.chunkPolicy.Requests) > 0
+}
+
+// executableChunkSet limits current keyset execution to the PK strategy that
+// streamTableSlow supports. Later wiring can promote unique-key plans safely.
+func executableChunkSet(plans map[string]KeyDescriptor) map[string]struct{} {
+	chunkSet := make(map[string]struct{}, len(plans))
+	for key, plan := range plans {
+		if plan.Strategy == KeyStrategyPrimaryKey {
+			chunkSet[key] = struct{}{}
+		}
+	}
+	return chunkSet
 }
 
 func usesResilientStreaming(cfg *config, chunkSet map[string]struct{}, table db.Table) bool {

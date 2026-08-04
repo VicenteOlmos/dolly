@@ -25,6 +25,7 @@ type ChunkPolicy struct {
 type ChunkTableProvenance struct {
 	Requested        []SelectorRecord  `json:"requested,omitempty"`
 	Chunked          []string          `json:"chunked,omitempty"`
+	Fallback         []string          `json:"fallback,omitempty"`
 	IgnoredFileLines []IgnoredFileLine `json:"ignored_file_lines,omitempty"`
 }
 
@@ -45,13 +46,13 @@ func BuildChunkPolicyWithSources(direct, files []string, sourceKind, flagName st
 	return &ChunkPolicy{Requests: requests}, ignored, nil
 }
 
-// PlanChunkStreaming resolves chunk selectors against selected tables, preflights
-// primary keys, and returns the set of qualified tables that must use keyset streaming.
-func PlanChunkStreaming(tables []db.Table, policy *ChunkPolicy, ignored []IgnoredFileLine) (map[string]struct{}, ChunkTableProvenance, error) {
+// PlanChunkStreaming resolves exact chunk selectors into deterministic per-table
+// key plans. Tables without a safe key receive an explicit normal-stream plan.
+func PlanChunkStreaming(tables []db.Table, policy *ChunkPolicy, ignored []IgnoredFileLine) (map[string]KeyDescriptor, ChunkTableProvenance, error) {
 	prov := ChunkTableProvenance{IgnoredFileLines: ignored}
-	chunked := make(map[string]struct{})
+	plans := make(map[string]KeyDescriptor)
 	if policy == nil || len(policy.Requests) == 0 {
-		return chunked, prov, nil
+		return plans, prov, nil
 	}
 
 	byKey := make(map[string]db.Table, len(tables))
@@ -72,26 +73,29 @@ func PlanChunkStreaming(tables []db.Table, policy *ChunkPolicy, ignored []Ignore
 		return prov.Requested[i].Source < prov.Requested[j].Source
 	})
 
-	seen := make(map[string]struct{}, len(policy.Requests))
 	for _, req := range policy.Requests {
 		key := req.Table.key()
-		if _, dup := seen[key]; dup {
+		if _, planned := plans[key]; planned {
 			continue
 		}
-		seen[key] = struct{}{}
 
 		table, ok := byKey[key]
 		if !ok {
 			return nil, prov, fmt.Errorf("%w: chunk table %q not found in selected tables", ErrChunkPolicy, req.Table.Normalized())
 		}
-		if _, err := primaryKeysColumns(table); err != nil {
-			return nil, prov, fmt.Errorf("%w: chunk table %q: %w", ErrChunkPolicy, req.Table.Normalized(), err)
+		plan := SelectKeyDescriptor(table)
+		plans[key] = plan
+		qualified := qualifiedName(table.Schema, table.Name)
+		switch plan.Strategy {
+		case KeyStrategyPrimaryKey:
+			prov.Chunked = append(prov.Chunked, qualified)
+		case KeyStrategyNormalStream:
+			prov.Fallback = append(prov.Fallback, qualified)
 		}
-		chunked[key] = struct{}{}
-		prov.Chunked = append(prov.Chunked, qualifiedName(table.Schema, table.Name))
 	}
 	sort.Strings(prov.Chunked)
-	return chunked, prov, nil
+	sort.Strings(prov.Fallback)
+	return plans, prov, nil
 }
 
 // ChunkPolicyResumeFingerprint records chunk selector inputs for resumable dump matching.
