@@ -237,6 +237,169 @@ func fetchAllForeignKeys(ctx context.Context, q queryer, schemas []string) (map[
 	return out, nil
 }
 
-// fetchColumns and fetchForeignKeys (per-table) were removed.
-// LoadPostgresSchemas delegates to batched queries (fetchAllColumns +
-// fetchAllForeignKeys). The per-table functions were dead code.
+const (
+	maxInt16, minInt16, maxUint32 = int64(32767), int64(-32768), int64(4294967295)
+)
+
+// fetchUniqueIndexes loads unique/PK indexes; key cols only (indnkeyatts), INCLUDE excluded.
+func fetchUniqueIndexes(ctx context.Context, q queryer, schemas []string) (map[string][]UniqueIndexInfo, error) {
+	placeholders := make([]string, len(schemas))
+	args := make([]any, len(schemas))
+	for i, schema := range schemas {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = schema
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			n.nspname,
+			c.relname,
+			ic.relname,
+			ic.oid,
+			i.indisprimary,
+			i.indisvalid,
+			i.indisready,
+			am.amname,
+			(i.indpred IS NOT NULL) AS has_predicate,
+			(i.indexprs IS NOT NULL) AS is_expression,
+			i.indnkeyatts,
+			a.attname,
+			NOT a.attnotnull,
+			col.pos,
+			col.attnum,
+			opc.opcoid,
+			coll.colloid,
+			opt.optval
+		FROM pg_index i
+		JOIN pg_class c ON c.oid = i.indrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_class ic ON ic.oid = i.indexrelid
+		JOIN pg_am am ON am.oid = ic.relam
+		CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS col(attnum, pos)
+		CROSS JOIN LATERAL unnest(i.indclass) WITH ORDINALITY AS opc(opcoid, opcpos)
+		CROSS JOIN LATERAL unnest(i.indcollation) WITH ORDINALITY AS coll(colloid, collpos)
+		CROSS JOIN LATERAL unnest(i.indoption) WITH ORDINALITY AS opt(optval, optpos)
+		LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = col.attnum
+		WHERE i.indisunique
+		  AND col.pos <= i.indnkeyatts
+		  AND opc.opcpos = col.pos
+		  AND coll.collpos = col.pos
+		  AND opt.optpos = col.pos
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, ic.relname, col.pos;
+	`, strings.Join(placeholders, ", "))
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("fetch unique indexes: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]UniqueIndexInfo)
+	var currentKey, currentTable string
+	var currentIdx *UniqueIndexInfo
+	var currentKeyCount, nextOrdinal int
+
+	closeCurrentIndex := func() error {
+		if currentIdx == nil {
+			return nil
+		}
+		if nextOrdinal-1 != currentKeyCount {
+			return fmt.Errorf("fetch unique indexes: key count mismatch for index %s", currentIdx.IndexName)
+		}
+		out[currentKey] = append(out[currentKey], *currentIdx)
+		currentIdx = nil
+		return nil
+	}
+
+	for rows.Next() {
+		var schema, table, indexName, amName string
+		var indexOID int64
+		var isPrimary, isValid, isReady, hasPred, isExpr bool
+		var keyCount int
+		var colName sql.NullString
+		var isNullable sql.NullBool
+		var pos int
+		var attnum, opclassOID, collationOID, indoption int64
+
+		if err := rows.Scan(&schema, &table, &indexName, &indexOID,
+			&isPrimary, &isValid, &isReady, &amName,
+			&hasPred, &isExpr, &keyCount, &colName, &isNullable, &pos,
+			&attnum, &opclassOID, &collationOID, &indoption); err != nil {
+			return nil, fmt.Errorf("fetch unique indexes: %w", err)
+		}
+		if indexOID < 0 || indexOID > maxUint32 {
+			return nil, fmt.Errorf("fetch unique indexes: malformed index OID %d", indexOID)
+		}
+		indexOIDU := uint32(indexOID)
+
+		key := schema + "." + table
+		if currentKey != key || currentIdx == nil || currentIdx.IndexName != indexName {
+			if err := closeCurrentIndex(); err != nil {
+				return nil, err
+			}
+			currentKey = key
+			currentTable = table
+			currentKeyCount = keyCount
+			nextOrdinal = 1
+			currentIdx = &UniqueIndexInfo{
+				IndexName:    indexName,
+				IndexSchema:  schema,
+				IndexOID:     indexOIDU,
+				IsPrimary:    isPrimary,
+				IsValid:      isValid,
+				IsReady:      isReady,
+				AccessMethod: amName,
+				HasPredicate: hasPred,
+				IsExpression: isExpr,
+			}
+		} else if schema != currentIdx.IndexSchema || table != currentTable ||
+			indexOIDU != currentIdx.IndexOID || isPrimary != currentIdx.IsPrimary ||
+			isValid != currentIdx.IsValid || isReady != currentIdx.IsReady ||
+			amName != currentIdx.AccessMethod || hasPred != currentIdx.HasPredicate ||
+			isExpr != currentIdx.IsExpression || keyCount != currentKeyCount {
+			return nil, fmt.Errorf("fetch unique indexes: inconsistent metadata for index %s", indexName)
+		}
+
+		if pos != nextOrdinal {
+			return nil, fmt.Errorf("fetch unique indexes: malformed key position %d for index %s", pos, indexName)
+		}
+		nextOrdinal++
+
+		if colName.Valid {
+			if attnum <= 0 || attnum > maxInt16 {
+				return nil, fmt.Errorf("fetch unique indexes: malformed attnum %d for column %s", attnum, colName.String)
+			}
+			if opclassOID < 0 || opclassOID > maxUint32 || collationOID < 0 || collationOID > maxUint32 {
+				return nil, fmt.Errorf("fetch unique indexes: malformed opclass/collation OID for index %s", indexName)
+			}
+			if indoption < minInt16 || indoption > maxInt16 {
+				return nil, fmt.Errorf("fetch unique indexes: malformed indoption %d for index %s", indoption, indexName)
+			}
+			nullable := !isNullable.Valid || isNullable.Bool
+			currentIdx.KeyColumns = append(currentIdx.KeyColumns, UniqueIndexColumn{
+				Name:         colName.String,
+				Position:     pos,
+				IsNullable:   nullable,
+				Attnum:       int16(attnum),
+				OpclassOID:   uint32(opclassOID),
+				CollationOID: uint32(collationOID),
+				RawIndoption: int16(indoption),
+			})
+		} else if attnum != 0 {
+			return nil, fmt.Errorf("fetch unique indexes: malformed expression attnum %d", attnum)
+		} else {
+			currentIdx.IsExpression = true
+		}
+	}
+
+	if err := closeCurrentIndex(); err != nil {
+		return nil, err
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("fetch unique indexes: %w", err)
+	}
+
+	return out, nil
+}
+
+// Per-table fetchColumns/fetchForeignKeys removed; LoadPostgresSchemas uses batched queries.
