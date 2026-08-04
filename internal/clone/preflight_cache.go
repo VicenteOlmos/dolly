@@ -3,10 +3,12 @@ package clone
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,6 +54,29 @@ var (
 	errPermissionCacheCommittedRelease = errors.New("permission cache committed but lock release failed")
 )
 
+func canonicalizeEffectiveScope(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, name := range raw {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
+}
+
 func permissionCacheKey(dsns preflightDSNs, opts Options, strategy string) (string, error) {
 	src, err := parseDSNIdentity(dsns.sourceDSN)
 	if err != nil {
@@ -61,14 +86,24 @@ func permissionCacheKey(dsns preflightDSNs, opts Options, strategy string) (stri
 	if err != nil {
 		return "", err
 	}
+	scope := canonicalizeEffectiveScope(SchemasFromOptions(opts))
+	scopeJSON := "null"
+	if len(scope) > 0 {
+		b, err := json.Marshal(scope)
+		if err != nil {
+			return "", fmt.Errorf("marshal scope for cache key: %w", err)
+		}
+		scopeJSON = string(b)
+	}
 	payload := fmt.Sprintf(
-		"check_version=5\nstrategy=%s\nskip_create=%t\nclone=%s\nsource=%s:%s:%s:%s\ntarget=%s:%s:%s\nsame=%t",
+		"check_version=6\nstrategy=%s\nskip_create=%t\nclone=%s\nsource=%s:%s:%s:%s\ntarget=%s:%s:%s\nsame=%t\nscope=%s",
 		strategy,
 		opts.SkipCreate,
 		opts.CloneName,
 		src.host, src.port, src.db, src.user,
 		tgt.host, tgt.port, tgt.db,
 		dsns.sameInst,
+		scopeJSON,
 	)
 	sum := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(sum[:]), nil

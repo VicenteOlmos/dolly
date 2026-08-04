@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/dump"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,7 +31,7 @@ func TestPermissionCacheKeyVersionBump(t *testing.T) {
 	}
 	opts := Options{CloneName: "db_clone", SkipCreate: true}
 
-	v5, err := permissionCacheKey(dsns, opts, "schema-replay")
+	v6, err := permissionCacheKey(dsns, opts, "schema-replay")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,8 +44,8 @@ func TestPermissionCacheKeyVersionBump(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v4Payload := fmt.Sprintf(
-		"check_version=4\nstrategy=%s\nskip_create=%t\nclone=%s\nsource=%s:%s:%s:%s\ntarget=%s:%s:%s\nsame=%t",
+	v5Payload := fmt.Sprintf(
+		"check_version=5\nstrategy=%s\nskip_create=%t\nclone=%s\nsource=%s:%s:%s:%s\ntarget=%s:%s:%s\nsame=%t",
 		"schema-replay",
 		opts.SkipCreate,
 		opts.CloneName,
@@ -52,11 +53,69 @@ func TestPermissionCacheKeyVersionBump(t *testing.T) {
 		tgt.host, tgt.port, tgt.db,
 		dsns.sameInst,
 	)
-	sum := sha256.Sum256([]byte(v4Payload))
-	v4 := hex.EncodeToString(sum[:])
+	sum := sha256.Sum256([]byte(v5Payload))
+	v5 := hex.EncodeToString(sum[:])
 
-	if v4 == v5 {
-		t.Fatalf("expected v4 and v5 cache keys to differ, both %q", v5)
+	if v5 == v6 {
+		t.Fatalf("expected v5 and v6 cache keys to differ, both %q", v6)
+	}
+}
+
+func TestPermissionCacheScopeIdentity(t *testing.T) {
+	dsns := preflightDSNs{
+		sourceDSN: "postgres://u:p@h-a:5432/db_src",
+		targetDSN: "postgres://u:p@h-a:5432/db_clone",
+		sourceDB:  "db_src",
+		sameInst:  true,
+	}
+	base := Options{CloneName: "db_clone", SkipCreate: true}
+
+	kDup, err := permissionCacheKey(dsns, Options{
+		CloneName:  base.CloneName,
+		SkipCreate: base.SkipCreate,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"app", "core", "app"})},
+	}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kCanon, err := permissionCacheKey(dsns, Options{
+		CloneName:  base.CloneName,
+		SkipCreate: base.SkipCreate,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"core", "app"})},
+	}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kDup != kCanon {
+		t.Fatalf("equivalent scopes differ: %q vs %q", kDup, kCanon)
+	}
+
+	kApp, err := permissionCacheKey(dsns, Options{
+		CloneName:  base.CloneName,
+		SkipCreate: base.SkipCreate,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"app"})},
+	}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kApp == kCanon {
+		t.Fatalf("distinct scopes should not share key: %q", kApp)
+	}
+
+	kNil, err := permissionCacheKey(dsns, base, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kEmpty, err := permissionCacheKey(dsns, Options{
+		CloneName:  base.CloneName,
+		SkipCreate: base.SkipCreate,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{})},
+	}, "schema-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kNil != kEmpty {
+		t.Fatalf("nil and empty scope keys differ: %q vs %q", kNil, kEmpty)
 	}
 }
 
