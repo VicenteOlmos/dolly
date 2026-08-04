@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"reflect"
 	"strings"
@@ -101,6 +102,13 @@ func TestFetchTables(t *testing.T) {
 			}
 		})
 	}
+}
+
+var uniqueIndexCols = []string{
+	"nspname", "relname", "index_name", "index_oid", "indisprimary",
+	"indisvalid", "indisready", "amname", "has_predicate",
+	"is_expression", "indnkeyatts", "attname", "is_nullable", "pos",
+	"attnum", "opclass_oid", "collation_oid", "optval",
 }
 
 func TestLoadPostgresPublicSchema(t *testing.T) {
@@ -427,5 +435,132 @@ func TestLoadPostgresSchemasBatchedEmpty(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func uniqueIndexRow(schema, table, indexName string, indexOID int64, isPrimary, isValid, isReady bool, amName string, hasPred, isExpr bool, keyCount int, colName any, isNullable any, pos int, attnum, opclassOID, collationOID, indoption int64) []driver.Value {
+	return []driver.Value{schema, table, indexName, indexOID, isPrimary, isValid, isReady, amName, hasPred, isExpr, keyCount, colName, isNullable, pos, attnum, opclassOID, collationOID, indoption}
+}
+
+func TestFetchUniqueIndexes(t *testing.T) {
+	tests := []struct {
+		name    string
+		schemas []string
+		rows    [][]driver.Value
+		wantErr bool
+		check   func(t *testing.T, got map[string][]UniqueIndexInfo)
+	}{
+		{
+			name: "single PK preserves metadata", schemas: []string{"public"},
+			rows: [][]driver.Value{uniqueIndexRow("public", "users", "users_pkey", 10001, true, true, true, "btree", false, false, 1, "id", false, 1, 1, 1978, 0, 0)},
+			check: func(t *testing.T, got map[string][]UniqueIndexInfo) {
+				idx, col := got["public.users"][0], got["public.users"][0].KeyColumns[0]
+				if !idx.IsPrimary || !idx.IsValid || !idx.IsReady || idx.AccessMethod != "btree" ||
+					len(idx.KeyColumns) != 1 || col.Name != "id" || col.IsNullable ||
+					col.Attnum != 1 || col.OpclassOID != 1978 || col.CollationOID != 0 || col.RawIndoption != 0 {
+					t.Fatalf("unexpected PK index: %+v", idx)
+				}
+			},
+		},
+		{
+			name: "composite PK preserves key order", schemas: []string{"public"},
+			rows: [][]driver.Value{
+				uniqueIndexRow("public", "members", "members_pkey", 10002, true, true, true, "btree", false, false, 2, "project_id", false, 1, 1, 1978, 0, 0),
+				uniqueIndexRow("public", "members", "members_pkey", 10002, true, true, true, "btree", false, false, 2, "user_id", false, 2, 2, 1978, 0, 0),
+			},
+			check: func(t *testing.T, got map[string][]UniqueIndexInfo) {
+				cols := got["public.members"][0].KeyColumns
+				if len(cols) != 2 || cols[0].Name != "project_id" || cols[1].Name != "user_id" {
+					t.Fatalf("unexpected composite key: %+v", cols)
+				}
+			},
+		},
+		{
+			name: "non-PK unique nullable column", schemas: []string{"public"},
+			rows: [][]driver.Value{uniqueIndexRow("public", "departments", "departments_code_key", 10003, false, true, true, "btree", false, false, 1, "code", true, 1, 2, 1978, 0, 0)},
+			check: func(t *testing.T, got map[string][]UniqueIndexInfo) {
+				idx := got["public.departments"][0]
+				if idx.IsPrimary || idx.IndexName != "departments_code_key" || !idx.KeyColumns[0].IsNullable {
+					t.Fatalf("unexpected unique index: %+v", idx)
+				}
+			},
+		},
+		{
+			name: "mixed expression and column keys", schemas: []string{"public"},
+			rows: [][]driver.Value{
+				uniqueIndexRow("public", "items", "items_expr_col_idx", 10015, false, true, true, "btree", false, true, 2, nil, nil, 1, 0, 1978, 0, 0),
+				uniqueIndexRow("public", "items", "items_expr_col_idx", 10015, false, true, true, "btree", false, true, 2, "id", false, 2, 1, 1978, 0, 0),
+			},
+			check: func(t *testing.T, got map[string][]UniqueIndexInfo) {
+				idx := got["public.items"][0]
+				if !idx.IsExpression || len(idx.KeyColumns) != 1 || idx.KeyColumns[0].Name != "id" || idx.KeyColumns[0].Position != 2 {
+					t.Fatalf("unexpected mixed expression index: %+v", idx)
+				}
+			},
+		},
+		{
+			name: "partial and invalid indexes", schemas: []string{"public"},
+			rows: [][]driver.Value{
+				uniqueIndexRow("public", "items", "items_active_key", 10006, false, true, true, "btree", true, false, 1, "code", false, 1, 1, 1978, 0, 0),
+				uniqueIndexRow("public", "users", "users_invalid_idx", 10007, false, false, true, "btree", false, false, 1, "name", false, 1, 2, 1978, 0, 0),
+			},
+			check: func(t *testing.T, got map[string][]UniqueIndexInfo) {
+				if !got["public.items"][0].HasPredicate || got["public.users"][0].IsValid {
+					t.Fatalf("partial/invalid flags: items=%+v users=%+v", got["public.items"][0], got["public.users"][0])
+				}
+			},
+		},
+		{
+			name: "malformed non-sequential position", schemas: []string{"public"},
+			rows: [][]driver.Value{
+				uniqueIndexRow("public", "users", "users_pkey", 10012, true, true, true, "btree", false, false, 2, "id", false, 1, 1, 1978, 0, 0),
+				uniqueIndexRow("public", "users", "users_pkey", 10012, true, true, true, "btree", false, false, 2, "name", false, 3, 2, 1978, 0, 0),
+			},
+			wantErr: true,
+		},
+		{name: "malformed named column attnum", schemas: []string{"public"}, rows: [][]driver.Value{uniqueIndexRow("public", "users", "users_bad_idx", 10013, false, true, true, "btree", false, false, 1, "id", false, 1, 0, 1978, 0, 0)}, wantErr: true},
+		{name: "malformed expression attnum", schemas: []string{"public"}, rows: [][]driver.Value{uniqueIndexRow("public", "items", "items_bad_expr", 10014, false, true, true, "btree", false, true, 1, nil, nil, 1, 2, 1978, 0, 0)}, wantErr: true},
+		{name: "malformed index OID narrowing", schemas: []string{"public"}, rows: [][]driver.Value{uniqueIndexRow("public", "users", "users_bad_oid", int64(1)<<33, false, true, true, "btree", false, false, 1, "id", false, 1, 1, 1978, 0, 0)}, wantErr: true},
+		{name: "malformed attnum narrowing", schemas: []string{"public"}, rows: [][]driver.Value{uniqueIndexRow("public", "users", "users_bad_attnum", 10016, false, true, true, "btree", false, false, 1, "id", false, 1, int64(1)<<15, 1978, 0, 0)}, wantErr: true},
+		{
+			name: "inconsistent metadata across rows", schemas: []string{"public"},
+			rows: [][]driver.Value{
+				uniqueIndexRow("public", "users", "users_pkey", 10017, true, true, true, "btree", false, false, 2, "id", false, 1, 1, 1978, 0, 0),
+				uniqueIndexRow("public", "users", "users_pkey", 10017, false, true, true, "btree", false, false, 2, "name", false, 2, 2, 1978, 0, 0),
+			},
+			wantErr: true,
+		},
+		{name: "empty result", schemas: []string{"public"}, check: func(t *testing.T, got map[string][]UniqueIndexInfo) {
+			if len(got) != 0 {
+				t.Fatalf("expected empty map, got %d entries", len(got))
+			}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			idxRows := sqlmock.NewRows(uniqueIndexCols)
+			for _, row := range tt.rows {
+				idxRows.AddRow(row...)
+			}
+			mock.ExpectQuery(`pg_index[\s\S]*indisunique`).WillReturnRows(idxRows)
+
+			got, err := fetchUniqueIndexes(context.Background(), db, tt.schemas)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("fetchUniqueIndexes() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.check != nil {
+				tt.check(t, got)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
 	}
 }
