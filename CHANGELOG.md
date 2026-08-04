@@ -4,6 +4,8 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+## [0.3.4](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.4) — 2026-08-04
+
 ### Runtime safety
 
 - **Updater rollback** — Windows helper revalidates target and candidate after parent exit; trusts only verified backups; joins rollback failures and preserves recovery artifacts (#185).
