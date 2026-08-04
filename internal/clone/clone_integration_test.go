@@ -5,7 +5,9 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
+	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
 func requirePgDumpMajorMatch(t *testing.T, db *sql.DB) {
@@ -852,4 +855,333 @@ func TestRestoreSequencesAdversarialConcurrentPG16(t *testing.T) {
 		cancel()
 		wg.Wait()
 	}
+}
+
+type scopedPreflightFixture struct {
+	adminDSN  string
+	srcDSN    string
+	tgtDSN    string
+	cloneName string
+	role      string
+	srcDB     string
+	tgtDB     string
+}
+
+func scopedPreflightNames(pid int) (role, srcDB, tgtDB string) {
+	role = fmt.Sprintf("dolly_pf_scope_%d", pid)
+	srcDB = fmt.Sprintf("dolly_pf_scope_src_%d", pid)
+	tgtDB = fmt.Sprintf("dolly_pf_scope_tgt_%d", pid)
+	return role, srcDB, tgtDB
+}
+
+func countScopedPreflightResiduals(ctx context.Context, admin *sql.DB, role, srcDB, tgtDB string) (int, error) {
+	var count int
+	var exists bool
+	if err := admin.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)`, role).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("count role %q: %w", role, err)
+	}
+	if exists {
+		count++
+	}
+	for _, dbName := range []string{srcDB, tgtDB} {
+		if err := admin.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, dbName).Scan(&exists); err != nil {
+			return 0, fmt.Errorf("count database %q: %w", dbName, err)
+		}
+		if exists {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func teardownScopedPreflightFixture(adminDSN, role, srcDB, tgtDB string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		return fmt.Errorf("open admin: %w", err)
+	}
+	defer admin.Close()
+
+	for _, dbName := range []string{srcDB, tgtDB} {
+		if _, err := admin.ExecContext(ctx,
+			`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+			dbName,
+		); err != nil {
+			return fmt.Errorf("terminate connections on %q: %w", dbName, err)
+		}
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, quoteIdentifier(dbName))); err != nil {
+			return fmt.Errorf("drop database %q: %w", dbName, err)
+		}
+	}
+	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`DROP ROLE IF EXISTS %s`, quoteIdentifier(role))); err != nil {
+		return fmt.Errorf("drop role %q: %w", role, err)
+	}
+	return nil
+}
+
+func setupScopedPreflightFixture(t *testing.T, dsn string) scopedPreflightFixture {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("short")
+	}
+	if os.Getenv("DOLLY_TEST_PG_DSN") == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+
+	pid := os.Getpid()
+	role, srcDB, tgtDB := scopedPreflightNames(pid)
+	rolePass := fmt.Sprintf("scope_%d_pw", pid)
+
+	adminDSN, err := RewriteDSN(dsn, "postgres")
+	if err != nil {
+		t.Fatalf("rewrite admin DSN: %v", err)
+	}
+
+	teardown := func() {
+		if err := teardownScopedPreflightFixture(adminDSN, role, srcDB, tgtDB); err != nil {
+			t.Errorf("scoped preflight fixture teardown: %v", err)
+		}
+	}
+	if err := teardownScopedPreflightFixture(adminDSN, role, srcDB, tgtDB); err != nil {
+		t.Fatalf("pre-clean scoped preflight fixture: %v", err)
+	}
+	t.Cleanup(teardown)
+
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatalf("open admin: %v", err)
+	}
+	defer func() {
+		if err := admin.Close(); err != nil {
+			t.Errorf("close scoped preflight admin: %v", err)
+		}
+	}()
+
+	ctx := context.Background()
+
+	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE ROLE "%s" LOGIN PASSWORD '%s'`, role, rolePass)); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	for _, name := range []string{srcDB, tgtDB} {
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, name)); err != nil {
+			t.Fatalf("create database %s: %v", name, err)
+		}
+	}
+
+	srcAdminDSN, err := RewriteDSN(dsn, srcDB)
+	if err != nil {
+		t.Fatalf("rewrite source admin DSN: %v", err)
+	}
+	srcAdmin, err := sql.Open("pgx", srcAdminDSN)
+	if err != nil {
+		t.Fatalf("open source admin: %v", err)
+	}
+	defer srcAdmin.Close()
+
+	if _, err := srcAdmin.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE SCHEMA audit;
+		CREATE TABLE app.readable (id int);
+		CREATE TABLE audit.secret (id int);
+	`); err != nil {
+		t.Fatalf("create source objects: %v", err)
+	}
+
+	tgtAdminDSN, err := RewriteDSN(dsn, tgtDB)
+	if err != nil {
+		t.Fatalf("rewrite target admin DSN: %v", err)
+	}
+	tgtAdmin, err := sql.Open("pgx", tgtAdminDSN)
+	if err != nil {
+		t.Fatalf("open target admin: %v", err)
+	}
+	defer tgtAdmin.Close()
+
+	if _, err := tgtAdmin.ExecContext(ctx, `CREATE SCHEMA app`); err != nil {
+		t.Fatalf("create target schema: %v", err)
+	}
+
+	for _, dbName := range []string{srcDB, tgtDB} {
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`GRANT CONNECT ON DATABASE "%s" TO "%s"`, dbName, role)); err != nil {
+			t.Fatalf("grant connect on %s: %v", dbName, err)
+		}
+	}
+	if _, err := srcAdmin.ExecContext(ctx, fmt.Sprintf(`
+		GRANT USAGE ON SCHEMA app TO "%s";
+		GRANT SELECT ON ALL TABLES IN SCHEMA app TO "%s";
+	`, role, role)); err != nil {
+		t.Fatalf("grant source app privileges: %v", err)
+	}
+	if _, err := tgtAdmin.ExecContext(ctx, fmt.Sprintf(`
+		GRANT USAGE, CREATE ON SCHEMA app TO "%s";
+	`, role)); err != nil {
+		t.Fatalf("grant target app privileges: %v", err)
+	}
+
+	srcDSN, err := rewriteDSNWithUser(dsn, role, rolePass, srcDB)
+	if err != nil {
+		t.Fatalf("rewrite source role DSN: %v", err)
+	}
+	tgtDSN, err := rewriteDSNWithUser(dsn, role, rolePass, tgtDB)
+	if err != nil {
+		t.Fatalf("rewrite target role DSN: %v", err)
+	}
+
+	return scopedPreflightFixture{
+		adminDSN:  adminDSN,
+		srcDSN:    srcDSN,
+		tgtDSN:    tgtDSN,
+		cloneName: tgtDB,
+		role:      role,
+		srcDB:     srcDB,
+		tgtDB:     tgtDB,
+	}
+}
+
+func rewriteDSNWithUser(baseDSN, user, password, dbName string) (string, error) {
+	dsn, err := RewriteDSN(baseDSN, dbName)
+	if err != nil {
+		return "", err
+	}
+	u, err := parsePostgresURL(dsn)
+	if err != nil {
+		return "", err
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String(), nil
+}
+
+func TestPreflightScopedSchemaReplayPG16(t *testing.T) {
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+	if !strings.Contains(dsn, "sslmode=") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + "sslmode=disable"
+	}
+
+	ctx := context.Background()
+	fix := setupScopedPreflightFixture(t, dsn)
+
+	srcDB, err := sql.Open("pgx", fix.srcDSN)
+	if err != nil {
+		t.Fatalf("open source: %v", err)
+	}
+	requirePgDumpMajorMatch(t, srcDB)
+	_ = srcDB.Close()
+
+	scopedOpts := Options{
+		SourceDSN:  fix.srcDSN,
+		CloneName:  fix.cloneName,
+		TargetDSN:  fix.tgtDSN,
+		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"app"})},
+	}
+
+	t.Run("unselected inaccessible succeeds", func(t *testing.T) {
+		if err := Preflight(ctx, scopedOpts, &SchemaReplayStrategy{}); err != nil {
+			t.Fatalf("scoped preflight should ignore audit.secret: %v", err)
+		}
+	})
+
+	t.Run("empty scope legacy fail", func(t *testing.T) {
+		legacyOpts := Options{
+			SourceDSN:  fix.srcDSN,
+			CloneName:  fix.cloneName,
+			TargetDSN:  fix.tgtDSN,
+			SkipCreate: true,
+		}
+		err := Preflight(ctx, legacyOpts, &SchemaReplayStrategy{})
+		if err == nil {
+			t.Fatal("expected legacy unscoped failure for audit.secret")
+		}
+		var pe *PreflightError
+		if !errors.As(err, &pe) || pe.Kind != PreflightPermission {
+			t.Fatalf("got %v", err)
+		}
+		if !strings.Contains(err.Error(), "audit.secret") {
+			t.Fatalf("error %q missing unselected object under legacy scope", err.Error())
+		}
+	})
+
+	t.Run("selected inaccessible fails", func(t *testing.T) {
+		srcDBName, err := ParseDBName(fix.srcDSN)
+		if err != nil {
+			t.Fatalf("parse source db: %v", err)
+		}
+		srcAdminDSN, err := RewriteDSN(dsn, srcDBName)
+		if err != nil {
+			t.Fatalf("rewrite source admin DSN: %v", err)
+		}
+		srcAdmin, err := sql.Open("pgx", srcAdminDSN)
+		if err != nil {
+			t.Fatalf("open source admin: %v", err)
+		}
+		defer srcAdmin.Close()
+
+		if _, err := srcAdmin.ExecContext(ctx, `CREATE TABLE app.blocked (id int)`); err != nil {
+			t.Fatalf("create blocked table: %v", err)
+		}
+		t.Cleanup(func() {
+			cleanupAdmin, err := sql.Open("pgx", srcAdminDSN)
+			if err != nil {
+				t.Errorf("open source admin for blocked cleanup: %v", err)
+				return
+			}
+			defer cleanupAdmin.Close()
+			if _, err := cleanupAdmin.ExecContext(context.Background(), `DROP TABLE IF EXISTS app.blocked`); err != nil {
+				t.Errorf("drop app.blocked: %v", err)
+			}
+		})
+
+		err = Preflight(ctx, scopedOpts, &SchemaReplayStrategy{})
+		if err == nil {
+			t.Fatal("expected failure for inaccessible selected table")
+		}
+		var pe *PreflightError
+		if !errors.As(err, &pe) || pe.Kind != PreflightPermission {
+			t.Fatalf("got %v", err)
+		}
+		if !strings.Contains(err.Error(), "app.blocked") {
+			t.Fatalf("error %q missing selected object", err.Error())
+		}
+	})
+
+	t.Run("fixture teardown leaves no residuals", func(t *testing.T) {
+		admin, err := sql.Open("pgx", fix.adminDSN)
+		if err != nil {
+			t.Fatalf("open admin: %v", err)
+		}
+		defer func() {
+			if err := admin.Close(); err != nil {
+				t.Errorf("close admin: %v", err)
+			}
+		}()
+
+		before, err := countScopedPreflightResiduals(ctx, admin, fix.role, fix.srcDB, fix.tgtDB)
+		if err != nil {
+			t.Fatalf("count residuals before teardown: %v", err)
+		}
+		if before != 3 {
+			t.Fatalf("before teardown residual count = %d, want 3 (role + 2 databases)", before)
+		}
+
+		if err := teardownScopedPreflightFixture(fix.adminDSN, fix.role, fix.srcDB, fix.tgtDB); err != nil {
+			t.Fatalf("teardown fixture: %v", err)
+		}
+
+		after, err := countScopedPreflightResiduals(ctx, admin, fix.role, fix.srcDB, fix.tgtDB)
+		if err != nil {
+			t.Fatalf("count residuals after teardown: %v", err)
+		}
+		if after != 0 {
+			t.Fatalf("after teardown residual count = %d, want 0", after)
+		}
+	})
 }
