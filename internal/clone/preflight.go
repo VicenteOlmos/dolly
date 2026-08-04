@@ -275,8 +275,8 @@ func runPermissionChecks(
 		return "", err
 	}
 	needsSchemaReplayChecks := strategy == "schema-replay"
+	effectiveScope := canonicalizeEffectiveScope(SchemasFromOptions(opts))
 	if needsSchemaReplayChecks {
-		effectiveScope := canonicalizeEffectiveScope(SchemasFromOptions(opts))
 		if err := scanSourceClonePrivileges(ctx, sourceConn, role, strategy, effectiveScope); err != nil {
 			return "", err
 		}
@@ -284,7 +284,7 @@ func runPermissionChecks(
 		if adminConn != nil && !dsns.sameInst {
 			availConn = adminConn
 		}
-		if err := scanRequiredExtensions(ctx, sourceConn, availConn, role, strategy); err != nil {
+		if err := scanRequiredExtensions(ctx, sourceConn, availConn, role, strategy, effectiveScope); err != nil {
 			return "", err
 		}
 	}
@@ -310,10 +310,10 @@ func runPermissionChecks(
 			return "", err
 		}
 		if needsSchemaReplayChecks {
-			if err := scanTargetExtensionRestore(ctx, sourceConn, targetConn, role, strategy); err != nil {
+			if err := scanTargetExtensionRestore(ctx, sourceConn, targetConn, role, strategy, effectiveScope); err != nil {
 				return "", err
 			}
-			if err := scanTargetSchemaRestore(ctx, sourceConn, targetConn, role, strategy); err != nil {
+			if err := scanTargetSchemaRestore(ctx, sourceConn, targetConn, role, strategy, effectiveScope); err != nil {
 				return "", err
 			}
 		}
@@ -330,7 +330,7 @@ func runPermissionChecks(
 			return "", err
 		}
 		if needsSchemaReplayChecks {
-			if err := scanTargetExtensionAdminHeuristic(ctx, sourceConn, admin, role, strategy); err != nil {
+			if err := scanTargetExtensionAdminHeuristic(ctx, sourceConn, admin, role, strategy, effectiveScope); err != nil {
 				return "", err
 			}
 		}
@@ -598,6 +598,43 @@ func queryRowContextOptional(ctx context.Context, dbConn *sql.DB, query string, 
 	return dbConn.QueryRowContext(ctx, query, args...)
 }
 
+func queryContextOptional(ctx context.Context, dbConn *sql.DB, query string, args []any) (*sql.Rows, error) {
+	if len(args) == 0 {
+		return dbConn.QueryContext(ctx, query)
+	}
+	return dbConn.QueryContext(ctx, query, args...)
+}
+
+const sourceExtensionsListQuery = `
+		SELECT extname
+		FROM pg_extension
+		WHERE extname <> 'plpgsql'
+		ORDER BY extname`
+
+func sourceExtensionsListSQL(scope []string) (string, []any) {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
+	if len(scope) == 0 {
+		return sourceExtensionsListQuery, nil
+	}
+	return `
+		SELECT e.extname
+		FROM pg_extension e
+		INNER JOIN pg_namespace n ON n.oid = e.extnamespace
+		WHERE e.extname <> 'plpgsql'` + scopePred + `
+		ORDER BY e.extname`, scopeArgs
+}
+
+func sourceRestoreSchemasListSQL(scope []string) (string, []any) {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
+	return `
+		SELECT DISTINCT n.nspname
+		FROM pg_namespace n
+		INNER JOIN pg_class c ON c.relnamespace = n.oid
+		WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+		` + userSchemaFilter + scopePred + `
+		ORDER BY n.nspname`, scopeArgs
+}
+
 const userRelationFilter = `
 		  AND c.relname NOT LIKE 'pg_toast_%'`
 
@@ -710,12 +747,9 @@ func scanFunctionVisibility(ctx context.Context, dbConn *sql.DB, role, strategy 
 	}
 }
 
-func scanTargetExtensionRestore(ctx context.Context, sourceConn, targetConn *sql.DB, role, strategy string) error {
-	rows, err := sourceConn.QueryContext(ctx, `
-		SELECT extname
-		FROM pg_extension
-		WHERE extname <> 'plpgsql'
-		ORDER BY extname`)
+func scanTargetExtensionRestore(ctx context.Context, sourceConn, targetConn *sql.DB, role, strategy string, scope []string) error {
+	query, args := sourceExtensionsListSQL(scope)
+	rows, err := queryContextOptional(ctx, sourceConn, query, args)
 	if err != nil {
 		return fmt.Errorf("list source extensions for target restore: %w", err)
 	}
@@ -761,14 +795,9 @@ func scanTargetExtensionRestore(ctx context.Context, sourceConn, targetConn *sql
 	return nil
 }
 
-func scanTargetSchemaRestore(ctx context.Context, sourceConn, targetConn *sql.DB, role, strategy string) error {
-	rows, err := sourceConn.QueryContext(ctx, `
-		SELECT DISTINCT n.nspname
-		FROM pg_namespace n
-		INNER JOIN pg_class c ON c.relnamespace = n.oid
-		WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-		`+userSchemaFilter+`
-		ORDER BY n.nspname`)
+func scanTargetSchemaRestore(ctx context.Context, sourceConn, targetConn *sql.DB, role, strategy string, scope []string) error {
+	query, args := sourceRestoreSchemasListSQL(scope)
+	rows, err := queryContextOptional(ctx, sourceConn, query, args)
 	if err != nil {
 		return fmt.Errorf("list source restore schemas: %w", err)
 	}
@@ -840,12 +869,9 @@ func scanTargetSchemaRestore(ctx context.Context, sourceConn, targetConn *sql.DB
 	return nil
 }
 
-func scanTargetExtensionAdminHeuristic(ctx context.Context, sourceConn, adminConn *sql.DB, role, strategy string) error {
-	rows, err := sourceConn.QueryContext(ctx, `
-		SELECT extname
-		FROM pg_extension
-		WHERE extname <> 'plpgsql'
-		ORDER BY extname`)
+func scanTargetExtensionAdminHeuristic(ctx context.Context, sourceConn, adminConn *sql.DB, role, strategy string, scope []string) error {
+	query, args := sourceExtensionsListSQL(scope)
+	rows, err := queryContextOptional(ctx, sourceConn, query, args)
 	if err != nil {
 		return fmt.Errorf("list source extensions for admin heuristic: %w", err)
 	}
@@ -944,12 +970,9 @@ func scanForeignKeyReferencedRead(ctx context.Context, dbConn *sql.DB, role, str
 	}
 }
 
-func scanRequiredExtensions(ctx context.Context, sourceConn, availConn *sql.DB, role, strategy string) error {
-	rows, err := sourceConn.QueryContext(ctx, `
-		SELECT extname
-		FROM pg_extension
-		WHERE extname <> 'plpgsql'
-		ORDER BY extname`)
+func scanRequiredExtensions(ctx context.Context, sourceConn, availConn *sql.DB, role, strategy string, scope []string) error {
+	query, args := sourceExtensionsListSQL(scope)
+	rows, err := queryContextOptional(ctx, sourceConn, query, args)
 	if err != nil {
 		return fmt.Errorf("list source extensions: %w", err)
 	}
