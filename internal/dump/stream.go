@@ -591,10 +591,10 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 	return nil
 }
 
-// streamTableSlow dumps a table in primary-key chunks using keyset pagination
-// with checkpoint/resume support. Tables must have at least one primary-key
-// column; missing PKs return a clear error.
-// Each chunk queries up to chunkSize rows with keyset pagination on the PK tuple.
+// streamTableSlow dumps a table in keyset chunks using the selected resumable
+// key descriptor (primary key or eligible unique index). Normal-stream plans
+// are rejected; callers must route those tables through streamTable instead.
+// Each chunk queries up to chunkSize rows with keyset pagination on the key tuple.
 //
 // Checkpoint behaviour:
 //   - If table.ndjson already exists, the table is skipped (already done).
@@ -638,8 +638,10 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	}
 
 	descriptor := SelectKeyDescriptor(table)
-	if descriptor.Strategy != KeyStrategyPrimaryKey {
-		return fmt.Errorf("slow-connection mode: table %q has no primary key", table.Name)
+	switch descriptor.Strategy {
+	case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex:
+	default:
+		return fmt.Errorf("slow-connection mode: table %q has no resumable key", table.Name)
 	}
 	keyCols := descriptor.ColumnNames()
 
