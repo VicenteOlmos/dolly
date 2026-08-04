@@ -1053,6 +1053,119 @@ func rewriteDSNWithUser(baseDSN, user, password, dbName string) (string, error) 
 	return u.String(), nil
 }
 
+func TestCloneRoundTripCopyStreamScopedRolePG16(t *testing.T) {
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+	if !strings.Contains(dsn, "sslmode=") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + "sslmode=disable"
+	}
+
+	ctx := context.Background()
+	fix := setupScopedPreflightFixture(t, dsn)
+
+	srcDB, err := sql.Open("pgx", fix.srcDSN)
+	if err != nil {
+		t.Fatalf("open source: %v", err)
+	}
+	requirePgDumpMajorMatch(t, srcDB)
+	_ = srcDB.Close()
+
+	srcAdminDSN, err := RewriteDSN(dsn, fix.srcDB)
+	if err != nil {
+		t.Fatalf("rewrite source admin DSN: %v", err)
+	}
+	srcAdmin, err := sql.Open("pgx", srcAdminDSN)
+	if err != nil {
+		t.Fatalf("open source admin: %v", err)
+	}
+	if _, err := srcAdmin.ExecContext(ctx, `INSERT INTO app.readable (id) VALUES (1)`); err != nil {
+		t.Fatalf("seed source data: %v", err)
+	}
+	_ = srcAdmin.Close()
+
+	admin, err := sql.Open("pgx", fix.adminDSN)
+	if err != nil {
+		t.Fatalf("open admin: %v", err)
+	}
+	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`GRANT CREATE, TEMPORARY ON DATABASE "%s" TO "%s"`, fix.tgtDB, fix.role)); err != nil {
+		t.Fatalf("grant target database privileges: %v", err)
+	}
+	_ = admin.Close()
+
+	tgtAdminDSN, err := RewriteDSN(dsn, fix.tgtDB)
+	if err != nil {
+		t.Fatalf("rewrite target admin DSN: %v", err)
+	}
+	tgtAdmin, err := sql.Open("pgx", tgtAdminDSN)
+	if err != nil {
+		t.Fatalf("open target admin: %v", err)
+	}
+	if _, err := tgtAdmin.ExecContext(ctx, fmt.Sprintf(`GRANT ALL ON SCHEMA app TO "%s"`, fix.role)); err != nil {
+		t.Fatalf("grant target schema privileges: %v", err)
+	}
+	if _, err := tgtAdmin.ExecContext(ctx, `DROP SCHEMA IF EXISTS app CASCADE`); err != nil {
+		t.Fatalf("reset target app schema: %v", err)
+	}
+	_ = tgtAdmin.Close()
+
+	if err := Run(ctx, Options{
+		SourceDSN:  fix.srcDSN,
+		CloneName:  fix.cloneName,
+		TargetDSN:  fix.tgtDSN,
+		SkipCreate: true,
+		Strategy:   "copy-stream",
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"app"})},
+	}); err != nil {
+		t.Fatalf("clone run: %v", err)
+	}
+
+	tgtDB, err := sql.Open("pgx", fix.tgtDSN)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer tgtDB.Close()
+
+	var appTableExists bool
+	if err := tgtDB.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'app' AND table_name = 'readable'
+		)
+	`).Scan(&appTableExists); err != nil {
+		t.Fatalf("check app.readable: %v", err)
+	}
+	if !appTableExists {
+		t.Fatal("expected app.readable on target")
+	}
+
+	var rowCount int
+	if err := tgtDB.QueryRowContext(ctx, `SELECT count(*) FROM app.readable`).Scan(&rowCount); err != nil {
+		t.Fatalf("count app.readable rows: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("app.readable rows = %d, want 1", rowCount)
+	}
+
+	var auditSchemaExists bool
+	if err := tgtDB.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.schemata
+			WHERE schema_name = 'audit'
+		)
+	`).Scan(&auditSchemaExists); err != nil {
+		t.Fatalf("check audit schema: %v", err)
+	}
+	if auditSchemaExists {
+		t.Fatal("audit schema should not be replayed for app-only scoped clone")
+	}
+}
+
 func TestPreflightScopedSchemaReplayPG16(t *testing.T) {
 	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
 	if dsn == "" {
