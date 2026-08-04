@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,16 +19,33 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// slowCheckpoint records the last successfully streamed primary-key value
-// so a slow-connection dump can resume after interruption.
-// LastPK is stored as json.Number to keep arbitrary integer precision.
+// slowCheckpoint records the last successfully streamed key value so a
+// slow-connection dump can resume after interruption. LastKey and legacy
+// LastPK store json.Number for integers to keep arbitrary precision.
 type slowCheckpoint struct {
-	Schema    string   `json:"schema,omitempty"`
-	Table     string   `json:"table"`
-	PKColumns []string `json:"pk_columns,omitempty"`
-	PKColumn  string   `json:"pk_column,omitempty"` // legacy single-PK format; detected and discarded
-	// ponytail: json.Number cannot hold text PKs; store JSON number|string per column.
-	LastPK []any `json:"last_pk"`
+	Schema         string      `json:"schema,omitempty"`
+	Table          string      `json:"table"`
+	Strategy       KeyStrategy `json:"strategy,omitempty"`
+	KeyColumns     []string    `json:"key_columns,omitempty"`
+	KeyFingerprint string      `json:"key_fingerprint,omitempty"`
+	LastKey        []any       `json:"last_key,omitempty"`
+	PKColumns      []string    `json:"pk_columns,omitempty"` // legacy PK format
+	PKColumn       string      `json:"pk_column,omitempty"`  // legacy single-PK format; detected and discarded
+	LastPK         []any       `json:"last_pk,omitempty"`    // legacy PK format
+}
+
+func (cp *slowCheckpoint) keyColumnNames() []string {
+	if len(cp.KeyColumns) > 0 {
+		return cp.KeyColumns
+	}
+	return cp.PKColumns
+}
+
+func (cp *slowCheckpoint) lastKeyValues() []any {
+	if len(cp.LastKey) > 0 {
+		return cp.LastKey
+	}
+	return cp.LastPK
 }
 
 func checkpointPath(dir, table string) string {
@@ -70,7 +88,7 @@ func loadSlowCheckpoint(path string) (*slowCheckpoint, error) {
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.UseNumber()
 	var cp slowCheckpoint
-	if err := dec.Decode(&cp); err == nil && (len(cp.LastPK) > 0 || cp.PKColumn == "") {
+	if err := dec.Decode(&cp); err == nil && (len(cp.lastKeyValues()) > 0 || cp.PKColumn == "") {
 		return &cp, nil
 	}
 	var leg struct {
@@ -84,18 +102,18 @@ func loadSlowCheckpoint(path string) (*slowCheckpoint, error) {
 	return &slowCheckpoint{Table: leg.Table, PKColumn: leg.PKColumn}, nil
 }
 
-func saveSlowCheckpoint(path string, table db.Table, pkCols []string, lastPk []any) error {
+func saveSlowCheckpoint(path string, table db.Table, descriptor KeyDescriptor, lastKey []any) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp)
-	nums := make([]any, len(lastPk))
-	for i, v := range lastPk {
+	nums := make([]any, len(lastKey))
+	for i, v := range lastKey {
 		nums[i] = checkpointStoreValue(v)
 	}
-	cp := slowCheckpoint{Schema: table.Schema, Table: table.Name, PKColumns: pkCols, LastPK: nums}
+	cp := slowCheckpoint{Schema: table.Schema, Table: table.Name, Strategy: descriptor.Strategy, KeyColumns: descriptor.ColumnNames(), KeyFingerprint: descriptor.Fingerprint, LastKey: nums}
 	if err := json.NewEncoder(f).Encode(cp); err != nil {
 		f.Close()
 		return err
@@ -104,6 +122,63 @@ func saveSlowCheckpoint(path string, table db.Table, pkCols []string, lastPk []a
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func validateCheckpointDescriptor(cp *slowCheckpoint, descriptor KeyDescriptor) error {
+	if cp == nil {
+		return nil
+	}
+	gen := cp.Strategy != "" || len(cp.KeyColumns) > 0 || cp.KeyFingerprint != "" || len(cp.LastKey) > 0
+	leg := len(cp.PKColumns) > 0 || len(cp.LastPK) > 0
+	if cp.PKColumn != "" && (gen || leg) {
+		return fmt.Errorf("checkpoint mixes legacy single-pk with other identity fields")
+	}
+	if len(cp.keyColumnNames()) == 0 && cp.PKColumn != "" {
+		return nil
+	}
+	if gen && leg {
+		return fmt.Errorf("checkpoint mixes generalized and legacy identity fields")
+	}
+	if gen {
+		if cp.Strategy == "" {
+			return fmt.Errorf("checkpoint strategy required")
+		}
+		if cp.Strategy != KeyStrategyPrimaryKey && cp.Strategy != KeyStrategyUniqueIndex {
+			return fmt.Errorf("checkpoint unknown strategy")
+		}
+		if cp.KeyFingerprint == "" {
+			return fmt.Errorf("checkpoint fingerprint required")
+		}
+		if len(cp.KeyColumns) == 0 || len(cp.LastKey) == 0 {
+			return fmt.Errorf("checkpoint key columns required")
+		}
+		if len(cp.KeyColumns) != len(cp.LastKey) {
+			return fmt.Errorf("checkpoint key arity mismatch")
+		}
+		if cp.Strategy != descriptor.Strategy {
+			return fmt.Errorf("checkpoint strategy mismatch")
+		}
+		if cp.KeyFingerprint != descriptor.Fingerprint {
+			return fmt.Errorf("checkpoint fingerprint mismatch")
+		}
+		if !slices.Equal(cp.KeyColumns, descriptor.ColumnNames()) {
+			return fmt.Errorf("checkpoint key columns mismatch")
+		}
+		return nil
+	}
+	if leg {
+		if descriptor.Strategy != KeyStrategyPrimaryKey {
+			return fmt.Errorf("legacy checkpoint incompatible with current key plan")
+		}
+		if len(cp.PKColumns) == 0 || len(cp.LastPK) == 0 {
+			return fmt.Errorf("checkpoint pk_columns required")
+		}
+		if !slices.Equal(cp.PKColumns, descriptor.ColumnNames()) {
+			return fmt.Errorf("legacy checkpoint pk columns mismatch")
+		}
+		return nil
+	}
+	return fmt.Errorf("checkpoint missing identity fields")
 }
 
 func toJSONNumber(v any) json.Number {
@@ -150,26 +225,23 @@ func checkpointStoreValue(v any) any {
 	}
 }
 
-func checkpointPKValues(vals []any, pkTypes []string) ([]any, error) {
-	if len(vals) != len(pkTypes) {
-		return nil, fmt.Errorf("checkpoint PK count %d does not match column count %d", len(vals), len(pkTypes))
+func checkpointKeyValues(vals []any, keyTypes []string) ([]any, error) {
+	if len(vals) != len(keyTypes) {
+		return nil, fmt.Errorf("checkpoint key count %d does not match column count %d", len(vals), len(keyTypes))
 	}
 	out := make([]any, len(vals))
 	for i, v := range vals {
-		if isIntegerPKType(pkTypes[i]) {
+		if isIntegerPKType(keyTypes[i]) {
 			n := toJSONNumber(v)
 			i64, err := n.Int64()
 			if err != nil {
-				return nil, fmt.Errorf("parse checkpoint PK[%d] %q as int64: %w", i, n, err)
-			}
-			if err != nil {
-				return nil, fmt.Errorf("parse checkpoint PK %q as int64: %w", n, err)
+				return nil, fmt.Errorf("parse checkpoint key[%d] %q as int64: %w", i, n, err)
 			}
 			out[i] = i64
 		} else {
 			s, err := checkpointAsString(v)
 			if err != nil {
-				return nil, fmt.Errorf("parse checkpoint PK[%d]: %w", i, err)
+				return nil, fmt.Errorf("parse checkpoint key[%d]: %w", i, err)
 			}
 			out[i] = s
 		}
@@ -214,7 +286,7 @@ func parseSlowTempRow(line string) (map[string]any, error) {
 	return m, nil
 }
 
-func validateSlowCheckpointTemp(tmpPath string, pkCols []string, cp *slowCheckpoint) error {
+func validateSlowCheckpointTemp(tmpPath string, cp *slowCheckpoint) error {
 	line, err := readLastNonEmptyLine(tmpPath)
 	if err != nil {
 		return fmt.Errorf("validate checkpoint temp for table %q: %w", cp.Table, err)
@@ -223,24 +295,26 @@ func validateSlowCheckpointTemp(tmpPath string, pkCols []string, cp *slowCheckpo
 	if err != nil {
 		return fmt.Errorf("validate checkpoint temp for table %q: last row is not valid JSON: %w", cp.Table, err)
 	}
-	if len(pkCols) != len(cp.LastPK) {
-		return fmt.Errorf("validate checkpoint temp for table %q: pk column count mismatch", cp.Table)
+	keyCols := cp.keyColumnNames()
+	lastKey := cp.lastKeyValues()
+	if len(keyCols) != len(lastKey) {
+		return fmt.Errorf("validate checkpoint temp for table %q: key column count mismatch", cp.Table)
 	}
-	for i, col := range pkCols {
+	for i, col := range keyCols {
 		v, ok := row[col]
 		if !ok {
-			return fmt.Errorf("validate checkpoint temp for table %q: last row missing pk column %q", cp.Table, col)
+			return fmt.Errorf("validate checkpoint temp for table %q: last row missing key column %q", cp.Table, col)
 		}
 		got, err := checkpointAsString(v)
 		if err != nil {
-			return fmt.Errorf("validate checkpoint temp for table %q: last row pk %q: %w", cp.Table, col, err)
+			return fmt.Errorf("validate checkpoint temp for table %q: last row key %q: %w", cp.Table, col, err)
 		}
-		want, err := checkpointAsString(cp.LastPK[i])
+		want, err := checkpointAsString(lastKey[i])
 		if err != nil {
-			return fmt.Errorf("validate checkpoint temp for table %q: checkpoint last_pk[%d]: %w", cp.Table, i, err)
+			return fmt.Errorf("validate checkpoint temp for table %q: checkpoint last_key[%d]: %w", cp.Table, i, err)
 		}
 		if got != want {
-			return fmt.Errorf("validate checkpoint temp for table %q: checkpoint last_pk[%d] %s does not match temp last row %s=%s", cp.Table, i, want, col, got)
+			return fmt.Errorf("validate checkpoint temp for table %q: checkpoint last_key[%d] %s does not match temp last row %s=%s", cp.Table, i, want, col, got)
 		}
 	}
 	return nil
@@ -563,37 +637,38 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		return nil
 	}
 
-	pkCols, err := primaryKeysColumns(table)
-	if err != nil {
-		return fmt.Errorf("slow-connection mode: %w", err)
+	descriptor := SelectKeyDescriptor(table)
+	if descriptor.Strategy != KeyStrategyPrimaryKey {
+		return fmt.Errorf("slow-connection mode: table %q has no primary key", table.Name)
 	}
+	keyCols := descriptor.ColumnNames()
 
 	cols := make([]string, len(table.Columns))
 	for i, c := range table.Columns {
 		cols[i] = pgx.Identifier{c.Name}.Sanitize()
 	}
 
-	pkIndices := make([]int, len(pkCols))
-	pkIdents := make([]string, len(pkCols))
-	pkTypes := make([]string, len(pkCols))
-	for j, pkCol := range pkCols {
-		pkIdents[j] = pgx.Identifier{pkCol}.Sanitize()
+	keyIndices := make([]int, len(keyCols))
+	keyIdents := make([]string, len(keyCols))
+	keyTypes := make([]string, len(keyCols))
+	for j, keyCol := range keyCols {
+		keyIdents[j] = pgx.Identifier{keyCol}.Sanitize()
 		found := false
 		for i, c := range table.Columns {
-			if c.Name == pkCol {
-				pkIndices[j] = i
-				pkTypes[j] = c.DataType
+			if c.Name == keyCol {
+				keyIndices[j] = i
+				keyTypes[j] = c.DataType
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("slow-connection mode: pk column %q not found on table %q", pkCol, table.Name)
+			return fmt.Errorf("slow-connection mode: key column %q not found on table %q", keyCol, table.Name)
 		}
 	}
 
 	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
-	pkOrder := strings.Join(pkIdents, ", ")
+	keyOrder := strings.Join(keyIdents, ", ")
 	colList := strings.Join(cols, ", ")
 
 	colNames := make([]string, len(table.Columns))
@@ -601,34 +676,42 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		colNames[i] = c.Name
 	}
 
-	var lastPk []any
+	var lastKey []any
 	appendMode := false
 	if _, err := os.Stat(tmpPath); os.IsNotExist(err) {
 		// No temp data file: any checkpoint/temp-checkpoint is stale.
 		os.Remove(ckptPath)
 		os.Remove(ckptPath + ".tmp")
 	} else if cp, err := loadSlowCheckpoint(ckptPath); err == nil {
-		if len(cp.PKColumns) == 0 && cp.PKColumn != "" {
+		hasGen := cp.Strategy != "" || len(cp.KeyColumns) > 0 || cp.KeyFingerprint != "" || len(cp.LastKey) > 0
+		hasLeg := len(cp.PKColumns) > 0 || len(cp.LastPK) > 0
+		if cp.PKColumn != "" && (hasGen || hasLeg) {
+			return fmt.Errorf("load checkpoint for table %q: checkpoint mixes legacy single-pk with other identity fields", table.Name)
+		}
+		if len(cp.keyColumnNames()) == 0 && cp.PKColumn != "" {
 			// ponytail: legacy single-PK checkpoint — discard and restart fresh.
 			os.Remove(tmpPath)
 			os.Remove(ckptPath)
 			os.Remove(ckptPath + ".tmp")
-		} else if err := validateSlowCheckpointTemp(tmpPath, pkCols, cp); err != nil {
+		} else if err := validateCheckpointDescriptor(cp, descriptor); err != nil {
+			return fmt.Errorf("load checkpoint for table %q: %w", table.Name, err)
+		} else if err := validateSlowCheckpointTemp(tmpPath, cp); err != nil {
 			// ponytail: corrupt/mismatched checkpoint+temp — reset and start fresh.
 			os.Remove(tmpPath)
 			os.Remove(ckptPath)
 			os.Remove(ckptPath + ".tmp")
 		} else {
-			v, err := checkpointPKValues(cp.LastPK, pkTypes)
+			v, err := checkpointKeyValues(cp.lastKeyValues(), keyTypes)
 			if err != nil {
 				return fmt.Errorf("load checkpoint for table %q: %w", table.Name, err)
 			}
-			lastPk = v
+			lastKey = v
 			appendMode = true
 		}
 	}
 
 	var f *os.File
+	var err error
 	if appendMode {
 		f, err = os.OpenFile(tmpPath, os.O_APPEND|os.O_WRONLY, 0o600)
 	} else {
@@ -668,17 +751,17 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		}
 		var query string
 		var args []any
-		if lastPk == nil {
+		if lastKey == nil {
 			query = fmt.Sprintf("SELECT %s FROM %s ORDER BY %s LIMIT %d",
-				colList, tableIdent, pkOrder, chunkSize)
+				colList, tableIdent, keyOrder, chunkSize)
 		} else {
-			placeholders := make([]string, len(lastPk))
-			for i := range lastPk {
+			placeholders := make([]string, len(lastKey))
+			for i := range lastKey {
 				placeholders[i] = fmt.Sprintf("$%d", i+1)
 			}
 			query = fmt.Sprintf("SELECT %s FROM %s WHERE (%s) > (%s) ORDER BY %s LIMIT %d",
-				colList, tableIdent, pkOrder, strings.Join(placeholders, ", "), pkOrder, chunkSize)
-			args = lastPk
+				colList, tableIdent, keyOrder, strings.Join(placeholders, ", "), keyOrder, chunkSize)
+			args = lastKey
 		}
 
 		// Record file offset before writing the chunk. If checkpoint save fails
@@ -753,8 +836,8 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 				}
 
 				chunkLines = append(chunkLines, data)
-				chunkLast = make([]any, len(pkIndices))
-				for j, idx := range pkIndices {
+				chunkLast = make([]any, len(keyIndices))
+				for j, idx := range keyIndices {
 					chunkLast[j] = values[idx]
 				}
 				rowCount++
@@ -773,7 +856,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 				}
 			}
 			if rowCount > 0 {
-				lastPk = chunkLast
+				lastKey = chunkLast
 			}
 
 			return rowCount < chunkSize, nil
@@ -786,8 +869,8 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		if err := w.Flush(); err != nil {
 			return fmt.Errorf("flush table %q: %w", table.Name, err)
 		}
-		if lastPk != nil {
-			if err := saveSlowCheckpoint(ckptPath, table, pkCols, lastPk); err != nil {
+		if lastKey != nil {
+			if err := saveSlowCheckpoint(ckptPath, table, descriptor, lastKey); err != nil {
 				// ponytail: checkpoint failed after flush; truncate the chunk so
 				// the next resume cannot see duplicate rows.
 				_ = f.Truncate(offset)
