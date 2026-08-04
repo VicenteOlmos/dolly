@@ -1163,11 +1163,185 @@ func TestCopyStreamStrategyExecute(t *testing.T) {
 	}
 }
 
+func TestCopyStreamPgDumpArgsFollowSchemaScope(t *testing.T) {
+	const srcDSN = "postgres://u@h-a:5432/db_src"
+
+	tests := []struct {
+		name       string
+		opts       Options
+		wantSchema []string
+	}{
+		{
+			name: "selected tenant_a and tenant_b",
+			opts: Options{
+				DumpOpts: []dump.Option{dump.WithSchemas([]string{"tenant_a", "tenant_b"})},
+			},
+			wantSchema: []string{"tenant_a", "tenant_b"},
+		},
+		{
+			name: "dump over restore precedence",
+			opts: Options{
+				DumpOpts:    []dump.Option{dump.WithSchemas([]string{"dump_win"})},
+				RestoreOpts: []restore.Option{restore.WithSchemas([]string{"restore_lose"})},
+			},
+			wantSchema: []string{"dump_win"},
+		},
+		{
+			name: "restore fallback",
+			opts: Options{
+				RestoreOpts: []restore.Option{restore.WithSchemas([]string{"from_restore"})},
+			},
+			wantSchema: []string{"from_restore"},
+		},
+		{
+			name:       "empty scope no schema flags",
+			opts:       Options{},
+			wantSchema: nil,
+		},
+		{
+			name: "injection shaped schema text",
+			opts: Options{
+				DumpOpts: []dump.Option{dump.WithSchemas([]string{"tenant; DROP SCHEMA public; --"})},
+			},
+			wantSchema: []string{"tenant; DROP SCHEMA public; --"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockDB, _, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mockDB.Close()
+
+			origOpenDB := sqlOpenDB
+			sqlOpenDB = func(dsn string) (*sql.DB, error) {
+				_ = dsn
+				return mockDB, nil
+			}
+			defer func() { sqlOpenDB = origOpenDB }()
+
+			origListSchemas := listSchemaNamesFunc
+			listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error) {
+				return []string{"public"}, nil
+			}
+			defer func() { listSchemaNamesFunc = origListSchemas }()
+
+			origLoadSchemas := loadSchemasFunc
+			loadSchemasFunc = func(ctx context.Context, q *sql.DB, schemas []string) ([]db.Table, error) {
+				return []db.Table{{Schema: "public", Name: "users"}}, nil
+			}
+			defer func() { loadSchemasFunc = origLoadSchemas }()
+
+			origOpenCopy := openCopyConn
+			openCopyConn = func(ctx context.Context, dsn string) (copyConn, error) {
+				return &mockCopyConn{}, nil
+			}
+			defer func() { openCopyConn = origOpenCopy }()
+
+			origRestoreSeq := restoreSequencesFunc
+			restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+			defer func() { restoreSequencesFunc = origRestoreSeq }()
+
+			mockRunner := &mockCommandRunner{}
+			tt.opts.SourceDSN = srcDSN
+			tt.opts.CloneName = "db_clone"
+			tt.opts.SkipCreate = true
+
+			if err := (&CopyStreamStrategy{Runner: mockRunner}).Execute(context.Background(), tt.opts); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+
+			if len(mockRunner.pipeCalls) != 1 {
+				t.Fatalf("pipe calls = %d, want 1", len(mockRunner.pipeCalls))
+			}
+			pc := mockRunner.pipeCalls[0]
+			if pc.srcName != "pg_dump" {
+				t.Fatalf("srcName = %q, want pg_dump", pc.srcName)
+			}
+			if pc.dstName != "psql" {
+				t.Fatalf("dstName = %q, want psql", pc.dstName)
+			}
+
+			wantPrefix := []string{"--schema-only", "--no-owner", "--no-acl"}
+			if len(pc.srcArgs) < len(wantPrefix) || !sliceEqual(pc.srcArgs[:len(wantPrefix)], wantPrefix) {
+				t.Fatalf("fixed prefix = %v, want %v", pc.srcArgs, wantPrefix)
+			}
+
+			var gotSchemas []string
+			for _, a := range pc.srcArgs[len(wantPrefix):] {
+				if strings.HasPrefix(a, "--schema=") {
+					gotSchemas = append(gotSchemas, strings.TrimPrefix(a, "--schema="))
+					continue
+				}
+				if a == srcDSN {
+					break
+				}
+				t.Fatalf("unexpected pg_dump arg %q", a)
+			}
+			if pc.srcArgs[len(pc.srcArgs)-1] != srcDSN {
+				t.Fatalf("DSN not last in pg_dump args: %v", pc.srcArgs)
+			}
+
+			if tt.wantSchema == nil {
+				if len(gotSchemas) != 0 {
+					t.Fatalf("schema args = %v, want none", gotSchemas)
+				}
+				return
+			}
+			if !sliceEqual(gotSchemas, tt.wantSchema) {
+				t.Fatalf("schema args = %v, want %v", gotSchemas, tt.wantSchema)
+			}
+			for _, want := range tt.wantSchema {
+				wantArg := "--schema=" + want
+				found := false
+				for _, a := range pc.srcArgs {
+					if a == wantArg {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("pg_dump args = %v, missing unchanged %q", pc.srcArgs, wantArg)
+				}
+			}
+		})
+	}
+}
+
 func TestCopyStreamStrategySchemaReplayFailure(t *testing.T) {
+	mockDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		_ = dsn
+		return mockDB, nil
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	origLoadSchemas := loadSchemasFunc
+	loadSchemasFunc = func(ctx context.Context, q *sql.DB, schemas []string) ([]db.Table, error) {
+		return []db.Table{{Schema: "public", Name: "users"}}, nil
+	}
+	defer func() { loadSchemasFunc = origLoadSchemas }()
+
+	origOpenCopy := openCopyConn
+	copyConnOpened := false
+	openCopyConn = func(ctx context.Context, dsn string) (copyConn, error) {
+		copyConnOpened = true
+		return nil, errors.New("should not open copy connection")
+	}
+	defer func() { openCopyConn = origOpenCopy }()
+
 	mockRunner := &mockCommandRunner{pipeErr: errors.New("pipe broken")}
 	strat := &CopyStreamStrategy{Runner: mockRunner}
 
-	err := strat.Execute(context.Background(), Options{
+	err = strat.Execute(context.Background(), Options{
 		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
 		CloneName:  "db_clone",
 		SkipCreate: true,
@@ -1176,12 +1350,14 @@ func TestCopyStreamStrategySchemaReplayFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	// A dump schema filter bypasses source-wide schema enumeration.
-	if !contains(err.Error(), "load schema") {
-		t.Fatalf("error should mention load schema: %v", err)
+	if !contains(err.Error(), "replay schema") {
+		t.Fatalf("error should mention replay schema: %v", err)
 	}
-	if !mentionsHostResolutionFailure(err.Error()) {
-		t.Fatalf("error should mention host resolution failure: %v", err)
+	if !contains(err.Error(), "pipe broken") {
+		t.Fatalf("error should mention pipe broken: %v", err)
+	}
+	if copyConnOpened {
+		t.Fatal("openCopyConn should not be called after pipe failure")
 	}
 }
 
