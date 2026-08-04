@@ -20,7 +20,7 @@ func LoadPostgresSchemas(ctx context.Context, q queryer, schemas []string) ([]Ta
 }
 
 // LoadPostgresSchemasBatched loads all table metadata with batched queries
-// (2 queries for columns + foreign keys regardless of table count).
+// (3 queries for columns + foreign keys + unique indexes regardless of table count).
 // When schemas is nil or empty, only the public schema is loaded.
 func LoadPostgresSchemasBatched(ctx context.Context, q queryer, schemas []string) ([]Table, error) {
 	filter := schemaFilter(schemas)
@@ -40,11 +40,16 @@ func LoadPostgresSchemasBatched(ctx context.Context, q queryer, schemas []string
 	if err != nil {
 		return nil, err
 	}
+	idxMap, err := fetchUniqueIndexes(ctx, q, filter)
+	if err != nil {
+		return nil, err
+	}
 
 	for i := range tables {
 		key := tables[i].Schema + "." + tables[i].Name
 		tables[i].Columns = colMap[key]
 		tables[i].ForeignKeys = fkMap[key]
+		tables[i].UniqueIndexes = idxMap[key]
 	}
 
 	return tables, nil

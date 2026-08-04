@@ -252,6 +252,8 @@ func TestIntrospectParallelPlanExcludeAllBeforeMetadata(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	cfg := &config{
 		schemas:       []string{"public"},
 		skipSequences: true,

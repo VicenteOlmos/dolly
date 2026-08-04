@@ -111,6 +111,10 @@ var uniqueIndexCols = []string{
 	"attnum", "opclass_oid", "collation_oid", "optval",
 }
 
+func emptyUniqueIndexMock(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`pg_index[\s\S]*indisunique`).WillReturnRows(sqlmock.NewRows(uniqueIndexCols))
+}
+
 func TestLoadPostgresPublicSchema(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -138,6 +142,8 @@ func TestLoadPostgresPublicSchema(t *testing.T) {
 				allFks := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}).
 					AddRow("public", "posts", "fk_posts_user_id", "user_id", "public", "users", "id")
 				mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(allFks)
+
+				emptyUniqueIndexMock(mock)
 			},
 			want: []Table{
 				{
@@ -194,6 +200,26 @@ func TestLoadPostgresPublicSchema(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "error from fetchUniqueIndexes phase",
+			setup: func(mock sqlmock.Sqlmock) {
+				tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+					AddRow("public", "users", nil)
+				mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)[\s\S]*table_type = 'BASE TABLE'[\s\S]*ORDER BY t\.table_schema, t\.table_name`).
+					WithArgs("public").
+					WillReturnRows(tablesRows)
+
+				allCols := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+					AddRow("public", "users", "id", "integer", "NO", 1, true)
+				mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(allCols)
+
+				fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+				mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+				mock.ExpectQuery(`pg_index[\s\S]*indisunique`).WillReturnError(errors.New("index query failed"))
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -245,6 +271,8 @@ func TestCapabilityBoundary(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	got, err := LoadPostgresPublicSchema(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +316,8 @@ func TestLoadPostgresSchemasEmptyUsesPublicOnly(t *testing.T) {
 	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
 
+	emptyUniqueIndexMock(mock)
+
 	got, err := LoadPostgresSchemas(context.Background(), db, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -321,6 +351,8 @@ func TestLoadPostgresSchemasMultiSchemaIN(t *testing.T) {
 	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("app", "billing").WillReturnRows(allCols)
 	allFks := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
 	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("app", "billing").WillReturnRows(allFks)
+
+	emptyUniqueIndexMock(mock)
 
 	got, err := LoadPostgresSchemas(context.Background(), db, []string{"app", "billing"})
 	if err != nil {
@@ -392,6 +424,10 @@ func TestLoadPostgresSchemasBatched(t *testing.T) {
 		WithArgs("app", "billing").
 		WillReturnRows(allFks)
 
+	idxRows := sqlmock.NewRows(uniqueIndexCols).
+		AddRow("app", "orders", "orders_pkey", 10009, true, true, true, "btree", false, false, 1, "id", false, 1, int64(1), int64(1978), int64(0), int64(0))
+	mock.ExpectQuery(`pg_index[\s\S]*indisunique`).WillReturnRows(idxRows)
+
 	got, err := LoadPostgresSchemasBatched(context.Background(), db, []string{"app", "billing"})
 	if err != nil {
 		t.Fatal(err)
@@ -407,6 +443,12 @@ func TestLoadPostgresSchemasBatched(t *testing.T) {
 	}
 	if len(got[1].ForeignKeys) != 1 || got[1].ForeignKeys[0].ConstraintName != "fk_inv_order" {
 		t.Fatalf("invoices: unexpected FKs: %+v", got[1].ForeignKeys)
+	}
+	if len(got[0].UniqueIndexes) != 1 || got[0].UniqueIndexes[0].IndexName != "orders_pkey" {
+		t.Fatalf("orders: unexpected unique indexes: %+v", got[0].UniqueIndexes)
+	}
+	if len(got[1].UniqueIndexes) != 0 {
+		t.Fatalf("invoices: expected no unique indexes, got %+v", got[1].UniqueIndexes)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
