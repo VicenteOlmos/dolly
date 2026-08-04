@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -395,7 +396,7 @@ func TestIntegrationDumpMetadataMatchesSchema(t *testing.T) {
 	}
 }
 
-func TestIntegrationDumpChunkTableNoPKFailsBeforeOutput(t *testing.T) {
+func TestIntegrationDumpChunkTableNoSafeKeyFallsBackToNormalStream(t *testing.T) {
 	conn := openIntegrationDB(t)
 	ctx := context.Background()
 	tableName := fmt.Sprintf("chunk_nopk_%d", time.Now().UnixNano())
@@ -410,16 +411,71 @@ func TestIntegrationDumpChunkTableNoPKFailsBeforeOutput(t *testing.T) {
 		_, _ = conn.ExecContext(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
 	})
 
+	const noteA = "fallback-row-a"
+	const noteB = "fallback-row-b"
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+		`INSERT INTO %s (note) VALUES ($1), ($2)`, tableName,
+	), noteA, noteB); err != nil {
+		t.Fatal(err)
+	}
+
 	dir := t.TempDir()
-	err = Dump(ctx, conn, dir, WithChunkTables([]QualifiedTable{{Schema: "public", Name: tableName}}))
-	if err == nil || !IsChunkPolicyError(err) {
-		t.Fatalf("error = %v, want chunk policy failure", err)
+	if err := Dump(ctx, conn, dir,
+		WithoutSequences(),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: tableName}}),
+		WithProvenance(Provenance{}),
+	); err != nil {
+		t.Fatalf("dump failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no primary key") {
-		t.Fatalf("error = %v", err)
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
-		t.Fatal("metadata.json should not exist when chunk preflight fails")
+	qualified := "public." + tableName
+	if meta.Provenance == nil || meta.Provenance.ChunkTables == nil {
+		t.Fatal("expected chunk_tables provenance")
+	}
+	chunkProv := meta.Provenance.ChunkTables
+	if len(chunkProv.Chunked) != 0 {
+		t.Fatalf("chunked = %v, want none for no-safe-key table", chunkProv.Chunked)
+	}
+	if len(chunkProv.Fallback) != 1 || chunkProv.Fallback[0] != qualified {
+		t.Fatalf("fallback = %v, want [%s]", chunkProv.Fallback, qualified)
+	}
+
+	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, tableName)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("row count = %d, want 2", len(lines))
+	}
+	seen := make(map[string]struct{})
+	for _, line := range lines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		note, ok := row["note"].(string)
+		if !ok {
+			t.Fatalf("note type %T", row["note"])
+		}
+		seen[note] = struct{}{}
+	}
+	for _, want := range []string{noteA, noteB} {
+		if _, ok := seen[want]; !ok {
+			t.Fatalf("missing row note %q, got %v", want, seen)
+		}
+	}
+
+	chunkTempPath := tableDataPath(dir, metadataTable(t, meta, tableName)) + ".tmp"
+	_, statErr := os.Stat(chunkTempPath)
+	if statErr == nil {
+		t.Fatalf("unexpected chunk temp file for normal-stream fallback: %s", chunkTempPath)
+	}
+	if !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stat chunk temp %q: %v", chunkTempPath, statErr)
 	}
 }
 
