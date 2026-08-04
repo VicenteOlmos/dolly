@@ -526,7 +526,7 @@ func TestIntegrationDumpChunkTableResumeNoDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	table := metadataTable(t, refMeta, "tbl_a")
-	if err := saveSlowCheckpoint(checkpointPath(dir, "tbl_a"), table, []string{"id"}, []any{int64(lastID)}); err != nil {
+	if err := saveSlowCheckpoint(checkpointPath(dir, "tbl_a"), table, SelectKeyDescriptor(table), []any{int64(lastID)}); err != nil {
 		t.Fatal(err)
 	}
 

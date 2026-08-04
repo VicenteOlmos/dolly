@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1059,8 +1060,18 @@ func TestStreamTableSlowBigintCheckpointPrecision(t *testing.T) {
 	if err := os.WriteFile(ckptPath, ckptData, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(ckptData), fmt.Sprintf(`"last_pk":[%d]`, bigID)) {
-		t.Fatalf("checkpoint did not store exact bigint: %s", string(ckptData))
+	savePath := filepath.Join(t.TempDir(), "bigids.ckpt.json")
+	saveDesc := SelectKeyDescriptor(table)
+	if err := saveSlowCheckpoint(savePath, table, saveDesc, []any{bigID}); err != nil {
+		t.Fatal(err)
+	}
+	saveData, _ := os.ReadFile(savePath)
+	wantKey := fmt.Sprintf(`"last_key":[%d]`, bigID)
+	if !strings.Contains(string(saveData), wantKey) {
+		t.Fatalf("generalized save missing last_key: %s", saveData)
+	}
+	if strings.Contains(string(saveData), `"last_pk"`) {
+		t.Fatalf("generalized save must not use last_pk: %s", saveData)
 	}
 
 	sqlDB2, mock2, err := sqlmock.New()
@@ -1480,4 +1491,173 @@ func TestStreamTableSlowRetryNoRetryOnCanceled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
+}
+
+func pkUsersTable() db.Table {
+	return db.Table{Schema: "public", Name: "users", Columns: []db.Column{
+		{Name: "id", DataType: "integer", PrimaryKey: true}, {Name: "name", DataType: "text"},
+	}}
+}
+
+func TestCheckpointFormatDiscrimination(t *testing.T) {
+	table := pkUsersTable()
+	desc := SelectKeyDescriptor(table)
+	gen := func(lastKey []any) slowCheckpoint {
+		return slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: lastKey}
+	}
+
+	validateCases := []struct {
+		cp      slowCheckpoint
+		wantErr string
+	}{
+		{gen([]any{json.Number("1")}), ""},
+		{slowCheckpoint{PKColumns: []string{"id"}, LastPK: []any{json.Number("1")}}, ""},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: "deadbeef", LastKey: []any{json.Number("1")}}, "fingerprint mismatch"},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"other"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "key columns mismatch"},
+		{slowCheckpoint{PKColumns: []string{"other"}, LastPK: []any{json.Number("1")}}, "pk columns mismatch"},
+		{slowCheckpoint{PKColumn: "id"}, ""},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, LastKey: []any{json.Number("1")}}, "fingerprint required"},
+		{slowCheckpoint{KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "strategy required"},
+		{gen([]any{json.Number("1")}).withLegacy(), "mixes generalized and legacy"},
+		{slowCheckpoint{PKColumn: "id", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "mixes legacy single-pk"},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id", "code"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "key arity mismatch"},
+		{slowCheckpoint{Strategy: "bogus", KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "unknown strategy"},
+	}
+	for i, tt := range validateCases {
+		name := tt.wantErr
+		if name == "" {
+			name = fmt.Sprintf("ok%d", i)
+		}
+		t.Run(name, func(t *testing.T) {
+			err := validateCheckpointDescriptor(&tt.cp, desc)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	path := checkpointPath(dir, "users")
+	if err := saveSlowCheckpoint(path, table, desc, []any{int64(42)}); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := loadSlowCheckpoint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.Strategy != KeyStrategyPrimaryKey || !slices.Equal(cp.KeyColumns, []string{"id"}) ||
+		cp.KeyFingerprint != desc.Fingerprint || len(cp.LastKey) != 1 {
+		t.Fatalf("generalized save: strategy=%q cols=%v fp=%q last=%v", cp.Strategy, cp.KeyColumns, cp.KeyFingerprint, cp.LastKey)
+	}
+	if n, ok := cp.LastKey[0].(json.Number); !ok || n.String() != "42" {
+		t.Fatalf("generalized save LastKey = %v", cp.LastKey)
+	}
+	saveData, _ := os.ReadFile(path)
+	if strings.Contains(string(saveData), `"last_pk"`) {
+		t.Fatalf("generalized save must not use last_pk: %s", saveData)
+	}
+
+	uidesc := KeyDescriptor{Strategy: KeyStrategyUniqueIndex, Columns: []KeyColumn{{Name: "code"}}, Fingerprint: "abc"}
+	if err := validateCheckpointDescriptor(&slowCheckpoint{PKColumns: []string{"id"}, LastPK: []any{json.Number("1")}}, uidesc); err == nil ||
+		!strings.Contains(err.Error(), "legacy checkpoint incompatible") {
+		t.Fatalf("legacy vs non-PK descriptor: err=%v", err)
+	}
+
+	legacy, err := loadSlowCheckpointFromData([]byte(`{"table":"users","pk_columns":["id"],"last_pk":[99]}`))
+	if err != nil || !slices.Equal(legacy.PKColumns, []string{"id"}) || len(legacy.LastPK) != 1 {
+		t.Fatalf("legacy load: cp=%+v err=%v", legacy, err)
+	}
+
+	tmpPath := filepath.Join(dir, "users.ndjson.tmp")
+	if err := os.WriteFile(tmpPath, []byte(`{"id":7,"name":"seven"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSlowCheckpointTemp(tmpPath, &slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, LastKey: []any{json.Number("7")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	resumeDir := t.TempDir()
+	resumeTmp := filepath.Join(resumeDir, "users.ndjson.tmp")
+	if err := os.WriteFile(resumeTmp, []byte(`{"id":10,"name":"ten"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumeCkpt, _ := json.Marshal(gen([]any{json.Number("10")}))
+	if err := os.WriteFile(checkpointPath(resumeDir, "users"), resumeCkpt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery("SELECT .* FROM .* WHERE .* > .* ORDER BY .* LIMIT 1000").WithArgs(int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(11, "eleven"))
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, resumeDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(resumeDir, "users.ndjson"))
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(got) != 2 || got[1] != `{"id":11,"name":"eleven"}` {
+		t.Fatalf("resume output = %s", data)
+	}
+
+	mismatchDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mismatchDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject := func(dir string, cp slowCheckpoint, want string) {
+		t.Helper()
+		b, _ := json.Marshal(cp)
+		if err := os.WriteFile(checkpointPath(dir, "users"), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("stream %q: err=%v", want, err)
+		}
+	}
+	streamReject(mismatchDir, slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: "mismatch", LastKey: []any{json.Number("1")}}, "fingerprint mismatch")
+	arityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(arityDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject(arityDir, slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1"), json.Number("2")}}, "key arity mismatch")
+	colDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(colDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject(colDir, slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"other"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "key columns mismatch")
+	mixDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mixDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject(mixDir, slowCheckpoint{Table: "users", PKColumn: "id", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "mixes legacy single-pk")
+}
+
+func (cp slowCheckpoint) withLegacy() slowCheckpoint {
+	cp.PKColumns = []string{"id"}
+	cp.LastPK = []any{json.Number("1")}
+	return cp
+}
+
+func loadSlowCheckpointFromData(data []byte) (*slowCheckpoint, error) {
+	dir, err := os.MkdirTemp("", "ckpt-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "test.ckpt.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return nil, err
+	}
+	return loadSlowCheckpoint(path)
 }
