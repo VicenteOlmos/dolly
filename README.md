@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh 
 Pin a release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.4 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.5 sh
 ```
 
 Default install path: `/usr/local/bin`. Set `DOLLY_INSTALL_DIR` to install elsewhere.
@@ -46,7 +46,7 @@ irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 Pin a release:
 
 ```powershell
-$env:DOLLY_VERSION="0.3.4"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.3.5"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
 Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it to your user `PATH`.
@@ -56,7 +56,7 @@ Default install path: `%LOCALAPPDATA%\Programs\dolly\bin`; the installer adds it
 | Topic | Detail |
 |---|---|
 | Latest release | Installers default to the latest [GitHub Release](https://github.com/VicenteOlmos/dolly/releases). |
-| Pin a version | Set `DOLLY_VERSION` (for example `0.3.4`) in the install command above. |
+| Pin a version | Set `DOLLY_VERSION` (for example `0.3.5`) in the install command above. |
 | SemVer tags | Release tags follow `vX.Y.Z`. Only the **latest release** receives security fixes. |
 | Immutable assets | Tags and release archives are never overwritten — use a new patch tag for fixes. |
 | Checksums | Each release ships `checksums.txt`; installers verify archives before install. |
@@ -134,8 +134,8 @@ Dolly does not inspect your database size or network conditions, and it does not
 |---|---|---|---|
 | <!-- situation:safe-default --> Unsure / want the safest path | `dolly dump --dsn "$DB" --output ./dolly_dump` → `dolly restore --dsn "$TARGET_DB" --input ./dolly_dump/1` | One worker by default; restore stays transactional and atomic | Slower than parallel modes on large databases |
 | <!-- situation:small-database --> Small database, straightforward copy | `dolly dump --dsn "$DB" --output ./dolly_dump` | Full dump with minimal flags | Gets slower as data grows |
-| <!-- situation:large-stable --> Very large named tables where resumability matters more than speed | `dolly dump ... --chunk-table public.large_table --workers 1` | Keyset chunking is resumable on a serial, non-snapshot path | Primary key required for each chunked table |
-| <!-- situation:large-unreliable --> Large data, slow or unreliable link | `dolly dump ... --slow-connection --workers 1` | Checkpointed chunks tolerate intermittent failures | Every selected table needs a PK; non-transactional; incompatible with subset and parallel dump |
+| <!-- situation:large-stable --> Very large named tables where resumability matters more than speed | `dolly dump ... --chunk-table public.large_table --workers 1` | PK or eligible unique-key plans use resumable keyset chunks | Tables without a safe key use a warned, non-resumable normal stream |
+| <!-- situation:large-unreliable --> Large data, slow or unreliable link | `dolly dump ... --slow-connection --workers 1` | Safe per-table keys get checkpoints; no-safe-key tables still complete | Fallback tables are not resumable; mode is non-transactional and incompatible with subset and parallel dump |
 | <!-- situation:maximum-dump-speed --> Large database, stable connection, maximum dump throughput | `dolly dump ... --workers "$WORKERS"` | Shared consistent snapshot across parallel table workers | Tune empirically within 1–16; needs `max_open_conns >= workers+1`; excludes slow/chunk/subset/`--no-transaction` |
 | <!-- situation:maximum-restore-speed --> Maximum restore throughput | **ADVANCED — NON-ATOMIC** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Parallel table restore after acknowledging partial-state risk | No atomic rollback; `on-conflict` must be `error`; cannot use `--replace`, `--trust-schema-sql`, skip, or upsert |
 | <!-- situation:representative-sample --> Dev/test sample, not a full copy | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Recent-root selection plus FK closure | Not statistically representative; closure may exceed the target percent |
@@ -153,7 +153,7 @@ See `dolly dump --help`, `dolly restore --help`, and `dolly clone --help` for fl
 | If you need… | Use | Do not use when |
 |---|---|---|
 | An exact table subset | `--include-table` / `--exclude-table` (or selector files) | You need FK-closure percent sampling (`--percent` / `--seed-file`) |
-| Resumable export of large named tables | `--chunk-table` with `workers=1` | The table has no primary key, or you need parallel dump workers |
+| Resumable export of large named tables | `--chunk-table` with `workers=1` | The table lacks a safe PK/unique key and you require resume, or you need parallel dump workers |
 | A consistent parallel export | `--workers N` (shared snapshot) | `--no-transaction`, chunk/slow modes, or subset policies |
 | Faster acknowledged restore | `--workers N` with `--no-transaction --yes --ack-partial-state` | You need atomic rollback, `--replace`, skip/upsert, or `--trust-schema-sql` |
 | Atomic rollback on restore failure | Default serial restore (`workers=1`) | You need FK-level concurrency |
@@ -234,7 +234,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump \
 
 **Result/artifacts** numbered `{output}/{n}/` with per-table NDJSON, `metadata.json` chunk provenance, transient checkpoint files under the run directory during export, and final metadata published only after completion.
 
-**Constraint/warning** chunk tables require a primary key; unmatched chunk selectors fail before output; PK-less tables fail during planning. Resume requires the same source, selection, and chunk policy. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` chunks every selected table with the same resumable behavior.
+**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key completes through a qualified, non-resumable normal-stream fallback and creates no checkpoint. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
 
 ### Shared-snapshot parallel dump
 

@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh 
 Fijar una versión:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.4 sh
+curl -fsSL https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.sh | DOLLY_VERSION=0.3.5 sh
 ```
 
 Ruta de instalación predeterminada: `/usr/local/bin`. Defina `DOLLY_INSTALL_DIR` para instalar en otra ubicación.
@@ -46,7 +46,7 @@ irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 Fijar una versión:
 
 ```powershell
-$env:DOLLY_VERSION="0.3.4"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
+$env:DOLLY_VERSION="0.3.5"; irm https://raw.githubusercontent.com/VicenteOlmos/dolly/main/install.ps1 | iex
 ```
 
 Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el instalador la agrega al `PATH` del usuario.
@@ -56,7 +56,7 @@ Ruta de instalación predeterminada: `%LOCALAPPDATA%\Programs\dolly\bin`; el ins
 | Tema | Detalle |
 |---|---|
 | Última versión | Los instaladores usan por defecto la última [GitHub Release](https://github.com/VicenteOlmos/dolly/releases). |
-| Fijar una versión | Defina `DOLLY_VERSION` (por ejemplo `0.3.4`) en el comando de instalación anterior. |
+| Fijar una versión | Defina `DOLLY_VERSION` (por ejemplo `0.3.5`) en el comando de instalación anterior. |
 | Etiquetas SemVer | Las etiquetas de versión siguen `vX.Y.Z`. Solo la **última versión** recibe correcciones de seguridad. |
 | Activos inmutables | Las etiquetas y los archivos de versión no se sobrescriben; use una nueva etiqueta de parche para correcciones. |
 | Sumas de verificación | Cada versión incluye `checksums.txt`; los instaladores verifican los archivos antes de instalar. |
@@ -133,8 +133,8 @@ Dolly no inspecciona el tamaño de la base de datos ni las condiciones de red, n
 |---|---|---|---|
 | <!-- situation:safe-default --> Dudas / camino más seguro | `dolly dump --dsn "$DB" --output ./dolly_dump` → `dolly restore --dsn "$TARGET_DB" --input ./dolly_dump/1` | Un worker por defecto; restore transaccional y atómico | Más lento que modos paralelos en bases grandes |
 | <!-- situation:small-database --> Base pequeña, copia directa | `dolly dump --dsn "$DB" --output ./dolly_dump` | Volcado completo con pocos flags | Se vuelve lento al crecer los datos |
-| <!-- situation:large-stable --> Tablas muy grandes donde la reanudabilidad importa más que la velocidad | `dolly dump ... --chunk-table public.large_table --workers 1` | Procesamiento por clave en fragmentos; reanudable, serial y sin snapshot compartido | Requiere clave primaria en cada tabla fragmentada |
-| <!-- situation:large-unreliable --> Datos grandes, enlace lento o inestable | `dolly dump ... --slow-connection --workers 1` | Fragmentos con puntos de control toleran fallos intermitentes | Cada tabla seleccionada necesita PK; no transaccional; incompatible con subconjunto y volcado paralelo |
+| <!-- situation:large-stable --> Tablas muy grandes donde la reanudabilidad importa más que la velocidad | `dolly dump ... --chunk-table public.large_table --workers 1` | Los planes con PK o clave única apta usan fragmentos reanudables | Las tablas sin clave segura usan flujo normal con advertencia, sin reanudación |
+| <!-- situation:large-unreliable --> Datos grandes, enlace lento o inestable | `dolly dump ... --slow-connection --workers 1` | Las claves seguras obtienen puntos de control; las demás tablas igualmente se completan | El fallback no es reanudable; modo no transaccional e incompatible con subconjunto y volcado paralelo |
 | <!-- situation:maximum-dump-speed --> Base grande, conexión estable, máximo rendimiento de volcado | `dolly dump ... --workers "$WORKERS"` | Snapshot consistente compartido entre workers de tabla | Elija entre 1 y 16 según pruebas; requiere `max_open_conns >= workers+1`; excluye slow/chunk/subconjunto/`--no-transaction` |
 | <!-- situation:maximum-restore-speed --> Máximo rendimiento de restore | **AVANZADO — NO ATÓMICO** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Restauración paralela de tablas tras reconocer riesgo de estado parcial | Sin reversión atómica; `on-conflict` debe ser `error`; no usar `--replace`, `--trust-schema-sql`, skip ni upsert |
 | <!-- situation:representative-sample --> Muestra para desarrollo/pruebas, no copia completa | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Raíces recientes más cierre de claves foráneas | No es representación estadística; el cierre puede superar el porcentaje |
@@ -142,6 +142,8 @@ Dolly no inspecciona el tamaño de la base de datos ni las condiciones de red, n
 | <!-- situation:cross-server-large-clone --> Copia grande entre servidores de una sola base | `dolly clone --strategy logical-stream` | Flujo lógico para copias remotas grandes | Sin sanitizar; no es copia física del clúster |
 
 `$WORKERS`, `$PERCENT` y `$ROW_CAP` son valores elegidos por el operador; Dolly no los establece automáticamente.
+
+En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, usa flujo normal no reanudable, emite una advertencia calificada por tabla y no crea checkpoint. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
 
 Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para conocer los flags. Más detalle en [Flujos de trabajo y límites habituales](#flujos-de-trabajo-y-límites-habituales) y [Estrategias de clonación](#estrategias-de-clonación).
 

@@ -4,6 +4,21 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+## [0.3.5](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.5) — 2026-08-05
+
+### Resilient dumps
+
+- **No-PK resilient strategies** — Chunk and slow-connection dumps choose the existing primary key, otherwise an eligible `UNIQUE NOT NULL` B-tree key, otherwise an explicit warned normal-stream fallback without per-table resume.
+- **Resume identity** — Checkpoints and metadata persist deterministic strategy, ordered key columns, and fingerprints; changed or malformed plans fail closed without modifying interrupted artifacts.
+
+### Clone safety
+
+- **Schema-scoped preflight** — Permission caches, source/target checks, and logical-stream schema replay honor the effective selected schema scope.
+
+### Verification
+
+- PostgreSQL 16 coverage for unique-key resume, changed-key rejection, mixed PK/unique/fallback dumps, deterministic provenance, and artifact cleanup.
+
 ## [0.3.4](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.4) — 2026-08-04
 
 ### Runtime safety
