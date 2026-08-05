@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +35,10 @@ var (
 	dumpLoadConfig    = config.LoadConfig
 	dumpCaptureSchema = captureSchema // test seam: replace in tests
 )
+
+// ErrResumePlanMismatch is returned when persisted strategy provenance disagrees
+// with the canonical dump plan for a resumable candidate directory.
+var ErrResumePlanMismatch = errors.New("resume plan mismatch")
 
 type dumpFlags struct {
 	DSN               string
@@ -393,6 +398,93 @@ func provenanceMatchesResumable(meta *dump.Provenance, exp resumableDumpExpectat
 	return dump.SelectionResumeProvenanceMatches(exp.selectionFingerprint, meta.TableSelection)
 }
 
+func persistedStrategiesValid(records []dump.TableStrategyRecord) bool {
+	if len(records) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		if rec.Table == "" {
+			return false
+		}
+		if _, ok := seen[rec.Table]; ok {
+			return false
+		}
+		seen[rec.Table] = struct{}{}
+		switch rec.Strategy {
+		case dump.KeyStrategyPrimaryKey, dump.KeyStrategyUniqueIndex:
+			if !rec.Resumable || len(rec.KeyColumns) == 0 || rec.Fingerprint == "" {
+				return false
+			}
+			for _, col := range rec.KeyColumns {
+				if col == "" {
+					return false
+				}
+			}
+		case dump.KeyStrategyNormalStream:
+			if rec.Resumable || len(rec.KeyColumns) > 0 || rec.Fingerprint != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func strategyRecordsEqual(a, b []dump.TableStrategyRecord) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Table != b[i].Table ||
+			a[i].Strategy != b[i].Strategy ||
+			a[i].Resumable != b[i].Resumable ||
+			a[i].Fingerprint != b[i].Fingerprint {
+			return false
+		}
+		if !slices.Equal(a[i].KeyColumns, b[i].KeyColumns) {
+			return false
+		}
+	}
+	return true
+}
+
+func resumePlanValidator(persisted []dump.TableStrategyRecord) dump.PlanValidator {
+	want := append([]dump.TableStrategyRecord(nil), persisted...)
+	return func(plan dump.PreparedDumpPlan) error {
+		if !strategyRecordsEqual(want, plan.Strategies) {
+			return ErrResumePlanMismatch
+		}
+		return nil
+	}
+}
+
+func appendDumpRuntimeOpts(base []dump.Option, flags dumpFlags, seq int, baseDir, dsn string, schemas []string, sanitized bool, persisted []dump.TableStrategyRecord, validateResume bool) []dump.Option {
+	runOpts := append([]dump.Option(nil), base...)
+	runOpts = append(runOpts, dump.WithSchemas(schemas))
+	runOpts = append(runOpts, dump.SanitizationOptions(sanitized)...)
+	sanitizationEnabled := sanitized
+	runOpts = append(runOpts, dump.WithProvenance(dump.Provenance{
+		Seq:             seq,
+		BaseDir:         baseDir,
+		SourceDatabase:  databaseFromDSN(dsn),
+		SourceSignature: sourceSignatureFromDSN(dsn),
+		Schemas:         append([]string(nil), schemas...),
+		Sanitized:       &sanitizationEnabled,
+	}))
+	runOpts = append(runOpts, dump.WithProgress(func(ev dump.ProgressEvent) {
+		if flags.JSON {
+			return
+		}
+		_ = Render(os.Stderr, ev, isStderrTerminal(os.Stderr.Fd()))
+	}))
+	if validateResume && len(persisted) > 0 {
+		runOpts = append(runOpts, dump.WithPlanValidator(resumePlanValidator(persisted)))
+	}
+	return runOpts
+}
+
 func resolveChunkPolicy(flags dumpFlags, cfg *config.Config) (*dump.ChunkPolicy, []dump.IgnoredFileLine, error) {
 	direct := cfg.Dump.ChunkTables
 	files := cfg.Dump.ChunkTableFiles
@@ -517,14 +609,27 @@ func runDump(args []string) (err error) {
 	var outputDir string
 	var seq int
 	freshAllocated := false
+	var persistedStrategies []dump.TableStrategyRecord
+	resumeCandidate := false
 	resumeExpect, err := buildResumableDumpExpectation(flags, cfg, dsn, schemas, cfg.Sanitization.Enabled)
 	if err != nil {
 		return err
 	}
 	if effectiveResilientDumpMode(flags, cfg) {
 		if resumable, resumableSeq, ok := findResumableDumpDir(out, resumeExpect); ok {
-			outputDir = resumable
-			seq = resumableSeq
+			meta, readErr := readMetadataTmp(resumable)
+			if readErr == nil && meta.Provenance != nil && persistedStrategiesValid(meta.Provenance.Strategies) {
+				outputDir = resumable
+				seq = resumableSeq
+				persistedStrategies = append([]dump.TableStrategyRecord(nil), meta.Provenance.Strategies...)
+				resumeCandidate = true
+			} else {
+				outputDir, seq, err = dumphistory.AllocateDir(out, store)
+				if err != nil {
+					return fmt.Errorf("allocate dump directory: %w", err)
+				}
+				freshAllocated = true
+			}
 		} else {
 			outputDir, seq, err = dumphistory.AllocateDir(out, store)
 			if err != nil {
@@ -540,32 +645,29 @@ func runDump(args []string) (err error) {
 		freshAllocated = true
 	}
 
-	opts = append(opts, dump.WithSchemas(schemas))
-	opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
-	sanitizationEnabled := cfg.Sanitization.Enabled
-	opts = append(opts, dump.WithProvenance(dump.Provenance{
-		Seq:             seq,
-		BaseDir:         out,
-		SourceDatabase:  databaseFromDSN(dsn),
-		SourceSignature: sourceSignatureFromDSN(dsn),
-		Schemas:         append([]string(nil), schemas...),
-		Sanitized:       &sanitizationEnabled,
-	}))
-
-	opts = append(opts, dump.WithProgress(func(ev dump.ProgressEvent) {
-		if flags.JSON {
-			return
+	runOpts := appendDumpRuntimeOpts(opts, flags, seq, out, dsn, schemas, cfg.Sanitization.Enabled, persistedStrategies, resumeCandidate)
+	if err := dumpRun(ctx, db, outputDir, runOpts...); err != nil {
+		if resumeCandidate && errors.Is(err, ErrResumePlanMismatch) {
+			outputDir, seq, err = dumphistory.AllocateDir(out, store)
+			if err != nil {
+				return fmt.Errorf("allocate dump directory: %w", err)
+			}
+			freshAllocated = true
+			runOpts = appendDumpRuntimeOpts(opts, flags, seq, out, dsn, schemas, cfg.Sanitization.Enabled, nil, false)
+			if err = dumpRun(ctx, db, outputDir, runOpts...); err != nil {
+				if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
+					_ = removeFreshEmptyDumpDir(outputDir)
+				}
+				return fmt.Errorf("dump: %w", err)
+			}
+		} else {
+			if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
+				_ = removeFreshEmptyDumpDir(outputDir)
+			}
+			return fmt.Errorf("dump: %w", err)
 		}
-		_ = Render(os.Stderr, ev, isStderrTerminal(os.Stderr.Fd()))
-	}))
-
-	if err := dumpRun(ctx, db, outputDir, opts...); err != nil {
-		if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
-			_ = removeFreshEmptyDumpDir(outputDir)
-		}
-		return fmt.Errorf("dump: %w", err)
 	}
-	fmt.Fprintln(os.Stderr, "dump complete")
+	fmt.Fprintf(os.Stderr, "dump complete: %s (seq %d)\n", outputDir, seq)
 
 	if err := dumpCaptureSchema(ctx, dsn, outputDir, schemas); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: schema capture: %v\n", err)

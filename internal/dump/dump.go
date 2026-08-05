@@ -287,6 +287,28 @@ func InspectTableSelection(opts ...Option) *SelectionPolicy {
 	return c.selection
 }
 
+// InspectPlanValidator returns the plan validator captured from opts, or nil.
+func InspectPlanValidator(opts ...Option) PlanValidator {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.planValidator
+}
+
+func InspectProvenance(opts ...Option) *Provenance {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	if c.provenance == nil {
+		return nil
+	}
+	cp := *c.provenance
+	cp.Schemas = append([]string(nil), c.provenance.Schemas...)
+	return &cp
+}
+
 // WithoutSequences skips sequence state capture during Dump.
 // Use in tests where pg_sequences cannot be queried (mock databases).
 func WithoutSequences() Option {
