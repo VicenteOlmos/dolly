@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1317,4 +1318,349 @@ func TestDumpCaptureSequencesScopeErrorFailsClosed(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func captureStderr(fn func()) string {
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	os.Stderr = w
+	outC := make(chan string)
+	go func() {
+		var buf strings.Builder
+		_, _ = io.Copy(&buf, r)
+		outC <- buf.String()
+	}()
+	fn()
+	w.Close()
+	os.Stderr = old
+	return <-outC
+}
+
+func eventsCodeUniqueIndexRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"nspname", "relname", "index_name", "index_oid", "indisprimary",
+		"indisvalid", "indisready", "amname", "has_predicate",
+		"is_expression", "indnkeyatts", "attname", "is_nullable", "pos",
+		"attnum", "opclass_oid", "collation_oid", "optval",
+	}).AddRow("public", "events", "events_code_key", 20, false, true, true, "btree", false, false, 1, "code", false, 1, int64(1), int64(1978), int64(0), int64(0))
+}
+
+func expectEventsCodeUniqueIndex(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`pg_index[\s\S]*indisunique`).WillReturnRows(eventsCodeUniqueIndexRows())
+}
+
+func expectMixedSlowSchemaMock(mock sqlmock.Sqlmock) {
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "events", int64(1)).
+		AddRow("public", "logs", int64(1)).
+		AddRow("public", "notes", int64(1)).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "events", "code", "text", "NO", 1, false).
+		AddRow("public", "logs", "note", "text", "YES", 1, false).
+		AddRow("public", "notes", "body", "text", "YES", 1, false).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	expectEventsCodeUniqueIndex(mock)
+}
+
+func assertFallbackWarningsInOrder(t *testing.T, stderr string, qualified ...string) {
+	t.Helper()
+	var want []string
+	for _, q := range qualified {
+		want = append(want, "warning: table \""+q+"\" has no safe key; using non-resumable normal streaming")
+	}
+	pos := 0
+	for _, line := range want {
+		idx := strings.Index(stderr[pos:], line)
+		if idx < 0 {
+			t.Fatalf("stderr missing warning %q in order:\n%s", line, stderr)
+		}
+		if strings.Count(stderr, line) != 1 {
+			t.Fatalf("stderr should contain %q exactly once:\n%s", line, stderr)
+		}
+		pos += idx + len(line)
+	}
+}
+
+func TestDumpSlowMixedDispatchAndWarnings(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	expectMixedSlowSchemaMock(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	stderr := captureStderr(func() {
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFallbackWarningsInOrder(t, stderr, "public.logs", "public.notes")
+	for _, name := range []string{"logs", "notes", "events"} {
+		if _, err := os.Stat(slowCheckpointPath(dir, db.Table{Schema: "public", Name: name})); err == nil {
+			t.Fatalf("%s should not leave checkpoint", name)
+		}
+	}
+}
+
+func TestDumpChunkUniqueAndPKDispatch(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "events", int64(1)).
+		AddRow("public", "orders", int64(1)).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "events", "code", "text", "NO", 1, false).
+		AddRow("public", "orders", "id", "integer", "NO", 1, true).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	expectEventsCodeUniqueIndex(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
+
+	stderr := captureStderr(func() {
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}),
+			WithChunkTables([]QualifiedTable{{Schema: "public", Name: "events"}}))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stderr, "no safe key") {
+		t.Fatalf("chunk-only unrequested tables should not warn: %q", stderr)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil || meta.Provenance.ChunkTables == nil {
+		t.Fatal("expected chunk_tables provenance")
+	}
+	if len(meta.Provenance.ChunkTables.Requested) != 1 {
+		t.Fatalf("requested = %v", meta.Provenance.ChunkTables.Requested)
+	}
+}
+
+func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	expectMixedSlowSchemaMock(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	stderr := captureStderr(func() {
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}),
+			WithChunkTables([]QualifiedTable{{Schema: "public", Name: "users"}}))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	assertFallbackWarningsInOrder(t, stderr, "public.logs", "public.notes")
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil || meta.Provenance.ChunkTables == nil || len(meta.Provenance.ChunkTables.Requested) != 1 ||
+		meta.Provenance.ChunkTables.Requested[0].Normalized != "public.users" {
+		t.Fatalf("chunk provenance = %+v", meta.Provenance)
+	}
+}
+
+func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "logs", int64(1)).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "logs", "note", "text", "YES", 1, false).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	stderr := captureStderr(func() {
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+			WithChunkTables([]QualifiedTable{{Schema: "public", Name: "logs"}}))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFallbackWarningsInOrder(t, stderr, "public.logs")
+	if _, err := os.Stat(slowCheckpointPath(dir, db.Table{Schema: "public", Name: "logs"})); err == nil {
+		t.Fatal("fallback chunk table should not create checkpoint")
+	}
+}
+
+func TestDumpLegacyArtifactGuardBehavior(t *testing.T) {
+	t.Run("resumable_rejects_before_stream", func(t *testing.T) {
+		sqlDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sqlDB.Close()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "events.ckpt.json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+			AddRow("public", "events", int64(1)).
+			AddRow("tenant", "events", int64(1))
+		mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1, \$2\)`).
+			WithArgs("public", "tenant").
+			WillReturnRows(tablesRows)
+		colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+			AddRow("public", "events", "id", "integer", "NO", 1, true).
+			AddRow("tenant", "events", "id", "integer", "NO", 1, true)
+		mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public", "tenant").WillReturnRows(colsRows)
+		fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public", "tenant").WillReturnRows(fksRows)
+		emptyUniqueIndexMock(mock)
+
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(),
+			WithSchemas([]string{"public", "tenant"}))
+		if err == nil || !strings.Contains(err.Error(), "ambiguous legacy slow artifact") {
+			t.Fatalf("err = %v, want ambiguous legacy rejection before streaming", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("fallback_chunk_skips_guard", func(t *testing.T) {
+		sqlDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sqlDB.Close()
+
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "events.ckpt.json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+			AddRow("public", "events", int64(1)).
+			AddRow("public", "logs", int64(1)).
+			AddRow("tenant", "events", int64(1))
+		mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1, \$2\)`).
+			WithArgs("public", "tenant").
+			WillReturnRows(tablesRows)
+		colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+			AddRow("public", "events", "id", "integer", "NO", 1, true).
+			AddRow("public", "logs", "note", "text", "YES", 1, false).
+			AddRow("tenant", "events", "id", "integer", "NO", 1, true)
+		mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public", "tenant").WillReturnRows(colsRows)
+		fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public", "tenant").WillReturnRows(fksRows)
+		emptyUniqueIndexMock(mock)
+
+		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
+
+		stderr := captureStderr(func() {
+			err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+				WithSchemas([]string{"public", "tenant"}),
+				WithChunkTables([]QualifiedTable{{Schema: "public", Name: "logs"}}))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+		assertFallbackWarningsInOrder(t, stderr, "public.logs")
+	})
 }

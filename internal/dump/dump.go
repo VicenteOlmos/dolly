@@ -110,7 +110,8 @@ func WithoutTransaction() Option {
 
 // WithSlowConnection enables chunked keyset-paginated streaming for
 // slow or unstable connections. Forces WithoutTransaction internally.
-// Tables must have at least one primary-key column.
+// Each table uses its primary key, an eligible unique index, or normal
+// streaming with a non-resumable warning when no safe key exists.
 func WithSlowConnection() Option {
 	return func(c *config) {
 		c.withoutTransaction = true // ponytail: force no-tx; slow mode and global snapshot are incompatible
@@ -370,7 +371,6 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if err != nil {
 		return err
 	}
-	chunkSet := executableChunkSet(chunkPlans)
 	if cfg.provenance != nil && len(chunkProv.Requested) > 0 {
 		cfg.provenance.ChunkTables = &chunkProv
 	}
@@ -384,16 +384,10 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	}
 
 	sorted := SortTables(tables)
-	if cfg.slowConnection || len(chunkSet) > 0 {
+	dispatchPlans := buildDispatchPlans(&cfg, sorted, chunkPlans)
+	if hasResumableDispatch(dispatchPlans) {
 		if err := rejectAmbiguousLegacySlowArtifacts(outputDir, sorted); err != nil {
 			return err
-		}
-	}
-	if cfg.slowConnection {
-		for _, table := range sorted {
-			if _, err := primaryKeysColumns(table); err != nil {
-				return fmt.Errorf("slow-connection mode: %w", err)
-			}
 		}
 	}
 	assignDataFiles(sorted)
@@ -429,9 +423,14 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Elapsed: time.Since(startedAt),
 		})
 		var streamErr error
-		if usesResilientStreaming(&cfg, chunkSet, table) {
+		plan, hasPlan := dispatchPlans[tableKey(table.Schema, table.Name)]
+		if hasPlan && plan.Resumable {
 			streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
 		} else {
+			if hasPlan && plan.Strategy == KeyStrategyNormalStream {
+				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; using non-resumable normal streaming\n",
+					qualifiedName(table.Schema, table.Name))
+			}
 			streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
 		}
 		if streamErr != nil {
@@ -461,6 +460,32 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 
 func hasChunkPolicy(cfg *config) bool {
 	return cfg.chunkPolicy != nil && len(cfg.chunkPolicy.Requests) > 0
+}
+
+// buildDispatchPlans returns per-table streaming plans for serial dump dispatch.
+// Slow-connection mode plans every selected table; chunk-only mode plans requested tables.
+func buildDispatchPlans(cfg *config, tables []db.Table, chunkPlans map[string]KeyDescriptor) map[string]KeyDescriptor {
+	if cfg.slowConnection {
+		plans := make(map[string]KeyDescriptor, len(tables))
+		for _, table := range tables {
+			key := tableKey(table.Schema, table.Name)
+			plans[key] = SelectKeyDescriptor(table)
+		}
+		return plans
+	}
+	if hasChunkPolicy(cfg) {
+		return chunkPlans
+	}
+	return nil
+}
+
+func hasResumableDispatch(plans map[string]KeyDescriptor) bool {
+	for _, plan := range plans {
+		if plan.Resumable {
+			return true
+		}
+	}
+	return false
 }
 
 // executableChunkSet limits current keyset execution to the PK strategy that
