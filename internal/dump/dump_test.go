@@ -1730,3 +1730,331 @@ func TestDumpLegacyArtifactGuardBehavior(t *testing.T) {
 		assertFallbackWarningsInOrder(t, stderr, "public.logs")
 	})
 }
+
+var errTestPlanValidator = errors.New("test plan validator rejection")
+
+func TestValidateDumpOptionsPlanValidatorIncompatibleModes(t *testing.T) {
+	validator := func(PreparedDumpPlan) error { return nil }
+	tests := []struct {
+		name string
+		cfg  config
+		want string
+	}{
+		{
+			name: "parallel",
+			cfg:  config{workers: 2, planValidator: validator},
+			want: "dump plan validation",
+		},
+		{
+			name: "subset",
+			cfg:  config{subset: &SubsetConfig{}, planValidator: validator},
+			want: "dump plan validation",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDumpOptions(&tc.cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q incompatibility", err, tc.want)
+			}
+		})
+	}
+}
+
+func assertNoDumpOutputArtifacts(t *testing.T, dir string, resumable ...db.Table) {
+	t.Helper()
+	for _, name := range []string{"metadata.json", "metadata.json.tmp"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Fatalf("%s should not exist on validator failure", name)
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, "data")); err == nil && len(entries) > 0 {
+		t.Fatalf("data directory should be empty or absent, got %d entries", len(entries))
+	}
+	for _, table := range resumable {
+		tables := []db.Table{table}
+		assignDataFiles(tables)
+		for _, path := range []string{
+			slowCheckpointPath(dir, table),
+			slowCheckpointPath(dir, table) + ".tmp",
+			tableDataPath(dir, tables[0]),
+			tableDataPath(dir, tables[0]) + ".tmp",
+		} {
+			if _, err := os.Stat(path); err == nil {
+				t.Fatalf("%s should not exist on validator failure", path)
+			}
+		}
+	}
+}
+
+func TestDumpPlanValidatorSeesCanonicalStrategies(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	expectMixedSlowSchemaMock(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	var seen PreparedDumpPlan
+	calls := 0
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}),
+		WithPlanValidator(func(plan PreparedDumpPlan) error {
+			calls++
+			seen = plan
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("validator calls = %d, want 1", calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStrategyRecords(t, seen.Strategies,
+		[]string{"public.events", "public.logs", "public.notes", "public.users"},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyNormalStream, KeyStrategyNormalStream, KeyStrategyPrimaryKey},
+		[]bool{true, false, false, true},
+	)
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(seen.Strategies, meta.Provenance.Strategies) {
+		t.Fatalf("validator strategies = %+v, provenance = %+v", seen.Strategies, meta.Provenance.Strategies)
+	}
+}
+
+func TestDumpPlanValidatorAfterSelection(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	expectMixedSlowSchemaMock(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	policy := SelectionPolicy{
+		Includes: []SelectorEntry{
+			{Table: QualifiedTable{Schema: "public", Name: "events"}},
+			{Table: QualifiedTable{Schema: "public", Name: "users"}},
+		},
+	}
+
+	var seen PreparedDumpPlan
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}),
+		WithTableSelection(policy, nil),
+		WithPlanValidator(func(plan PreparedDumpPlan) error {
+			seen = plan
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStrategyRecords(t, seen.Strategies,
+		[]string{"public.events", "public.users"},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyPrimaryKey},
+		[]bool{true, true},
+	)
+}
+
+func TestDumpPlanValidatorErrorBeforeOutput(t *testing.T) {
+	t.Run("serial_tx", func(t *testing.T) {
+		sqlDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sqlDB.Close()
+
+		dir := t.TempDir()
+		mock.ExpectBegin()
+
+		tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+			AddRow("public", "users", int64(1))
+		mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+			WithArgs("public").
+			WillReturnRows(tablesRows)
+
+		colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+			AddRow("public", "users", "id", "integer", "NO", 1, true)
+		mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+		fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+		emptyUniqueIndexMock(mock)
+		mock.ExpectRollback()
+
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+			WithPlanValidator(func(PreparedDumpPlan) error { return errTestPlanValidator }))
+		if err == nil {
+			t.Fatal("expected validator error")
+		}
+		if !errors.Is(err, errTestPlanValidator) {
+			t.Fatalf("error = %v, want %v", err, errTestPlanValidator)
+		}
+		assertNoDumpOutputArtifacts(t, dir, db.Table{Schema: "public", Name: "users"})
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("slow_no_tx", func(t *testing.T) {
+		sqlDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sqlDB.Close()
+
+		dir := t.TempDir()
+		expectMixedSlowSchemaMock(mock)
+
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(),
+			WithPlanValidator(func(PreparedDumpPlan) error { return errTestPlanValidator }))
+		if err == nil {
+			t.Fatal("expected validator error")
+		}
+		if !errors.Is(err, errTestPlanValidator) {
+			t.Fatalf("error = %v, want %v", err, errTestPlanValidator)
+		}
+		assertNoDumpOutputArtifacts(t, dir,
+			db.Table{Schema: "public", Name: "events"},
+			db.Table{Schema: "public", Name: "users"},
+		)
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestDumpPlanValidatorDefensiveCopy(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	expectMixedSlowSchemaMock(mock)
+
+	eventsTable := db.Table{
+		Schema:        "public",
+		Name:          "events",
+		Columns:       []db.Column{{Name: "code", DataType: "text", OrdinalPosition: 1}},
+		UniqueIndexes: streamUniqueTable().UniqueIndexes,
+	}
+	mock.ExpectQuery(slowQueryPattern(eventsTable, DefaultSlowChunkSize, 0)).
+		WithoutArgs().
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}),
+		WithPlanValidator(func(plan PreparedDumpPlan) error {
+			plan.Strategies[0].KeyColumns[0] = "mutated"
+			plan.Strategies = append(plan.Strategies, TableStrategyRecord{Table: "public.extra"})
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance.Strategies[0].KeyColumns[0] != "code" {
+		t.Fatalf("provenance key column mutated: %+v", meta.Provenance.Strategies[0])
+	}
+	if len(meta.Provenance.Strategies) != 4 {
+		t.Fatalf("provenance strategies = %d, want 4", len(meta.Provenance.Strategies))
+	}
+}
+
+func TestDumpPlanValidatorChunkScopedStrategies(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "events", int64(1)).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "events", "code", "text", "NO", 1, false).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	expectEventsCodeUniqueIndex(mock)
+
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
+		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+
+	var seen PreparedDumpPlan
+	calls := 0
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}),
+		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "events"}}),
+		WithPlanValidator(func(plan PreparedDumpPlan) error {
+			calls++
+			seen = plan
+			return nil
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("validator calls = %d, want 1", calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStrategyRecords(t, seen.Strategies,
+		[]string{"public.events"},
+		[]KeyStrategy{KeyStrategyUniqueIndex},
+		[]bool{true},
+	)
+}

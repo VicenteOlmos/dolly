@@ -12,6 +12,14 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
+// PreparedDumpPlan is the canonical per-table strategy plan passed to validators.
+type PreparedDumpPlan struct {
+	Strategies []TableStrategyRecord
+}
+
+// PlanValidator validates a prepared dump plan before metadata or table output.
+type PlanValidator func(PreparedDumpPlan) error
+
 // ProgressEvent reports table-granularity progress during Dump.
 type ProgressEvent struct {
 	Phase   string
@@ -38,6 +46,7 @@ type config struct {
 	chunkPolicy        *ChunkPolicy
 	chunkIgnored       []IgnoredFileLine
 	workers            int
+	planValidator      PlanValidator
 }
 
 type slowRetryConfig struct {
@@ -241,6 +250,16 @@ func WithWorkers(n int) Option {
 	}
 }
 
+// WithPlanValidator registers a callback invoked with the canonical strategy plan
+// after table selection and dispatch planning and before metadata or table output.
+// Serial dumps run validation inside the read-only transaction; no-transaction
+// resilient modes validate immediately after planning. A nil validator is a no-op.
+func WithPlanValidator(v PlanValidator) Option {
+	return func(c *config) {
+		c.planValidator = v
+	}
+}
+
 // InspectChunkPolicy returns the chunk policy captured from opts, or nil.
 func InspectChunkPolicy(opts ...Option) *ChunkPolicy {
 	var c config
@@ -385,10 +404,14 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 
 	sorted := SortTables(tables)
 	dispatchPlans := buildDispatchPlans(&cfg, sorted, chunkPlans)
-	if cfg.provenance != nil {
-		if records := BuildStrategyRecords(sorted, dispatchPlans); len(records) > 0 {
-			cfg.provenance.Strategies = records
+	records := BuildStrategyRecords(sorted, dispatchPlans)
+	if cfg.planValidator != nil {
+		if err := cfg.planValidator(PreparedDumpPlan{Strategies: copyStrategyRecords(records)}); err != nil {
+			return err
 		}
+	}
+	if cfg.provenance != nil && len(records) > 0 {
+		cfg.provenance.Strategies = copyStrategyRecords(records)
 	}
 	if hasResumableDispatch(dispatchPlans) {
 		if err := rejectAmbiguousLegacySlowArtifacts(outputDir, sorted); err != nil {
@@ -513,10 +536,35 @@ func usesResilientStreaming(cfg *config, chunkSet map[string]struct{}, table db.
 	return ok
 }
 
+func copyStrategyRecords(records []TableStrategyRecord) []TableStrategyRecord {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]TableStrategyRecord, len(records))
+	for i, rec := range records {
+		out[i] = TableStrategyRecord{
+			Table:       rec.Table,
+			Strategy:    rec.Strategy,
+			Resumable:   rec.Resumable,
+			Fingerprint: rec.Fingerprint,
+		}
+		if len(rec.KeyColumns) > 0 {
+			out[i].KeyColumns = append([]string(nil), rec.KeyColumns...)
+		}
+	}
+	return out
+}
+
 func validateDumpOptions(cfg *config) error {
 	workers := effectiveWorkers(cfg.workers)
 	if workers > maxParallelWorkers {
 		return fmt.Errorf("parallel dump workers must be between 1 and %d", maxParallelWorkers)
+	}
+	if workers > 1 && cfg.planValidator != nil {
+		return fmt.Errorf("parallel dump workers are incompatible with dump plan validation")
+	}
+	if cfg.subset != nil && cfg.planValidator != nil {
+		return fmt.Errorf("subset dump is incompatible with dump plan validation")
 	}
 	if workers > 1 && (cfg.slowConnection || hasChunkPolicy(cfg)) {
 		return fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")
