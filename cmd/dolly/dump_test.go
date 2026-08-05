@@ -29,6 +29,34 @@ func writeStubDumpMetadata(dir string) error {
 	return os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(stubDumpMetadataJSON), 0o644)
 }
 
+func validUsersPKStrategy() []dump.TableStrategyRecord {
+	return []dump.TableStrategyRecord{{Table: "public.users", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, KeyColumns: []string{"id"}, Fingerprint: "deadbeef"}}
+}
+
+func checkResumePlan(opts []dump.Option, plan dump.PreparedDumpPlan) error {
+	if v := dump.InspectPlanValidator(opts...); v != nil {
+		return v(plan)
+	}
+	return nil
+}
+
+func resumeDumpRun(plan dump.PreparedDumpPlan, captured *string) func(context.Context, *sql.DB, string, ...dump.Option) error {
+	return func(_ context.Context, _ *sql.DB, out string, opts ...dump.Option) error {
+		*captured = out
+		if err := checkResumePlan(opts, plan); err != nil {
+			return err
+		}
+		return writeStubDumpMetadata(out)
+	}
+}
+
+const usersStrategyJSON = `,"strategies":[{"table":"public.users","strategy":"primary_key","resumable":true,"key_columns":["id"],"fingerprint":"deadbeef"}]`
+
+var resumeMarkerBodies = map[string]string{
+	"users.ckpt.json":  `{"table":"users","pk_column":"id","last_pk":5}`,
+	"users.ndjson.tmp": `{"id":1}` + "\n",
+}
+
 func slowResumeExpect(sig string, schemas []string, sanitized bool) resumableDumpExpectation {
 	return resumableDumpExpectation{
 		sourceSignature:     sig,
@@ -787,10 +815,7 @@ func TestRunDumpSlowConnectionResumesInterruptedDir(t *testing.T) {
 	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
 
 	var capturedOutput string
-	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
-		capturedOutput = out
-		return writeStubDumpMetadata(out)
-	}
+	dumpRun = resumeDumpRun(dump.PreparedDumpPlan{Strategies: validUsersPKStrategy()}, &capturedOutput)
 
 	baseDir := t.TempDir()
 	interruptedDir := filepath.Join(baseDir, "1")
@@ -812,7 +837,7 @@ func TestRunDumpSlowConnectionResumesInterruptedDir(t *testing.T) {
 	"source_database": "db",
 	"schemas": ["public"]
 	,"source_signature": "postgres://@h:5432/db",
-	"sanitization_enabled": false
+	"sanitization_enabled": false` + usersStrategyJSON + `
   }
 }`
 	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
@@ -1969,7 +1994,10 @@ func TestRunDumpResumedSlowDirNotRemovedOnSelectionError(t *testing.T) {
 
 	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
 	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
-	dumpRun = func(_ context.Context, _ *sql.DB, _ string, _ ...dump.Option) error {
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, opts ...dump.Option) error {
+		if err := checkResumePlan(opts, dump.PreparedDumpPlan{Strategies: validUsersPKStrategy()}); err != nil {
+			return err
+		}
 		return fmt.Errorf("%w: table selection matched no tables", dump.ErrTableSelection)
 	}
 
@@ -1989,7 +2017,7 @@ func TestRunDumpResumedSlowDirNotRemovedOnSelectionError(t *testing.T) {
     "source_database": "db",
     "schemas": ["public"],
     "source_signature": "postgres://@h:5432/db",
-    "sanitization_enabled": false
+    "sanitization_enabled": false` + usersStrategyJSON + `
   }
 }`
 	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
@@ -2128,10 +2156,7 @@ func TestRunDumpChunkTableResumesInterruptedDir(t *testing.T) {
 	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
 
 	var capturedOutput string
-	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
-		capturedOutput = out
-		return writeStubDumpMetadata(out)
-	}
+	dumpRun = resumeDumpRun(dump.PreparedDumpPlan{Strategies: validUsersPKStrategy()}, &capturedOutput)
 
 	baseDir := t.TempDir()
 	interruptedDir := filepath.Join(baseDir, "1")
@@ -2155,7 +2180,7 @@ func TestRunDumpChunkTableResumesInterruptedDir(t *testing.T) {
     "sanitization_enabled": false,
     "chunk_tables": {
       "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
-    }
+    }` + usersStrategyJSON + `
   }
 }`
 	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
@@ -2186,10 +2211,7 @@ func TestRunDumpChunkConfigResumesInterruptedDir(t *testing.T) {
 	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
 
 	var capturedOutput string
-	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
-		capturedOutput = out
-		return writeStubDumpMetadata(out)
-	}
+	dumpRun = resumeDumpRun(dump.PreparedDumpPlan{Strategies: []dump.TableStrategyRecord{{Table: "public.orders", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, KeyColumns: []string{"id"}, Fingerprint: "abc123"}}}, &capturedOutput)
 
 	baseDir := t.TempDir()
 	interruptedDir := filepath.Join(baseDir, "1")
@@ -2213,7 +2235,7 @@ func TestRunDumpChunkConfigResumesInterruptedDir(t *testing.T) {
     "sanitization_enabled": false,
     "chunk_tables": {
       "requested": [{"normalized": "public.orders", "source": "config: dump.chunk_tables"}]
-    }
+    }` + `,"strategies":[{"table":"public.orders","strategy":"primary_key","resumable":true,"key_columns":["id"],"fingerprint":"abc123"}]` + `
   }
 }`
 	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
@@ -2437,10 +2459,7 @@ func TestRunDumpSlowConnectionWithChunkTableResumesInterruptedDir(t *testing.T) 
 	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
 
 	var capturedOutput string
-	dumpRun = func(_ context.Context, _ *sql.DB, out string, _ ...dump.Option) error {
-		capturedOutput = out
-		return writeStubDumpMetadata(out)
-	}
+	dumpRun = resumeDumpRun(dump.PreparedDumpPlan{Strategies: validUsersPKStrategy()}, &capturedOutput)
 
 	baseDir := t.TempDir()
 	interruptedDir := filepath.Join(baseDir, "1")
@@ -2464,7 +2483,7 @@ func TestRunDumpSlowConnectionWithChunkTableResumesInterruptedDir(t *testing.T) 
     "sanitization_enabled": false,
     "chunk_tables": {
       "requested": [{"normalized": "public.users", "source": "flag: --chunk-table"}]
-    }
+    }` + usersStrategyJSON + `
   }
 }`
 	if err := os.WriteFile(filepath.Join(interruptedDir, "metadata.json.tmp"), []byte(tmpMeta), 0o644); err != nil {
@@ -2738,5 +2757,166 @@ func TestRunDumpWorkersInsufficientPoolBeforeAllocation(t *testing.T) {
 	}
 	if ran {
 		t.Fatal("dump should not run when pool headroom fails before allocation")
+	}
+}
+
+func TestPersistedStrategiesValidAndEqual(t *testing.T) {
+	pk := dump.TableStrategyRecord{Table: "public.users", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, KeyColumns: []string{"id"}, Fingerprint: "abc"}
+	fb := dump.TableStrategyRecord{Table: "public.logs", Strategy: dump.KeyStrategyNormalStream}
+	uid := dump.TableStrategyRecord{Table: "public.events", Strategy: dump.KeyStrategyUniqueIndex, Resumable: true, KeyColumns: []string{"code"}, Fingerprint: "fp"}
+	for _, tc := range []struct {
+		recs []dump.TableStrategyRecord
+		ok   bool
+	}{
+		{nil, false}, {[]dump.TableStrategyRecord{}, false}, {[]dump.TableStrategyRecord{pk}, true}, {[]dump.TableStrategyRecord{uid}, true},
+		{[]dump.TableStrategyRecord{pk, fb}, true}, {[]dump.TableStrategyRecord{{}}, false}, {[]dump.TableStrategyRecord{pk, pk}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.users", Strategy: "bogus"}}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.users", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, Fingerprint: "x"}}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.events", Strategy: dump.KeyStrategyUniqueIndex}}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.users", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, KeyColumns: []string{"id"}}}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.users", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, KeyColumns: []string{""}, Fingerprint: "x"}}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.logs", Strategy: dump.KeyStrategyNormalStream, Resumable: true}}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.logs", Strategy: dump.KeyStrategyNormalStream, KeyColumns: []string{"id"}}}, false},
+	} {
+		if got := persistedStrategiesValid(tc.recs); got != tc.ok {
+			t.Fatalf("valid(%v) = %v", tc.recs, got)
+		}
+	}
+	bad := pk
+	bad.Fingerprint = "zzz"
+	for _, tc := range []struct {
+		a, b []dump.TableStrategyRecord
+		ok   bool
+	}{
+		{[]dump.TableStrategyRecord{pk}, []dump.TableStrategyRecord{pk}, true}, {[]dump.TableStrategyRecord{uid}, []dump.TableStrategyRecord{uid}, true},
+		{[]dump.TableStrategyRecord{pk, fb}, []dump.TableStrategyRecord{pk, fb}, true}, {[]dump.TableStrategyRecord{pk}, []dump.TableStrategyRecord{fb}, false},
+		{[]dump.TableStrategyRecord{pk, fb}, []dump.TableStrategyRecord{fb, pk}, false}, {[]dump.TableStrategyRecord{pk}, []dump.TableStrategyRecord{bad}, false},
+		{[]dump.TableStrategyRecord{{Table: "public.t", Strategy: dump.KeyStrategyUniqueIndex, Resumable: true, KeyColumns: []string{"a", "b"}, Fingerprint: "x"}},
+			[]dump.TableStrategyRecord{{Table: "public.t", Strategy: dump.KeyStrategyUniqueIndex, Resumable: true, KeyColumns: []string{"b", "a"}, Fingerprint: "x"}}, false},
+	} {
+		if got := strategyRecordsEqual(tc.a, tc.b); got != tc.ok {
+			t.Fatalf("equal = %v", got)
+		}
+	}
+}
+
+func seedResumeDir(t *testing.T, base, stratSuffix string) string {
+	dir := filepath.Join(base, "1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range resumeMarkerBodies {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	meta := `{"generated_at":"2026-01-01T00:00:00Z","schema":"public","tables":[],"provenance":{"source_database":"db","source_signature":"postgres://@h:5432/db","schemas":["public"],"sanitization_enabled":false` + stratSuffix + `}}`
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json.tmp"), []byte(meta), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestRunDumpStrategyResumeSeams(t *testing.T) {
+	oldLoad, oldPing, oldRun := dumpLoadConfig, dumpPingContext, dumpRun
+	oldCapture := dumpCaptureSchema
+	t.Cleanup(func() {
+		dumpLoadConfig, dumpPingContext, dumpRun = oldLoad, oldPing, oldRun
+		dumpCaptureSchema = oldCapture
+	})
+	dumpLoadConfig = func(string) (*config.Config, error) { return config.DefaultConfig(), nil }
+	dumpPingContext = func(*sql.DB, context.Context) error { return nil }
+	dumpCaptureSchema = func(context.Context, string, string, []string) error { return nil }
+
+	for _, strat := range []string{"", `,"strategies":[]`} {
+		var out string
+		var hadValidator bool
+		dumpRun = func(_ context.Context, _ *sql.DB, dir string, opts ...dump.Option) error {
+			hadValidator = dump.InspectPlanValidator(opts...) != nil
+			out = dir
+			return writeStubDumpMetadata(dir)
+		}
+		base := t.TempDir()
+		seedResumeDir(t, base, strat)
+		if err := runDump([]string{"--dsn", "postgres://h/db", "--output", base, "--slow-connection"}); err != nil {
+			t.Fatal(err)
+		}
+		if hadValidator || out != filepath.Join(base, "2") {
+			t.Fatalf("legacy %q validator=%v out=%q", strat, hadValidator, out)
+		}
+	}
+	mismatchPlan := dump.PreparedDumpPlan{Strategies: []dump.TableStrategyRecord{{Table: "public.users", Strategy: dump.KeyStrategyPrimaryKey, Resumable: true, KeyColumns: []string{"id"}, Fingerprint: "mismatch"}}}
+	var calls []bool
+	var freshDir string
+	var freshProv *dump.Provenance
+	dumpRun = func(_ context.Context, _ *sql.DB, dir string, opts ...dump.Option) error {
+		v := dump.InspectPlanValidator(opts...)
+		calls = append(calls, v != nil)
+		if v != nil {
+			return v(mismatchPlan)
+		}
+		freshDir, freshProv = dir, dump.InspectProvenance(opts...)
+		return writeStubDumpMetadata(dir)
+	}
+	base := t.TempDir()
+	candidate := seedResumeDir(t, base, usersStrategyJSON)
+	stdout := captureStdout(func() {
+		if err := runDump([]string{"--dsn", "postgres://h/db", "--output", base, "--slow-connection", "--json"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	wantFresh := filepath.Join(base, "2")
+	if len(calls) != 2 || calls[0] != true || calls[1] != false {
+		t.Fatalf("mismatch calls = %v", calls)
+	}
+	if freshDir != wantFresh || freshProv == nil || freshProv.Seq != 2 || freshProv.BaseDir != base {
+		t.Fatalf("fresh retry dir=%q prov=%+v base=%q", freshDir, freshProv, base)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["output_dir"] != wantFresh || result["seq"] != float64(2) {
+		t.Fatalf("json = %+v", result)
+	}
+	for name, want := range resumeMarkerBodies {
+		got, err := os.ReadFile(filepath.Join(candidate, name))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s preserved bytes", name)
+		}
+	}
+	matchCalls := 0
+	dumpRun = func(_ context.Context, _ *sql.DB, dir string, opts ...dump.Option) error {
+		matchCalls++
+		if err := checkResumePlan(opts, dump.PreparedDumpPlan{Strategies: validUsersPKStrategy()}); err != nil {
+			return err
+		}
+		return writeStubDumpMetadata(dir)
+	}
+	base = t.TempDir()
+	interruptedDir := seedResumeDir(t, base, usersStrategyJSON)
+	stderr := captureStderr(func() {
+		if err := runDump([]string{"--dsn", "postgres://h/db", "--output", base, "--slow-connection"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if matchCalls != 1 || !strings.Contains(stderr, interruptedDir) || !strings.Contains(stderr, "(seq 1)") {
+		t.Fatalf("match calls=%d stderr=%q", matchCalls, stderr)
+	}
+
+	errUnrelated := errors.New("stream table failed")
+	var errCalls int
+	dumpRun = func(_ context.Context, _ *sql.DB, _ string, opts ...dump.Option) error {
+		errCalls++
+		if err := checkResumePlan(opts, dump.PreparedDumpPlan{Strategies: validUsersPKStrategy()}); err != nil {
+			return err
+		}
+		return errUnrelated
+	}
+	base = t.TempDir()
+	seedResumeDir(t, base, usersStrategyJSON)
+	err := runDump([]string{"--dsn", "postgres://h/db", "--output", base, "--slow-connection"})
+	if err == nil || errCalls != 1 || !errors.Is(err, errUnrelated) {
+		t.Fatalf("unrelated err=%v calls=%d", err, errCalls)
 	}
 }
