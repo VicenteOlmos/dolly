@@ -53,6 +53,15 @@ type Metadata struct {
 	Sequences   []SequenceState `json:"sequences,omitempty"`
 }
 
+// TableStrategyRecord captures the persisted streaming plan for one table.
+type TableStrategyRecord struct {
+	Table       string      `json:"table"`
+	Strategy    KeyStrategy `json:"strategy"`
+	Resumable   bool        `json:"resumable"`
+	KeyColumns  []string    `json:"key_columns,omitempty"`
+	Fingerprint string      `json:"fingerprint,omitempty"`
+}
+
 // Provenance records dump identity and source context for history/restore tracking.
 type Provenance struct {
 	Seq              int                       `json:"seq"`
@@ -65,6 +74,37 @@ type Provenance struct {
 	TotalRowEstimate int64                     `json:"total_row_estimate,omitempty"`
 	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
 	ChunkTables      *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
+	Strategies       []TableStrategyRecord     `json:"strategies,omitempty"`
+}
+
+// BuildStrategyRecords returns deterministic strategy provenance for explicitly
+// planned tables. Tables must already be in dump order; records follow that order.
+func BuildStrategyRecords(tables []db.Table, plans map[string]KeyDescriptor) []TableStrategyRecord {
+	if len(plans) == 0 {
+		return nil
+	}
+	records := make([]TableStrategyRecord, 0, len(plans))
+	for _, table := range tables {
+		plan, ok := plans[tableKey(table.Schema, table.Name)]
+		if !ok {
+			continue
+		}
+		records = append(records, tableStrategyRecord(plan))
+	}
+	return records
+}
+
+func tableStrategyRecord(plan KeyDescriptor) TableStrategyRecord {
+	rec := TableStrategyRecord{
+		Table:     qualifiedName(plan.TableSchema, plan.TableName),
+		Strategy:  plan.Strategy,
+		Resumable: plan.Resumable,
+	}
+	if plan.Resumable {
+		rec.KeyColumns = plan.ColumnNames()
+		rec.Fingerprint = plan.Fingerprint
+	}
+	return rec
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {

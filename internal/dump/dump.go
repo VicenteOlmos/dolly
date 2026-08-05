@@ -385,6 +385,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 
 	sorted := SortTables(tables)
 	dispatchPlans := buildDispatchPlans(&cfg, sorted, chunkPlans)
+	if cfg.provenance != nil {
+		if records := BuildStrategyRecords(sorted, dispatchPlans); len(records) > 0 {
+			cfg.provenance.Strategies = records
+		}
+	}
 	if hasResumableDispatch(dispatchPlans) {
 		if err := rejectAmbiguousLegacySlowArtifacts(outputDir, sorted); err != nil {
 			return err

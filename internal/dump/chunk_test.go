@@ -71,6 +71,7 @@ func TestPlanChunkStreaming(t *testing.T) {
 			wantStrategies: map[string]KeyStrategy{tableKey("public", "events"): KeyStrategyUniqueIndex},
 			wantResumable:  map[string]bool{tableKey("public", "events"): true},
 			wantRequested:  []string{"public.events"},
+			wantChunked:    []string{"public.events"},
 		},
 		{
 			name: "no safe key receives normal stream fallback",

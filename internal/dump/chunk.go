@@ -87,7 +87,7 @@ func PlanChunkStreaming(tables []db.Table, policy *ChunkPolicy, ignored []Ignore
 		plans[key] = plan
 		qualified := qualifiedName(table.Schema, table.Name)
 		switch plan.Strategy {
-		case KeyStrategyPrimaryKey:
+		case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex:
 			prov.Chunked = append(prov.Chunked, qualified)
 		case KeyStrategyNormalStream:
 			prov.Fallback = append(prov.Fallback, qualified)
