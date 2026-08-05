@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -493,6 +494,7 @@ func TestIntegrationDumpChunkTableResumeNoDuplicates(t *testing.T) {
 		WithTableSelection(policy, nil),
 		WithChunkTables([]QualifiedTable{{Schema: "public", Name: "tbl_a"}}),
 		WithoutSequences(),
+		WithProvenance(Provenance{}),
 	}
 
 	refDir := t.TempDir()
@@ -521,12 +523,16 @@ func TestIntegrationDumpChunkTableResumeNoDuplicates(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	partial := strings.Join(refLines[:resumeAfter], "\n") + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "tbl_a.ndjson.tmp"), []byte(partial), 0o600); err != nil {
+	table := metadataTable(t, refMeta, "tbl_a")
+	tmpPath := tableDataPath(dir, table) + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	table := metadataTable(t, refMeta, "tbl_a")
-	if err := saveSlowCheckpoint(checkpointPath(dir, "tbl_a"), table, SelectKeyDescriptor(table), []any{int64(lastID)}); err != nil {
+	partial := strings.Join(refLines[:resumeAfter], "\n") + "\n"
+	if err := os.WriteFile(tmpPath, []byte(partial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSlowCheckpoint(slowCheckpointPath(dir, table), table, SelectKeyDescriptor(table), []any{int64(lastID)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -557,6 +563,386 @@ func TestIntegrationDumpChunkTableResumeNoDuplicates(t *testing.T) {
 		}
 		seen[id] = struct{}{}
 	}
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{"public.tbl_a"},
+		[]KeyStrategy{KeyStrategyPrimaryKey},
+		[]bool{true},
+	)
+}
+
+func TestIntegrationDumpChunkTableUniqueKeyResume(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	schema := integrationIsolatedSchema(t, conn)
+	tableName := "uq_resume"
+	qualified := schema + "." + tableName
+	integrationCreateUniqueCodeTable(t, ctx, conn, schema, tableName, map[string]string{
+		"a": "one", "b": "two", "c": "three", "d": "four", "e": "five",
+	})
+
+	const resumeAfter = 3
+	opts := integrationIsolatedChunkOpts(schema, tableName, 2, &Provenance{Schemas: []string{schema}})
+	refTable, refLines := integrationRefDumpLines(t, ctx, conn, opts, tableName)
+	if len(refLines) <= resumeAfter {
+		t.Fatalf("fixture has %d rows, need > %d", len(refLines), resumeAfter)
+	}
+
+	var lastRow map[string]any
+	if err := json.Unmarshal([]byte(refLines[resumeAfter-1]), &lastRow); err != nil {
+		t.Fatal(err)
+	}
+	lastCode, ok := lastRow["code"].(string)
+	if !ok {
+		t.Fatalf("checkpoint code type %T", lastRow["code"])
+	}
+
+	catalogTable := integrationCatalogTable(t, conn, schema, tableName)
+	descriptor := SelectKeyDescriptor(catalogTable)
+	if descriptor.Strategy != KeyStrategyUniqueIndex || descriptor.Fingerprint == "" {
+		t.Fatalf("descriptor = %+v, want unique_index with fingerprint", descriptor)
+	}
+
+	dir := t.TempDir()
+	tmpPath := tableDataPath(dir, refTable) + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmpPath, []byte(strings.Join(refLines[:resumeAfter], "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSlowCheckpoint(slowCheckpointPath(dir, catalogTable), catalogTable, descriptor, []any{lastCode}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Dump(ctx, conn, dir, opts...); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, tableName)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != len(refLines) {
+		t.Fatalf("resumed row count = %d, want %d", len(lines), len(refLines))
+	}
+	integrationAssertColumnUnique(t, lines, "code")
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{qualified},
+		[]KeyStrategy{KeyStrategyUniqueIndex},
+		[]bool{true},
+	)
+	rec := meta.Provenance.Strategies[0]
+	if !slices.Equal(rec.KeyColumns, descriptor.ColumnNames()) || rec.Fingerprint != descriptor.Fingerprint {
+		t.Fatalf("provenance identity = %+v, want columns %v fingerprint %q", rec, descriptor.ColumnNames(), descriptor.Fingerprint)
+	}
+	integrationAssertNoSlowArtifacts(t, dir, catalogTable)
+}
+
+func TestIntegrationDumpChunkTableChangedUniqueKeyRejects(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	schema := integrationIsolatedSchema(t, conn)
+	tableName := "uq_change"
+	integrationCreateUniqueCodeTable(t, ctx, conn, schema, tableName, map[string]string{"a": "one", "b": "two", "c": "three"})
+
+	opts := integrationIsolatedChunkOpts(schema, tableName, 2, nil)
+	refTable, refLines := integrationRefDumpLines(t, ctx, conn, opts, tableName)
+	if len(refLines) < 2 {
+		t.Fatalf("fixture has %d rows, need >= 2", len(refLines))
+	}
+
+	var lastRow map[string]any
+	if err := json.Unmarshal([]byte(refLines[0]), &lastRow); err != nil {
+		t.Fatal(err)
+	}
+	lastCode, ok := lastRow["code"].(string)
+	if !ok {
+		t.Fatalf("checkpoint code type %T", lastRow["code"])
+	}
+
+	catalogTable := integrationCatalogTable(t, conn, schema, tableName)
+	originalDesc := SelectKeyDescriptor(catalogTable)
+	withFiles := integrationTableWithDataFile(catalogTable)
+
+	dir := t.TempDir()
+	finalPath := tableDataPath(dir, withFiles)
+	tmpPath := tableDataPath(dir, refTable) + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(tmpPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	partial := []byte(refLines[0] + "\n")
+	if err := os.WriteFile(tmpPath, partial, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ckptPath := slowCheckpointPath(dir, catalogTable)
+	if err := saveSlowCheckpoint(ckptPath, catalogTable, originalDesc, []any{lastCode}); err != nil {
+		t.Fatal(err)
+	}
+	wantCkpt, err := os.ReadFile(ckptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, q := range []string{
+		fmt.Sprintf(`ALTER TABLE %s.%s DROP CONSTRAINT %s_code_key`, schema, tableName, tableName),
+		fmt.Sprintf(`ALTER TABLE %s.%s ADD COLUMN aux integer NOT NULL DEFAULT 0`, schema, tableName),
+		fmt.Sprintf(`CREATE UNIQUE INDEX %s_code_aux_key ON %s.%s (code, aux)`, tableName, schema, tableName),
+	} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err = Dump(ctx, conn, dir, opts...)
+	if err == nil {
+		t.Fatal("want checkpoint fingerprint mismatch error")
+	}
+	for unwrapped := err; unwrapped != nil; unwrapped = errors.Unwrap(unwrapped) {
+		if unwrapped.Error() == "checkpoint fingerprint mismatch" {
+			if !strings.Contains(err.Error(), "load checkpoint for table") || !strings.Contains(err.Error(), tableName) {
+				t.Fatalf("error = %v, want wrapped fingerprint mismatch for table %q", err, tableName)
+			}
+			goto mismatchOK
+		}
+	}
+	t.Fatalf("error = %v, want checkpoint fingerprint mismatch", err)
+mismatchOK:
+	if _, statErr := os.Stat(filepath.Join(dir, "metadata.json")); statErr == nil {
+		t.Fatal("metadata.json should not be promoted on descriptor mismatch")
+	}
+	if _, statErr := os.Stat(finalPath); statErr == nil {
+		t.Fatal("final data file should not be promoted on descriptor mismatch")
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("stat final data %q: %v", finalPath, statErr)
+	}
+	gotCkpt, err := os.ReadFile(ckptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotCkpt, wantCkpt) {
+		t.Fatal("checkpoint bytes changed after rejection")
+	}
+	gotTmp, err := os.ReadFile(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotTmp, partial) {
+		t.Fatal("temp data bytes changed after rejection")
+	}
+}
+
+func TestIntegrationDumpSlowMixedSchemaStrategies(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	schema := integrationIsolatedSchema(t, conn)
+
+	for _, q := range []string{
+		fmt.Sprintf(`CREATE TABLE %s.pk_items (id SERIAL PRIMARY KEY, val TEXT NOT NULL)`, schema),
+		fmt.Sprintf(`CREATE TABLE %s.uq_codes (code TEXT NOT NULL UNIQUE, note TEXT NOT NULL)`, schema),
+		fmt.Sprintf(`CREATE TABLE %s.fallback_logs (note TEXT)`, schema),
+	} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s.pk_items (val) VALUES ('pk1'), ('pk2')`, schema)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s.uq_codes (code, note) VALUES ('aa','u1'), ('bb','u2')`, schema)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s.fallback_logs (note) VALUES ('log1'), ('log2')`, schema)); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	stderr := captureStderr(func() {
+		if err := Dump(ctx, conn, dir,
+			WithSchemas([]string{schema}),
+			WithSlowConnection(),
+			WithoutSequences(),
+			WithProvenance(Provenance{Schemas: []string{schema}}),
+		); err != nil {
+			t.Fatal(err)
+		}
+	})
+	fallbackQualified := schema + ".fallback_logs"
+	wantWarn := "warning: table \"" + fallbackQualified + "\" has no safe key; using non-resumable normal streaming"
+	if strings.TrimSpace(stderr) != wantWarn {
+		t.Fatalf("stderr = %q, want exactly %q", stderr, wantWarn)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{schema + ".fallback_logs", schema + ".pk_items", schema + ".uq_codes"},
+		[]KeyStrategy{KeyStrategyNormalStream, KeyStrategyPrimaryKey, KeyStrategyUniqueIndex},
+		[]bool{false, true, true},
+	)
+
+	pkLines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "pk_items")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkLines) != 2 {
+		t.Fatalf("pk_items rows = %d, want 2", len(pkLines))
+	}
+	integrationAssertColumnUnique(t, pkLines, "id")
+
+	uqLines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "uq_codes")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uqLines) != 2 {
+		t.Fatalf("uq_codes rows = %d, want 2", len(uqLines))
+	}
+	integrationAssertColumnUnique(t, uqLines, "code")
+
+	fallbackLines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "fallback_logs")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenNotes := map[string]int{}
+	for _, line := range fallbackLines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		note, _ := row["note"].(string)
+		seenNotes[note]++
+	}
+	for _, want := range []string{"log1", "log2"} {
+		if seenNotes[want] != 1 {
+			t.Fatalf("fallback note %q count=%d, want 1", want, seenNotes[want])
+		}
+	}
+
+	for _, name := range []string{"pk_items", "uq_codes", "fallback_logs"} {
+		table := integrationCatalogTable(t, conn, schema, name)
+		integrationAssertNoSlowArtifacts(t, dir, table)
+	}
+}
+
+func integrationIsolatedSchema(t *testing.T, conn *sql.DB) string {
+	t.Helper()
+	schema := fmt.Sprintf("dolly_dump_%d", time.Now().UnixNano())
+	if _, err := conn.ExecContext(context.Background(), "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := conn.ExecContext(context.Background(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
+			t.Errorf("drop schema %s: %v", schema, err)
+		}
+	})
+	return schema
+}
+
+func integrationIsolatedChunkOpts(schema, table string, chunk int, prov *Provenance) []Option {
+	opts := []Option{
+		WithSchemas([]string{schema}),
+		WithSlowChunkSize(chunk),
+		WithTableSelection(SelectionPolicy{Includes: []SelectorEntry{{Table: QualifiedTable{Schema: schema, Name: table}}}}, nil),
+		WithChunkTables([]QualifiedTable{{Schema: schema, Name: table}}),
+		WithoutSequences(),
+	}
+	if prov != nil {
+		opts = append(opts, WithProvenance(*prov))
+	}
+	return opts
+}
+
+func integrationCreateUniqueCodeTable(t *testing.T, ctx context.Context, conn *sql.DB, schema, name string, rows map[string]string) {
+	t.Helper()
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+		`CREATE TABLE %s.%s (code TEXT NOT NULL UNIQUE, note TEXT NOT NULL)`, schema, name,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	for code, note := range rows {
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+			`INSERT INTO %s.%s (code, note) VALUES ($1, $2)`, schema, name,
+		), code, note); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func integrationRefDumpLines(t *testing.T, ctx context.Context, conn *sql.DB, opts []Option, tableName string) (db.Table, []string) {
+	t.Helper()
+	refDir := t.TempDir()
+	if err := Dump(ctx, conn, refDir, opts...); err != nil {
+		t.Fatal(err)
+	}
+	refMeta, err := ReadMetadata(refDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refTable := metadataTable(t, refMeta, tableName)
+	refLines, err := readNDJSONLines(tableDataPath(refDir, refTable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return refTable, refLines
+}
+
+func integrationCatalogTable(t *testing.T, conn *sql.DB, schema, name string) db.Table {
+	t.Helper()
+	tables, err := db.LoadPostgresSchemas(context.Background(), conn, []string{schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range tables {
+		if table.Schema == schema && table.Name == name {
+			return table
+		}
+	}
+	t.Fatalf("table %s.%s not in catalog", schema, name)
+	return db.Table{}
+}
+
+func integrationAssertColumnUnique(t *testing.T, lines []string, column string) {
+	t.Helper()
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		var row map[string]any
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		val := fmt.Sprint(row[column])
+		if _, dup := seen[val]; dup {
+			t.Fatalf("duplicate %s=%q", column, val)
+		}
+		seen[val] = struct{}{}
+	}
+}
+
+func integrationAssertNoSlowArtifacts(t *testing.T, dir string, tables ...db.Table) {
+	t.Helper()
+	for _, table := range tables {
+		withFiles := integrationTableWithDataFile(table)
+		for _, path := range []string{
+			slowCheckpointPath(dir, withFiles),
+			slowCheckpointPath(dir, withFiles) + ".tmp",
+			tableDataPath(dir, withFiles) + ".tmp",
+		} {
+			if _, err := os.Stat(path); err == nil {
+				t.Fatalf("unexpected artifact %s", path)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stat %s: %v", path, err)
+			}
+		}
+	}
+}
+
+func integrationTableWithDataFile(table db.Table) db.Table {
+	tables := []db.Table{table}
+	assignDataFiles(tables)
+	return tables[0]
 }
 
 func TestIntegrationParallelDumpSharedSnapshot(t *testing.T) {
