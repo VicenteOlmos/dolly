@@ -2,8 +2,11 @@ package dump
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,4 +209,215 @@ func TestReadMetadataMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+}
+
+func TestBuildStrategyRecordsDeterministicOrder(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "events", Columns: []db.Column{{Name: "code", OrdinalPosition: 1}}},
+		{Schema: "public", Name: "heap", Columns: []db.Column{{Name: "note", OrdinalPosition: 1}}},
+		{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id", PrimaryKey: true, OrdinalPosition: 1}}},
+	}
+	eventsPlan := fingerprintDescriptor(KeyDescriptor{
+		Strategy: KeyStrategyUniqueIndex, TableSchema: "public", TableName: "events",
+		Columns:   []KeyColumn{{Name: "code", Position: 1, Attnum: 1, NotNull: true}},
+		Index:     &IndexIdentity{Schema: "public", Name: "events_code_key", OID: 42, AccessMethod: "btree", Valid: true, Ready: true},
+		Resumable: true,
+	})
+	heapPlan := fingerprintDescriptor(KeyDescriptor{
+		Strategy: KeyStrategyNormalStream, TableSchema: "public", TableName: "heap",
+	})
+	usersPlan := fingerprintDescriptor(KeyDescriptor{
+		Strategy: KeyStrategyPrimaryKey, TableSchema: "public", TableName: "users",
+		Columns:   []KeyColumn{{Name: "id", Position: 1, Attnum: 1, NotNull: true}},
+		Resumable: true,
+	})
+
+	plansForward := map[string]KeyDescriptor{}
+	plansForward[tableKey("public", "events")] = eventsPlan
+	plansForward[tableKey("public", "heap")] = heapPlan
+	plansForward[tableKey("public", "users")] = usersPlan
+
+	plansReverse := map[string]KeyDescriptor{}
+	plansReverse[tableKey("public", "users")] = usersPlan
+	plansReverse[tableKey("public", "heap")] = heapPlan
+	plansReverse[tableKey("public", "events")] = eventsPlan
+
+	records := BuildStrategyRecords(tables, plansForward)
+	otherOrder := BuildStrategyRecords(tables, plansReverse)
+	if !reflect.DeepEqual(records, otherOrder) {
+		t.Fatalf("map insertion order leaked:\nforward = %+v\nreverse = %+v", records, otherOrder)
+	}
+	if len(records) != 3 {
+		t.Fatalf("records = %+v", records)
+	}
+
+	want := []TableStrategyRecord{
+		{
+			Table: "public.events", Strategy: KeyStrategyUniqueIndex, Resumable: true,
+			KeyColumns: eventsPlan.ColumnNames(), Fingerprint: eventsPlan.Fingerprint,
+		},
+		{Table: "public.heap", Strategy: KeyStrategyNormalStream, Resumable: false},
+		{
+			Table: "public.users", Strategy: KeyStrategyPrimaryKey, Resumable: true,
+			KeyColumns: usersPlan.ColumnNames(), Fingerprint: usersPlan.Fingerprint,
+		},
+	}
+	if !reflect.DeepEqual(records, want) {
+		t.Fatalf("records = %+v, want %+v", records, want)
+	}
+}
+
+func TestBuildStrategyRecordsChunkOnlyScope(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "events"},
+		{Schema: "public", Name: "users"},
+	}
+	plans := map[string]KeyDescriptor{
+		tableKey("public", "events"): fingerprintDescriptor(KeyDescriptor{
+			Strategy: KeyStrategyUniqueIndex, TableSchema: "public", TableName: "events",
+			Columns:   []KeyColumn{{Name: "code", Position: 1, Attnum: 1, NotNull: true}},
+			Resumable: true,
+		}),
+	}
+	records := BuildStrategyRecords(tables, plans)
+	if len(records) != 1 || records[0].Table != "public.events" {
+		t.Fatalf("records = %+v", records)
+	}
+}
+
+func TestMetadataStrategyProvenanceRoundtrip(t *testing.T) {
+	wantStrategies := []TableStrategyRecord{
+		{
+			Table: "public.users", Strategy: KeyStrategyPrimaryKey, Resumable: true,
+			KeyColumns: []string{"id"}, Fingerprint: "pk-fp",
+		},
+		{
+			Table: "public.events", Strategy: KeyStrategyUniqueIndex, Resumable: true,
+			KeyColumns: []string{"code"}, Fingerprint: "uniq-fp",
+		},
+		{Table: "public.logs", Strategy: KeyStrategyNormalStream, Resumable: false},
+	}
+
+	t.Run("write_read", func(t *testing.T) {
+		dir := t.TempDir()
+		prov := &Provenance{Strategies: wantStrategies}
+		path, err := writeMetadata(dir, nil, nil, []string{"public"}, nil, prov)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path, filepath.Join(dir, "metadata.json")); err != nil {
+			t.Fatal(err)
+		}
+		meta, err := ReadMetadata(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.Provenance == nil {
+			t.Fatal("expected provenance")
+		}
+		if !reflect.DeepEqual(meta.Provenance.Strategies, wantStrategies) {
+			t.Fatalf("strategies = %+v, want %+v", meta.Provenance.Strategies, wantStrategies)
+		}
+	})
+
+	t.Run("raw_json", func(t *testing.T) {
+		raw := `{
+			"generated_at": "2026-01-01T00:00:00Z",
+			"schema": "public",
+			"tables": [],
+			"provenance": {
+				"seq": 1,
+				"base_dir": "/tmp",
+				"table_count": 0,
+				"strategies": [
+					{"table":"public.users","strategy":"primary_key","resumable":true,"key_columns":["id"],"fingerprint":"pk-fp"},
+					{"table":"public.events","strategy":"unique_index","resumable":true,"key_columns":["code"],"fingerprint":"uniq-fp"},
+					{"table":"public.logs","strategy":"normal_stream","resumable":false}
+				]
+			}
+		}`
+		var meta Metadata
+		if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(meta.Provenance.Strategies, wantStrategies) {
+			t.Fatalf("strategies = %+v, want %+v", meta.Provenance.Strategies, wantStrategies)
+		}
+	})
+}
+
+func TestFallbackStrategyRecordJSONShape(t *testing.T) {
+	rec := tableStrategyRecord(fingerprintDescriptor(KeyDescriptor{
+		Strategy: KeyStrategyNormalStream, TableSchema: "public", TableName: "logs",
+	}))
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(data)
+	if !strings.Contains(raw, `"resumable":false`) {
+		t.Fatalf("fallback must emit explicit resumable false: %s", raw)
+	}
+	for _, forbidden := range []string{`"attnum"`, `"opclass_oid"`, `"collation_oid"`, `"index_oid"`, `"password"`} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("leaked field %s in %s", forbidden, raw)
+		}
+	}
+	if strings.Contains(raw, `"key_columns"`) || strings.Contains(raw, `"fingerprint"`) {
+		t.Fatalf("fallback must omit key identity fields: %s", raw)
+	}
+}
+
+func TestReadMetadataLegacyWithoutStrategies(t *testing.T) {
+	base := `{
+		"generated_at": "2026-01-01T00:00:00Z",
+		"schema": "public",
+		"tables": [{"schema":"public","name":"users"}],
+		"provenance": {
+			"seq": 1,
+			"base_dir": "/tmp",
+			"table_count": 1,
+			"chunk_tables": {
+				"requested": [{"normalized":"public.users","source":"flag:--chunk-table"}],
+				"chunked": ["public.users"]
+			}%s
+		}
+	}`
+
+	t.Run("absent_field", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(fmt.Sprintf(base, "")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		meta, err := ReadMetadata(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.Provenance == nil || meta.Provenance.ChunkTables == nil {
+			t.Fatal("expected legacy chunk_tables provenance")
+		}
+		if meta.Provenance.Strategies != nil {
+			t.Fatalf("absent strategies = %+v, want nil", meta.Provenance.Strategies)
+		}
+	})
+
+	t.Run("explicit_empty_slice", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(fmt.Sprintf(base, `,"strategies":[]`)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		meta, err := ReadMetadata(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.Provenance == nil {
+			t.Fatal("expected provenance")
+		}
+		if meta.Provenance.Strategies == nil {
+			t.Fatal("explicit [] must decode to non-nil empty slice")
+		}
+		if len(meta.Provenance.Strategies) != 0 {
+			t.Fatalf("strategies = %+v, want empty slice", meta.Provenance.Strategies)
+		}
+	})
 }

@@ -1320,6 +1320,31 @@ func TestDumpCaptureSequencesScopeErrorFailsClosed(t *testing.T) {
 	}
 }
 
+func assertStrategyRecords(t *testing.T, got []TableStrategyRecord, wantTables []string, wantStrategies []KeyStrategy, wantResumable []bool) {
+	t.Helper()
+	if len(got) != len(wantTables) {
+		t.Fatalf("strategies = %+v, want %d records", got, len(wantTables))
+	}
+	for i := range wantTables {
+		if got[i].Table != wantTables[i] {
+			t.Fatalf("record[%d].table = %q, want %q", i, got[i].Table, wantTables[i])
+		}
+		if got[i].Strategy != wantStrategies[i] {
+			t.Fatalf("record[%d].strategy = %q, want %q", i, got[i].Strategy, wantStrategies[i])
+		}
+		if got[i].Resumable != wantResumable[i] {
+			t.Fatalf("record[%d].resumable = %t, want %t", i, got[i].Resumable, wantResumable[i])
+		}
+		if wantResumable[i] {
+			if len(got[i].KeyColumns) == 0 || got[i].Fingerprint == "" {
+				t.Fatalf("record[%d] missing key identity: %+v", i, got[i])
+			}
+		} else if len(got[i].KeyColumns) != 0 || got[i].Fingerprint != "" {
+			t.Fatalf("record[%d] should omit key identity: %+v", i, got[i])
+		}
+	}
+}
+
 func captureStderr(fn func()) string {
 	old := os.Stderr
 	r, w, err := os.Pipe()
@@ -1414,7 +1439,7 @@ func TestDumpSlowMixedDispatchAndWarnings(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
 	stderr := captureStderr(func() {
-		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection())
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1424,6 +1449,18 @@ func TestDumpSlowMixedDispatchAndWarnings(t *testing.T) {
 	}
 
 	assertFallbackWarningsInOrder(t, stderr, "public.logs", "public.notes")
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil {
+		t.Fatal("expected provenance")
+	}
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{"public.events", "public.logs", "public.notes", "public.users"},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyNormalStream, KeyStrategyNormalStream, KeyStrategyPrimaryKey},
+		[]bool{true, false, false, true},
+	)
 	for _, name := range []string{"logs", "notes", "events"} {
 		if _, err := os.Stat(slowCheckpointPath(dir, db.Table{Schema: "public", Name: name})); err == nil {
 			t.Fatalf("%s should not leave checkpoint", name)
@@ -1490,6 +1527,14 @@ func TestDumpChunkUniqueAndPKDispatch(t *testing.T) {
 	if len(meta.Provenance.ChunkTables.Requested) != 1 {
 		t.Fatalf("requested = %v", meta.Provenance.ChunkTables.Requested)
 	}
+	if len(meta.Provenance.ChunkTables.Chunked) != 1 || meta.Provenance.ChunkTables.Chunked[0] != "public.events" {
+		t.Fatalf("chunked = %v", meta.Provenance.ChunkTables.Chunked)
+	}
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{"public.events"},
+		[]KeyStrategy{KeyStrategyUniqueIndex},
+		[]bool{true},
+	)
 }
 
 func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
@@ -1531,6 +1576,14 @@ func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
 		meta.Provenance.ChunkTables.Requested[0].Normalized != "public.users" {
 		t.Fatalf("chunk provenance = %+v", meta.Provenance)
 	}
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{"public.events", "public.logs", "public.notes", "public.users"},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyNormalStream, KeyStrategyNormalStream, KeyStrategyPrimaryKey},
+		[]bool{true, false, false, true},
+	)
+	if len(meta.Provenance.ChunkTables.Chunked) != 1 || meta.Provenance.ChunkTables.Chunked[0] != "public.users" {
+		t.Fatalf("chunked = %v", meta.Provenance.ChunkTables.Chunked)
+	}
 }
 
 func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
@@ -1565,7 +1618,7 @@ func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
 	stderr := captureStderr(func() {
-		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}),
 			WithChunkTables([]QualifiedTable{{Schema: "public", Name: "logs"}}))
 	})
 	if err != nil {
@@ -1579,6 +1632,19 @@ func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
 	if _, err := os.Stat(slowCheckpointPath(dir, db.Table{Schema: "public", Name: "logs"})); err == nil {
 		t.Fatal("fallback chunk table should not create checkpoint")
 	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil {
+		t.Fatal("expected provenance")
+	}
+	assertStrategyRecords(t, meta.Provenance.Strategies,
+		[]string{"public.logs"},
+		[]KeyStrategy{KeyStrategyNormalStream},
+		[]bool{false},
+	)
 }
 
 func TestDumpLegacyArtifactGuardBehavior(t *testing.T) {
