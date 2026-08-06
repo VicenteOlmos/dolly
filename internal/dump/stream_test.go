@@ -18,6 +18,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func streamTableSlowDefault(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) error {
@@ -1755,6 +1756,96 @@ func TestStreamTableSlowRetryNoRetryOnCanceled(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestStreamTableSlowRowsErrRetryable(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := pkUsersTable()
+	first := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "v1").
+		AddRow(2, "v2").
+		RowError(1, &pgconn.PgError{Code: "40001"})
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(first)
+	second := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "v1").
+		AddRow(2, "v2")
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(second)
+
+	dir := t.TempDir()
+	retry := slowRetryConfig{max: 3, base: time.Millisecond}
+	if err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(tableDataPath(dir, table))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2 without duplicates: %s", len(lines), data)
+	}
+}
+
+func TestStreamTableSlowRowsErrNonRetryable(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := pkUsersTable()
+	rows := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "v1").
+		RowError(0, &pgconn.PgError{Code: "22012"})
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(rows)
+
+	dir := t.TempDir()
+	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 3, base: time.Millisecond}, DefaultSlowChunkSize)
+	if err == nil || !strings.Contains(err.Error(), "iterate rows") {
+		t.Fatalf("error = %v, want iteration failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tableDataPath(dir, table)); !os.IsNotExist(err) {
+		t.Fatal("final data file must not be published")
+	}
+}
+
+func TestStreamTableSlowRowsErrExhaustion(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := pkUsersTable()
+	for range 2 {
+		rows := sqlmock.NewRows([]string{"id", "name"}).
+			AddRow(1, "v1").
+			RowError(0, &pgconn.PgError{Code: "40001"})
+		mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(rows)
+	}
+
+	dir := t.TempDir()
+	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 1, base: time.Millisecond}, DefaultSlowChunkSize)
+	if err == nil || !strings.Contains(err.Error(), "iterate rows") {
+		t.Fatalf("error = %v, want exhausted iteration failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tableDataPath(dir, table)); !os.IsNotExist(err) {
+		t.Fatal("final data file must not be published")
 	}
 }
 
