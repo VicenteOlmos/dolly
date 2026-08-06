@@ -3,7 +3,9 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	_ "github.com/VicenteOlmos/dolly/internal/db" // registers pgx driver
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/restore"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ProgressEvent reports step-granularity progress during a clone operation.
@@ -118,21 +121,86 @@ func CreateDatabase(ctx context.Context, adminDSN, dbName string) error {
 // dropDatabaseFunc is overridable for testing cleanup paths.
 var dropDatabaseFunc = dropDatabase
 
-// dropDatabase connects to the admin maintenance DB and drops the named
-// database. Errors are best-effort — this is a cleanup helper where the
-// primary error (what caused the cleanup) matters more.
+const (
+	cleanupDropMaxAttempts = 3
+	cleanupDropBase        = 100 * time.Millisecond
+	cleanupDropBackoffCap  = time.Second
+)
+
+const terminateBackendsSQL = `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`
+
+func pgErrorCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
+
+func terminateDatabaseBackends(ctx context.Context, dbConn *sql.DB, dbName string) {
+	rows, err := dbConn.QueryContext(ctx, terminateBackendsSQL, dbName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: terminate backends on %q: %v\n", dbName, err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var terminated sql.NullBool
+		if err := rows.Scan(&terminated); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: terminate backends on %q: %v\n", dbName, err)
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: terminate backends on %q: %v\n", dbName, err)
+	}
+}
+
+func cleanupDropBackoff(ctx context.Context, attempt int) error {
+	delay := cleanupDropBase << attempt
+	if delay > cleanupDropBackoffCap {
+		delay = cleanupDropBackoffCap
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// dropDatabase terminates sessions scoped to dbName, then drops the database
+// with bounded retries for races that reconnect before DROP completes.
 func dropDatabase(ctx context.Context, adminDSN, dbName string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("drop database: %w", err)
+	}
 	dbConn, err := sqlOpenDB(adminDSN)
 	if err != nil {
 		return fmt.Errorf("drop database: open admin connection: %w", err)
 	}
 	defer dbConn.Close()
 
-	_, err = dbConn.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, quoteIdentifier(dbName)))
-	if err != nil {
-		return fmt.Errorf("drop database: %w", err)
+	var lastErr error
+	for attempt := 0; attempt < cleanupDropMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("drop database: %w", err)
+		}
+		terminateDatabaseBackends(ctx, dbConn, dbName)
+		_, lastErr = dbConn.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, quoteIdentifier(dbName)))
+		if lastErr == nil {
+			return nil
+		}
+		if pgErrorCode(lastErr) != "55006" || attempt == cleanupDropMaxAttempts-1 {
+			break
+		}
+		if err := cleanupDropBackoff(ctx, attempt); err != nil {
+			return fmt.Errorf("drop database: %w", err)
+		}
 	}
-	return nil
+	return fmt.Errorf("drop database: %w", lastErr)
 }
 
 // Run orchestrates dump → restore to clone a database.
