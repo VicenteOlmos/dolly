@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"io"
@@ -349,7 +350,7 @@ func TestSchemaReplayStrategyExecutePassesSanitizationDumpOpts(t *testing.T) {
 	defer func() { restoreFunc = origRestore }()
 
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error { return nil }
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 	origListSchemas := listSchemaNamesFunc
@@ -418,7 +419,7 @@ func TestSchemaReplayStrategyKeepsExplicitDumpSchemas(t *testing.T) {
 	defer func() { restoreFunc = origRestore }()
 
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error { return nil }
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 	if err := (&SchemaReplayStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), Options{
@@ -1077,7 +1078,7 @@ func TestCopyStreamStrategyExecute(t *testing.T) {
 	defer func() { loadSchemasFunc = origLoadSchemas }()
 
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error {
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error {
 		return nil
 	}
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
@@ -1241,7 +1242,7 @@ func TestCopyStreamPgDumpArgsFollowSchemaScope(t *testing.T) {
 			defer func() { openCopyConn = origOpenCopy }()
 
 			origRestoreSeq := restoreSequencesFunc
-			restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+			restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error { return nil }
 			defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 			mockRunner := &mockCommandRunner{}
@@ -1599,6 +1600,83 @@ func expectRestoreOneSequence(
 	mock.ExpectCommit()
 }
 
+var seqListCols = []string{"schemaname", "sequencename", "last_value", "start_value"}
+
+func newSeqRestoreMocks(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *sql.DB, sqlmock.Sqlmock) {
+	t.Helper()
+	srcDB, srcMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgtDB, tgtMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srcDB.Close(); tgtDB.Close() })
+	return srcDB, srcMock, tgtDB, tgtMock
+}
+
+func expectSeqListScoped(mock sqlmock.Sqlmock, schemas []string, rows *sqlmock.Rows) {
+	if rows == nil {
+		rows = sqlmock.NewRows(seqListCols)
+	}
+	ph := make([]string, len(schemas))
+	args := make([]driver.Value, len(schemas))
+	for i, s := range schemas {
+		ph[i] = fmt.Sprintf(`\$%d`, i+1)
+		args[i] = s
+	}
+	pattern := fmt.Sprintf(
+		`SELECT schemaname, sequencename, last_value, start_value[\s\S]*schemaname IN \(%s\)[\s\S]*ORDER BY schemaname, sequencename`,
+		strings.Join(ph, `,\s*`),
+	)
+	mock.ExpectQuery(pattern).WithArgs(args...).WillReturnRows(rows)
+}
+
+func expectSeqListLegacy(mock sqlmock.Sqlmock, rows *sqlmock.Rows) {
+	mock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value[\s\S]*ORDER BY schemaname, sequencename`).
+		WillReturnRows(rows)
+}
+
+func assertSeqRestoreMocksMet(t *testing.T, srcMock, tgtMock sqlmock.Sqlmock) {
+	t.Helper()
+	if err := srcMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("source: %v", err)
+	}
+	if err := tgtMock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("target: %v", err)
+	}
+}
+
+func stubCopyStreamExecuteEnv(t *testing.T, listReturn []string) {
+	t.Helper()
+	mockDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mockDB.Close() })
+
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
+	t.Cleanup(func() { sqlOpenDB = origOpenDB })
+
+	origListSchemas := listSchemaNamesFunc
+	listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error) {
+		return append([]string(nil), listReturn...), nil
+	}
+	t.Cleanup(func() { listSchemaNamesFunc = origListSchemas })
+
+	origLoadSchemas := loadSchemasFunc
+	loadSchemasFunc = func(ctx context.Context, q *sql.DB, schemas []string) ([]db.Table, error) {
+		return []db.Table{{Schema: "public", Name: "users"}}, nil
+	}
+	t.Cleanup(func() { loadSchemasFunc = origLoadSchemas })
+
+	origOpenCopy := openCopyConn
+	openCopyConn = func(ctx context.Context, dsn string) (copyConn, error) { return &mockCopyConn{}, nil }
+	t.Cleanup(func() { openCopyConn = origOpenCopy })
+}
+
 func TestRestoreSequences(t *testing.T) {
 	srcDB, srcMock, err := sqlmock.New()
 	if err != nil {
@@ -1622,7 +1700,7 @@ func TestRestoreSequences(t *testing.T) {
 	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"public"\."users_id_seq"'::regclass, 42, true\)`)
 	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"app"\."events_seq"'::regclass, 100, true\)`)
 
-	err = restoreSequences(context.Background(), srcDB, tgtDB)
+	err = restoreSequences(context.Background(), srcDB, tgtDB, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1650,7 +1728,7 @@ func TestRestoreSequencesListError(t *testing.T) {
 	srcMock.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
 		WillReturnError(errors.New("connection lost"))
 
-	err = restoreSequences(context.Background(), srcDB, tgtDB)
+	err = restoreSequences(context.Background(), srcDB, tgtDB, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1689,7 +1767,7 @@ func TestRestoreSequencesSetvalError(t *testing.T) {
 		WillReturnError(errors.New("permission denied"))
 	tgtMock.ExpectRollback()
 
-	err = restoreSequences(context.Background(), srcDB, tgtDB)
+	err = restoreSequences(context.Background(), srcDB, tgtDB, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1720,7 +1798,7 @@ func TestRestoreSequencesQuotedNames(t *testing.T) {
 
 	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"my""schema"\."user''s_seq"'::regclass, 7, true\)`)
 
-	err = restoreSequences(context.Background(), srcDB, tgtDB)
+	err = restoreSequences(context.Background(), srcDB, tgtDB, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1753,7 +1831,7 @@ func TestRestoreSequencesNeverCalled(t *testing.T) {
 
 	expectRestoreOneSequence(t, tgtMock, 1, false, "")
 
-	err = restoreSequences(context.Background(), srcDB, tgtDB)
+	err = restoreSequences(context.Background(), srcDB, tgtDB, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1781,7 +1859,7 @@ func runRestoreSequencesCase(t *testing.T, tgtLast int64, tgtCalled bool, setval
 		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
 			AddRow("public", "users_id_seq", 10, 1))
 	expectRestoreOneSequence(t, tgtMock, tgtLast, tgtCalled, setvalSQL)
-	if err := restoreSequences(context.Background(), srcDB, tgtDB); err != nil {
+	if err := restoreSequences(context.Background(), srcDB, tgtDB, nil); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if err := srcMock.ExpectationsWereMet(); err != nil {
@@ -1795,6 +1873,171 @@ func runRestoreSequencesCase(t *testing.T, tgtLast int64, tgtCalled bool, setval
 func TestSequenceMonotonicRestore(t *testing.T) {
 	runRestoreSequencesCase(t, 10, false, `SELECT setval\('"public"\."users_id_seq"'::regclass, 10, true\)`)
 	runRestoreSequencesCase(t, 20, true, "")
+}
+
+func TestRestoreSequencesScopedQueryBehavior(t *testing.T) {
+	tests := []struct {
+		name    string
+		schemas []string
+	}{
+		{name: "zero rows", schemas: []string{"app", "audit"}},
+		{name: "injection shaped names", schemas: []string{"tenant; DROP SCHEMA public; --"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srcDB, srcMock, tgtDB, tgtMock := newSeqRestoreMocks(t)
+			expectSeqListScoped(srcMock, tt.schemas, nil)
+			if err := restoreSequences(context.Background(), srcDB, tgtDB, tt.schemas); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertSeqRestoreMocksMet(t, srcMock, tgtMock)
+		})
+	}
+}
+
+func TestRestoreSequencesEmptyScopeLegacyQuery(t *testing.T) {
+	srcDB, srcMock, tgtDB, tgtMock := newSeqRestoreMocks(t)
+
+	rows := sqlmock.NewRows(seqListCols).
+		AddRow("app", "events_seq", 100, 1).
+		AddRow("public", "users_id_seq", 42, 1)
+	expectSeqListLegacy(srcMock, rows)
+	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"app"\."events_seq"'::regclass, 100, true\)`)
+	expectRestoreOneSequence(t, tgtMock, 1, false, `SELECT setval\('"public"\."users_id_seq"'::regclass, 42, true\)`)
+
+	if err := restoreSequences(context.Background(), srcDB, tgtDB, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertSeqRestoreMocksMet(t, srcMock, tgtMock)
+}
+
+func TestRestoreSequencesListFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(sqlmock.Sqlmock)
+		wantSub string
+	}{
+		{
+			name: "scan error",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
+					WillReturnRows(sqlmock.NewRows(seqListCols).
+						AddRow("public", "users_id_seq", "not-a-number", 1))
+			},
+			wantSub: "scan sequence",
+		},
+		{
+			name: "rows.Err",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
+					WillReturnRows(sqlmock.NewRows(seqListCols).
+						AddRow("public", "users_id_seq", 42, 1).
+						RowError(0, errors.New("row iteration failed")))
+			},
+			wantSub: "list sequences",
+		},
+		{
+			name: "canceled context",
+			setup: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(`SELECT schemaname, sequencename, last_value, start_value`).
+					WillReturnError(context.Canceled)
+			},
+			wantSub: "list sequences",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srcDB, srcMock, tgtDB, _ := newSeqRestoreMocks(t)
+
+			ctx := context.Background()
+			if tt.name == "canceled context" {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			tt.setup(srcMock)
+			err := restoreSequences(ctx, srcDB, tgtDB, nil)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !contains(err.Error(), tt.wantSub) {
+				t.Fatalf("error = %v, want substring %q", err, tt.wantSub)
+			}
+		})
+	}
+}
+
+func TestCopyStreamRestoreSequencesPassesOptionScope(t *testing.T) {
+	const srcDSN = "postgres://u@h-a:5432/db_src"
+
+	tests := []struct {
+		name       string
+		opts       Options
+		wantScope  []string
+		listReturn []string
+	}{
+		{
+			name: "dump over restore precedence",
+			opts: Options{
+				DumpOpts:    []dump.Option{dump.WithSchemas([]string{"dump_win"})},
+				RestoreOpts: []restore.Option{restore.WithSchemas([]string{"restore_lose"})},
+			},
+			wantScope:  []string{"dump_win"},
+			listReturn: []string{"public"},
+		},
+		{
+			name: "restore fallback",
+			opts: Options{
+				RestoreOpts: []restore.Option{restore.WithSchemas([]string{"from_restore"})},
+			},
+			wantScope:  []string{"from_restore"},
+			listReturn: []string{"public"},
+		},
+		{
+			name:       "empty scope despite table enumeration",
+			opts:       Options{},
+			wantScope:  nil,
+			listReturn: []string{"public", "app"},
+		},
+		{
+			name: "injection shaped schema text",
+			opts: Options{
+				DumpOpts: []dump.Option{dump.WithSchemas([]string{"tenant; DROP SCHEMA public; --"})},
+			},
+			wantScope:  []string{"tenant; DROP SCHEMA public; --"},
+			listReturn: []string{"public"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubCopyStreamExecuteEnv(t, tt.listReturn)
+
+			var capturedScope []string
+			restoreCalled := false
+			origRestoreSeq := restoreSequencesFunc
+			restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error {
+				restoreCalled = true
+				capturedScope = append([]string(nil), schemaNames...)
+				return nil
+			}
+			t.Cleanup(func() { restoreSequencesFunc = origRestoreSeq })
+
+			tt.opts.SourceDSN = srcDSN
+			tt.opts.CloneName = "db_clone"
+			tt.opts.SkipCreate = true
+
+			if err := (&CopyStreamStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), tt.opts); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if !restoreCalled {
+				t.Fatal("restoreSequencesFunc was not called")
+			}
+			if !sliceEqual(capturedScope, tt.wantScope) {
+				t.Fatalf("captured scope = %v, want %v", capturedScope, tt.wantScope)
+			}
+		})
+	}
 }
 
 func TestQuoteLiteral(t *testing.T) {
@@ -2223,7 +2466,7 @@ func TestSequenceMonotonicSchemaReplayOnce(t *testing.T) {
 
 	var restoreSeqCalls int
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error {
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error {
 		restoreSeqCalls++
 		return nil
 	}

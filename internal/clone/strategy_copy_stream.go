@@ -184,6 +184,7 @@ func (s *CopyStreamStrategy) cleanup(adminDSN, cloneName string, primary error) 
 // postCreate handles all steps after database creation (or when SkipCreate is set).
 func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB *sql.DB, targetDSN string, sorted []db.Table, startedAt time.Time, totalSteps, currentStep int) error {
 	step := currentStep
+	schemaNames := SchemasFromOptions(opts)
 
 	// Replay schema using pg_dump --schema-only | psql
 	runner := commandRunnerForProgress(s.Runner, opts.ProgressFn)
@@ -200,8 +201,8 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 		return fmt.Errorf("source and target DSNs have different passwords: copy-stream pipe shares a single PGPASSWORD environment; use matching credentials or connect via ~/.pgpass")
 	}
 	srcArgs := []string{"--schema-only", "--no-owner", "--no-acl"}
-	if schemas := SchemasFromOptions(opts); len(schemas) > 0 {
-		for _, s := range schemas {
+	if len(schemaNames) > 0 {
+		for _, s := range schemaNames {
 			srcArgs = append(srcArgs, "--schema="+s)
 		}
 	}
@@ -270,7 +271,7 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 		Total:   totalSteps,
 		Elapsed: time.Since(startedAt),
 	})
-	if err := restoreSequencesFunc(ctx, srcDB, tgtDB); err != nil {
+	if err := restoreSequencesFunc(ctx, srcDB, tgtDB, schemaNames); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
 
@@ -318,16 +319,32 @@ func copyTable(ctx context.Context, srcConn, tgtConn copyConn, schema, tableName
 // restoreSequences reads user-visible sequence last values from source and
 // applies them on target using setval. This prevents duplicate IDs on
 // serial/identity-backed tables after a clone.
-func restoreSequences(ctx context.Context, srcDB, tgtDB *sql.DB) error {
-	const listQuery = `
+// nil or empty schemaNames restores all user schemas; nonempty input limits
+// enumeration to the listed schemas in caller order.
+func restoreSequences(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error {
+	const baseQuery = `
 		SELECT schemaname, sequencename, last_value, start_value
 		FROM pg_sequences
 		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
 		  AND schemaname NOT LIKE 'pg_temp_%'
-		  AND schemaname NOT LIKE 'pg_toast_%'
-		ORDER BY schemaname, sequencename`
+		  AND schemaname NOT LIKE 'pg_toast_%'`
 
-	rows, err := srcDB.QueryContext(ctx, listQuery)
+	var (
+		listQuery string
+		args      []any
+	)
+	if len(schemaNames) > 0 {
+		inClause, scopeArgs := schemaINClause(schemaNames)
+		listQuery = baseQuery + fmt.Sprintf(`
+		  AND schemaname IN (%s)
+		ORDER BY schemaname, sequencename`, inClause)
+		args = scopeArgs
+	} else {
+		listQuery = baseQuery + `
+		ORDER BY schemaname, sequencename`
+	}
+
+	rows, err := srcDB.QueryContext(ctx, listQuery, args...)
 	if err != nil {
 		return fmt.Errorf("list sequences: %w", err)
 	}
