@@ -470,7 +470,7 @@ func TestRunSkipsCreate(t *testing.T) {
 	defer func() { restoreFunc = origRestore }()
 
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error { return nil }
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 	origLookPath := lookPath
@@ -531,7 +531,7 @@ func TestRunRewritesCustomTargetURLToCloneName(t *testing.T) {
 	defer func() { restoreFunc = origRestore }()
 
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error { return nil }
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 	origLookPath := lookPath
@@ -645,7 +645,7 @@ func TestRunCreatesTempChildUnderDumpDir(t *testing.T) {
 	defer func() { restoreFunc = origRestore }()
 
 	origRestoreSeq := restoreSequencesFunc
-	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB) error { return nil }
+	restoreSequencesFunc = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemaNames []string) error { return nil }
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 	origLookPath := lookPath
