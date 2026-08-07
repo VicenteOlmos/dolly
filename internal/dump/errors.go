@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrNoTables marks dumps that discovered or selected zero tables.
@@ -90,4 +91,21 @@ func guardSequenceScope(seqs []SequenceState, schemas []string) error {
 		}
 	}
 	return nil
+}
+
+// slowRetryable reports whether a row-iteration failure is transient and safe
+// to retry from the beginning of the still-buffered chunk.
+func slowRetryable(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.Code {
+	case "40001", "40P01":
+		return true
+	case "08000", "08001", "08004", "08006", "08007":
+		return true
+	default:
+		return false
+	}
 }

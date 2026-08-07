@@ -2,9 +2,11 @@ package dump
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestNoTablesErrorIsSentinel(t *testing.T) {
@@ -45,5 +47,27 @@ func TestGuardSelectedTablesRejectsEmpty(t *testing.T) {
 	}
 	if len(noTables.Schemas) != 2 || noTables.Schemas[0] != "app" {
 		t.Fatalf("schemas = %v", noTables.Schemas)
+	}
+}
+
+func TestSlowRetryable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "recovery conflict", err: &pgconn.PgError{Code: "40001"}, want: true},
+		{name: "deadlock", err: &pgconn.PgError{Code: "40P01"}, want: true},
+		{name: "connection failure", err: &pgconn.PgError{Code: "08006"}, want: true},
+		{name: "wrapped", err: fmt.Errorf("iterate: %w", &pgconn.PgError{Code: "40001"}), want: true},
+		{name: "data error", err: &pgconn.PgError{Code: "22012"}},
+		{name: "plain error", err: errors.New("connection reset")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := slowRetryable(tt.err); got != tt.want {
+				t.Fatalf("slowRetryable() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
