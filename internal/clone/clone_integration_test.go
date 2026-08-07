@@ -139,6 +139,55 @@ func TestCloneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDropDatabaseTerminatesActiveTargetAndUnblocksRecreate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+
+	ctx := context.Background()
+	name := fmt.Sprintf("dolly_cleanup_tgt_%d", os.Getpid())
+	adminDSN, err := RewriteDSN(dsn, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	_, _ = admin.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, name))
+	if err := CreateDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	targetDSN, err := RewriteDSN(dsn, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := sql.Open("pgx", targetDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	if err := blocker.PingContext(ctx); err != nil {
+		t.Fatalf("open active target session: %v", err)
+	}
+
+	if err := dropDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("cleanup target: %v", err)
+	}
+	if err := CreateDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("immediate recreate: %v", err)
+	}
+	if err := dropDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("final cleanup: %v", err)
+	}
+}
+
 func createIntegrationSource(t *testing.T, db *sql.DB) {
 	t.Helper()
 	ctx := context.Background()

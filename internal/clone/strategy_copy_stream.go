@@ -65,7 +65,9 @@ var listSchemaNamesFunc = func(ctx context.Context, q *sql.DB) ([]string, error)
 // restoreSequencesFunc wraps restoreSequences for testability.
 var restoreSequencesFunc = restoreSequences
 
-var copyStreamCleanupTimeout = 10 * time.Second
+// copyStreamCleanupTimeout bounds session termination and DROP retries after a
+// failed clone while remaining independent from the canceled parent context.
+var copyStreamCleanupTimeout = 30 * time.Second
 
 // CopyStreamStrategy streams table data directly from source to target
 // using pgx native COPY without intermediate NDJSON files.
