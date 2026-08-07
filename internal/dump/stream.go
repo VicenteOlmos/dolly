@@ -783,85 +783,102 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		}
 
 		chunkDone, chunkErr := func() (bool, error) {
-			var rows *sql.Rows
 			for attempt := 0; ; attempt++ {
-				var err error
-				rows, err = q.QueryContext(ctx, query, args...)
-				if err == nil {
-					break
-				}
-				if ctx.Err() != nil {
-					return false, ctx.Err()
-				}
-				if maxAttempts == 0 || attempt >= maxAttempts {
-					return false, fmt.Errorf("query table %q chunk: %w", table.Name, err)
-				}
-				backoff := baseDelay << uint(attempt)
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-				select {
-				case <-time.After(backoff):
-				case <-ctx.Done():
-					return false, ctx.Err()
-				}
-			}
-			defer rows.Close()
-
-			rowCount := 0
-			var chunkLines [][]byte
-			var chunkLast []any
-			for rows.Next() {
-				values := make([]any, len(table.Columns))
-				valuePtrs := make([]any, len(table.Columns))
-				for i := range values {
-					valuePtrs[i] = &values[i]
-				}
-
-				if err := rows.Scan(valuePtrs...); err != nil {
-					return false, fmt.Errorf("scan row for table %q: %w", table.Name, err)
-				}
-
-				rowMap := make(map[string]any, len(table.Columns))
-				for i, name := range colNames {
-					rowMap[name] = values[i]
-				}
-
-				rowMap, err := applyRowTransform(table, rowTransform, rowMap)
+				rows, err := q.QueryContext(ctx, query, args...)
 				if err != nil {
-					return false, err
+					// Preserve the existing contract: query startup retries any
+					// error under the configured bounded policy.
+					if ctx.Err() != nil {
+						return false, ctx.Err()
+					}
+					if maxAttempts == 0 || attempt >= maxAttempts {
+						return false, fmt.Errorf("query table %q chunk: %w", table.Name, err)
+					}
+					backoff := baseDelay << uint(attempt)
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+					select {
+					case <-time.After(backoff):
+					case <-ctx.Done():
+						return false, ctx.Err()
+					}
+					continue
 				}
 
-				data, err := json.Marshal(rowMap)
-				if err != nil {
-					return false, fmt.Errorf("marshal row for table %q: %w", table.Name, err)
+				rowCount := 0
+				var chunkLines [][]byte
+				var chunkLast []any
+				for rows.Next() {
+					values := make([]any, len(table.Columns))
+					valuePtrs := make([]any, len(table.Columns))
+					for i := range values {
+						valuePtrs[i] = &values[i]
+					}
+
+					if err := rows.Scan(valuePtrs...); err != nil {
+						_ = rows.Close()
+						return false, fmt.Errorf("scan row for table %q: %w", table.Name, err)
+					}
+
+					rowMap := make(map[string]any, len(table.Columns))
+					for i, name := range colNames {
+						rowMap[name] = values[i]
+					}
+
+					rowMap, err = applyRowTransform(table, rowTransform, rowMap)
+					if err != nil {
+						_ = rows.Close()
+						return false, err
+					}
+
+					data, marshalErr := json.Marshal(rowMap)
+					if marshalErr != nil {
+						_ = rows.Close()
+						return false, fmt.Errorf("marshal row for table %q: %w", table.Name, marshalErr)
+					}
+
+					chunkLines = append(chunkLines, data)
+					chunkLast = make([]any, len(keyIndices))
+					for j, idx := range keyIndices {
+						chunkLast[j] = values[idx]
+					}
+					rowCount++
 				}
 
-				chunkLines = append(chunkLines, data)
-				chunkLast = make([]any, len(keyIndices))
-				for j, idx := range keyIndices {
-					chunkLast[j] = values[idx]
+				iterateErr := rows.Err()
+				_ = rows.Close()
+				if iterateErr != nil {
+					wrapped := fmt.Errorf("iterate rows for table %q: %w", table.Name, iterateErr)
+					if !slowRetryable(iterateErr) || maxAttempts == 0 || attempt >= maxAttempts {
+						return false, wrapped
+					}
+					backoff := baseDelay << uint(attempt)
+					if backoff > maxBackoff {
+						backoff = maxBackoff
+					}
+					select {
+					case <-time.After(backoff):
+					case <-ctx.Done():
+						return false, ctx.Err()
+					}
+					continue
 				}
-				rowCount++
+
+				for _, data := range chunkLines {
+					if _, err := w.Write(data); err != nil {
+						return false, fmt.Errorf("write row for table %q: %w", table.Name, err)
+					}
+					if err := w.WriteByte('\n'); err != nil {
+						return false, fmt.Errorf("write row for table %q: %w", table.Name, err)
+					}
+				}
+				if rowCount > 0 {
+					lastKey = chunkLast
+				}
+
+				return rowCount < chunkSize, nil
 			}
-
-			if err := rows.Err(); err != nil {
-				return false, fmt.Errorf("iterate rows for table %q: %w", table.Name, err)
-			}
-
-			for _, data := range chunkLines {
-				if _, err := w.Write(data); err != nil {
-					return false, fmt.Errorf("write row for table %q: %w", table.Name, err)
-				}
-				if err := w.WriteByte('\n'); err != nil {
-					return false, fmt.Errorf("write row for table %q: %w", table.Name, err)
-				}
-			}
-			if rowCount > 0 {
-				lastKey = chunkLast
-			}
-
-			return rowCount < chunkSize, nil
 		}()
 		if chunkErr != nil {
 			return chunkErr
