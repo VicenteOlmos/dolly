@@ -3,7 +3,7 @@ module github.com/VicenteOlmos/dolly
 go 1.26.3
 
 require (
-	charm.land/bubbletea/v2 v2.0.8
+	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/creack/pty v1.1.24
