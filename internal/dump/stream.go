@@ -455,7 +455,7 @@ func streamTableToPath(ctx context.Context, q querier, table db.Table, path stri
 			return 0, err
 		}
 
-		data, err := json.Marshal(rowMap)
+		data, err := marshalRow(table, rowMap)
 		if err != nil {
 			return 0, fmt.Errorf("marshal row for table %q: %w", table.Name, err)
 		}
@@ -563,7 +563,7 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 			return 0, err
 		}
 
-		data, err := json.Marshal(rowMap)
+		data, err := marshalRow(table, rowMap)
 		if err != nil {
 			return 0, fmt.Errorf("marshal row for table %q: %w", table.Name, err)
 		}
@@ -847,7 +847,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 						return false, 0, err
 					}
 
-					data, marshalErr := json.Marshal(rowMap)
+					data, marshalErr := marshalRow(table, rowMap)
 					if marshalErr != nil {
 						_ = rows.Close()
 						return false, 0, fmt.Errorf("marshal row for table %q: %w", table.Name, marshalErr)

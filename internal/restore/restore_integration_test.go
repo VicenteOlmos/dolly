@@ -411,6 +411,193 @@ func TestIntegrationRestoreWithoutTransaction(t *testing.T) {
 	if count != 4 {
 		t.Fatalf("departments count = %d, want 4", count)
 	}
+
+	var hiredOn time.Time
+	if err := conn.QueryRowContext(ctx, `SELECT hired_on FROM tbl_a WHERE id = 1`).Scan(&hiredOn); err != nil {
+		t.Fatal(err)
+	}
+	if hiredOn.Format("2006-01-02") != "2021-03-15" {
+		t.Fatalf("hired_on = %s, want 2021-03-15", hiredOn.Format("2006-01-02"))
+	}
+}
+
+func TestIntegrationCopyRestoreTimestamps(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	tableName, dir, table := setupTimestampRestoreFixture(t, conn, ctx)
+	path, err := resolveDataFile(dir, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTimestampDumpShape(t, path)
+
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`TRUNCATE %s`, tableName)); err != nil {
+		t.Fatal(err)
+	}
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	if err := Restore(ctx, conn, dir, WithoutTransaction(), WithDSN(dsn), WithSchemas([]string{"public"})); err != nil {
+		t.Fatalf("copy restore: %v", err)
+	}
+	assertTimestampFixtureRows(t, conn, ctx, tableName)
+
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`TRUNCATE %s`, tableName)); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{"con_zona":"2023-06-22T09:36:35-04:00","id":1,"sin_zona":"2023-06-22T13:36:35Z","solo_fecha":"2023-06-22T00:00:00Z"}` + "\n" +
+		`{"con_zona":"infinity","id":2,"sin_zona":"infinity","solo_fecha":"infinity"}` + "\n" +
+		`{"con_zona":"-infinity","id":3,"sin_zona":"-infinity","solo_fecha":"-infinity"}` + "\n")
+	if err := os.WriteFile(path, legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadTableCopy(ctx, dsn, table, path); err != nil {
+		t.Fatalf("legacy Z dump copy: %v", err)
+	}
+	assertTimestampFixtureRows(t, conn, ctx, tableName)
+}
+
+func TestIntegrationRestoreTimestampsTransactional(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	tableName, dir, _ := setupTimestampRestoreFixture(t, conn, ctx)
+
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`TRUNCATE %s`, tableName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(ctx, conn, dir, WithSchemas([]string{"public"})); err != nil {
+		t.Fatalf("transactional restore: %v", err)
+	}
+	assertTimestampFixtureRows(t, conn, ctx, tableName)
+}
+
+func setupTimestampRestoreFixture(t *testing.T, conn *sql.DB, ctx context.Context) (string, string, db.Table) {
+	t.Helper()
+	tableName := fmt.Sprintf("dolly_ts_%d", time.Now().UnixNano())
+	create := fmt.Sprintf(`
+		CREATE TABLE %s (
+			id int PRIMARY KEY,
+			sin_zona timestamp without time zone,
+			con_zona timestamp with time zone,
+			solo_fecha date
+		)`, tableName)
+	if _, err := conn.ExecContext(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS %s`, tableName))
+	})
+	insert := fmt.Sprintf(`INSERT INTO %s VALUES
+		(1, '2023-06-22 13:36:35', '2023-06-22 13:36:35+00', '2023-06-22'),
+		(2, 'infinity', 'infinity', 'infinity'),
+		(3, '-infinity', '-infinity', '-infinity')`, tableName)
+	if _, err := conn.ExecContext(ctx, insert); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	policy := dump.SelectionPolicy{
+		Includes: []dump.SelectorEntry{
+			{Table: dump.QualifiedTable{Schema: "public", Name: tableName}},
+		},
+	}
+	if err := dump.Dump(ctx, conn, dir, dump.WithTableSelection(policy, nil), dump.WithoutSequences()); err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table db.Table
+	for _, candidate := range meta.Tables {
+		if candidate.Name == tableName {
+			table = candidate
+			break
+		}
+	}
+	if table.Name == "" {
+		t.Fatalf("dump metadata missing %s", tableName)
+	}
+	return tableName, dir, table
+}
+
+func assertTimestampDumpShape(t *testing.T, path string) {
+	t.Helper()
+	lines, err := readNDJSONLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("ndjson lines = %d, want 3", len(lines))
+	}
+	byID := make(map[int]map[string]any, 3)
+	for _, line := range lines {
+		var dumped map[string]any
+		if err := json.Unmarshal([]byte(line), &dumped); err != nil {
+			t.Fatal(err)
+		}
+		id, _ := dumped["id"].(float64)
+		byID[int(id)] = dumped
+	}
+	sinZona, _ := byID[1]["sin_zona"].(string)
+	if sinZona == "" || strings.Contains(sinZona, "Z") || strings.Contains(sinZona, "+") {
+		t.Fatalf("naive timestamp dump %q asserted a time zone", sinZona)
+	}
+	soloFecha, _ := byID[1]["solo_fecha"].(string)
+	if soloFecha != "2023-06-22" {
+		t.Fatalf("date dump = %q, want 2023-06-22", soloFecha)
+	}
+	assertDumpedInfinityMap(t, byID[2], "infinity")
+	assertDumpedInfinityMap(t, byID[3], "-infinity")
+}
+
+func assertDumpedInfinityMap(t *testing.T, dumped map[string]any, want string) {
+	t.Helper()
+	if dumped == nil {
+		t.Fatalf("missing dump row for %s", want)
+	}
+	for _, col := range []string{"sin_zona", "con_zona", "solo_fecha"} {
+		got, _ := dumped[col].(string)
+		if got != want {
+			t.Fatalf("%s dump = %v (%T), want %q", col, dumped[col], dumped[col], want)
+		}
+	}
+}
+
+func assertTimestampFixtureRows(t *testing.T, conn *sql.DB, ctx context.Context, tableName string) {
+	t.Helper()
+	assertTimestampRow(t, conn, ctx, tableName)
+	assertInfinityTextRow(t, conn, ctx, tableName, 2, "infinity")
+	assertInfinityTextRow(t, conn, ctx, tableName, 3, "-infinity")
+}
+
+func assertTimestampRow(t *testing.T, conn *sql.DB, ctx context.Context, tableName string) {
+	t.Helper()
+	var naive, aware, day time.Time
+	query := fmt.Sprintf(`SELECT sin_zona, con_zona, solo_fecha FROM %s WHERE id = 1`, tableName)
+	if err := conn.QueryRowContext(ctx, query).Scan(&naive, &aware, &day); err != nil {
+		t.Fatal(err)
+	}
+	if naive.Format("2006-01-02 15:04:05") != "2023-06-22 13:36:35" {
+		t.Fatalf("sin_zona = %s, want 2023-06-22 13:36:35", naive.Format("2006-01-02 15:04:05"))
+	}
+	if !aware.UTC().Equal(time.Date(2023, 6, 22, 13, 36, 35, 0, time.UTC)) {
+		t.Fatalf("con_zona = %s, want 2023-06-22 13:36:35 UTC", aware.UTC())
+	}
+	if day.Format("2006-01-02") != "2023-06-22" {
+		t.Fatalf("solo_fecha = %s, want 2023-06-22", day.Format("2006-01-02"))
+	}
+}
+
+func assertInfinityTextRow(t *testing.T, conn *sql.DB, ctx context.Context, tableName string, id int, want string) {
+	t.Helper()
+	var naive, aware, day string
+	query := fmt.Sprintf(`SELECT sin_zona::text, con_zona::text, solo_fecha::text FROM %s WHERE id = %d`, tableName, id)
+	if err := conn.QueryRowContext(ctx, query).Scan(&naive, &aware, &day); err != nil {
+		t.Fatal(err)
+	}
+	if naive != want || aware != want || day != want {
+		t.Fatalf("id %d infinity texts = (%q, %q, %q), want %q", id, naive, aware, day, want)
+	}
 }
 
 func TestIntegrationLoadTableCopy(t *testing.T) {
