@@ -166,6 +166,63 @@ func TestPublishParallelArtifactsPublishesInPlanOrder(t *testing.T) {
 	}
 }
 
+func TestParallelPublishMetadataRowCountsFromStreamSeam(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "users", RowCount: rowCountPtr(0)},
+		{Schema: "public", Name: "orders", RowCount: rowCountPtr(0)},
+	}
+	assignDataFiles(tables)
+	dir, staging := mustStaging(t)
+	want := map[string]int64{"users": 3, "orders": 7}
+	withParallelStream(t, func(_ context.Context, _ querier, table db.Table, path string, _ RowTransform) (int64, error) {
+		n := want[table.Name]
+		var b strings.Builder
+		for i := int64(0); i < n; i++ {
+			b.WriteString("{}\n")
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return 0, err
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+			return 0, err
+		}
+		return n, nil
+	})
+	withTestWorkerSessions(t, stubQuerier{})
+	plan := &ParallelPlan{
+		cfg:         config{workers: 2},
+		outputDir:   dir,
+		tables:      tables,
+		stagingDir:  staging,
+		startedAt:   time.Now(),
+		coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"},
+	}
+	if err := plan.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tables) != 2 {
+		t.Fatalf("tables = %d, want 2", len(meta.Tables))
+	}
+	for _, tbl := range meta.Tables {
+		got := tbl.RowCount
+		if got == nil || *got != want[tbl.Name] {
+			t.Fatalf("%s row_count = %v, want %d from stream seam", tbl.Name, got, want[tbl.Name])
+		}
+		data, err := os.ReadFile(tableDataPath(dir, tbl))
+		if err != nil {
+			t.Fatalf("%s data file: %v", tbl.Name, err)
+		}
+		if int64(strings.Count(string(data), "\n")) != *got {
+			t.Fatalf("%s ndjson lines = %d, row_count = %d", tbl.Name, strings.Count(string(data), "\n"), *got)
+		}
+	}
+}
+
 func TestParallelPlanCloseCleansUnpublished(t *testing.T) {
 	dir, staging := mustStaging(t)
 	metaTmp := filepath.Join(dir, "metadata.json.tmp")

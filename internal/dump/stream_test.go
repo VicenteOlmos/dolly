@@ -996,9 +996,12 @@ func TestStreamTableSlowResumeFromCheckpoint(t *testing.T) {
 		WithArgs(int64(500)).
 		WillReturnRows(resumeRows)
 
-	err = streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+	n, err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, DefaultSlowChunkSize)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n != 502 {
+		t.Fatalf("exported row count = %d, want 502 (500 resumed + 2 new)", n)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1213,16 +1216,19 @@ func TestStreamTableSlowSkipCompletedTable(t *testing.T) {
 	}
 
 	dir := t.TempDir()
+	finalPath := filepath.Join(dir, "users.ndjson")
 	// Pre-create the final .ndjson so the table appears already completed.
-	if err := os.WriteFile(filepath.Join(dir, "users.ndjson"), []byte(`{"id":1}`), 0o644); err != nil {
+	if err := os.WriteFile(finalPath, []byte("{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Should return nil without querying DB. sqlmock with no expectations
-	// would fail if any SQL call were made.
-	err = streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+	// Should return the existing file's row count without querying DB.
+	n, err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, DefaultSlowChunkSize)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("exported row count = %d, want 3 from already-completed file", n)
 	}
 }
 
