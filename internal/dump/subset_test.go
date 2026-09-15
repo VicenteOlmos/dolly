@@ -221,7 +221,7 @@ func TestStreamTableFilteredUsesWhere(t *testing.T) {
 		WillReturnRows(rows)
 
 	dir := t.TempDir()
-	if err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
+	if _, err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -388,7 +388,7 @@ func TestStreamTableFilteredEmptyResult(t *testing.T) {
 		WillReturnRows(rows)
 
 	dir := t.TempDir()
-	if err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
+	if _, err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 

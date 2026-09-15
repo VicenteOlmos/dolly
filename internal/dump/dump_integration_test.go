@@ -121,6 +121,8 @@ func TestIntegrationDumpMetadataAndRows(t *testing.T) {
 	if _, ok := row["name"]; !ok {
 		t.Fatal("tbl_a row missing name key")
 	}
+
+	assertMetadataRowCountsMatchFiles(t, dir, meta)
 }
 
 func TestIntegrationDumpEmptyTableFile(t *testing.T) {
@@ -239,6 +241,22 @@ func metadataTable(t *testing.T, meta Metadata, name string) db.Table {
 	return db.Table{}
 }
 
+func assertMetadataRowCountsMatchFiles(t *testing.T, dir string, meta Metadata) {
+	t.Helper()
+	for _, tbl := range meta.Tables {
+		if tbl.RowCount == nil {
+			t.Fatalf("table %s.%s missing row_count", tbl.Schema, tbl.Name)
+		}
+		lines, err := readNDJSONLines(tableDataPath(dir, tbl))
+		if err != nil {
+			t.Fatalf("read %s.%s: %v", tbl.Schema, tbl.Name, err)
+		}
+		if int64(len(lines)) != *tbl.RowCount {
+			t.Fatalf("%s.%s row_count = %d, ndjson lines = %d", tbl.Schema, tbl.Name, *tbl.RowCount, len(lines))
+		}
+	}
+}
+
 func TestIntegrationSubsetDumpTableSeed(t *testing.T) {
 	conn := openIntegrationDB(t)
 	dir := t.TempDir()
@@ -297,6 +315,8 @@ func TestIntegrationSubsetDumpTableSeed(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("tbl_a.ndjson is empty")
 	}
+
+	assertMetadataRowCountsMatchFiles(t, dir, meta)
 }
 
 func TestIntegrationSubsetDumpQualifiedSeedAcrossSchemas(t *testing.T) {
