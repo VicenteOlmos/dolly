@@ -81,6 +81,7 @@ func TestPrintDumpUsage(t *testing.T) {
 		"--seed-file",
 		"--max-depth",
 		"default 10",
+		"CREATE SCHEMA IF NOT EXISTS",
 	} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("dump usage missing %q:\n%s", sub, out)
@@ -90,7 +91,7 @@ func TestPrintDumpUsage(t *testing.T) {
 
 func TestPrintRestoreUsage(t *testing.T) {
 	out := captureStderr(printRestoreUsage)
-	for _, sub := range []string{"--dsn", "--connection", "--input", "--on-conflict", "--replace", "--no-transaction", "advanced", "--trust-schema-sql", "--yes", "default is atomic"} {
+	for _, sub := range []string{"--dsn", "--connection", "--input", "--on-conflict", "--replace", "--no-transaction", "advanced", "--trust-schema-sql", "--yes", "default is atomic", "IF NOT EXISTS"} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("restore usage missing %q:\n%s", sub, out)
 		}

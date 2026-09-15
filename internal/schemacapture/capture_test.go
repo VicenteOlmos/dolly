@@ -29,6 +29,7 @@ func TestCaptureWritesSanitizedSchemaWithPrivateMode(t *testing.T) {
 		}
 		_, err := stdout.WriteString(strings.Join([]string{
 			"SET transaction_timeout = 0;",
+			"CREATE SCHEMA public;",
 			"CREATE TABLE public.users (id integer);",
 		}, "\n"))
 		return err
@@ -49,6 +50,12 @@ func TestCaptureWritesSanitizedSchemaWithPrivateMode(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "CREATE TABLE public.users") {
 		t.Fatalf("schema missing table:\n%s", data)
+	}
+	if !strings.Contains(string(data), "CREATE SCHEMA IF NOT EXISTS public;") {
+		t.Fatalf("schema missing CREATE SCHEMA IF NOT EXISTS:\n%s", data)
+	}
+	if strings.Contains(string(data), "CREATE SCHEMA public;") {
+		t.Fatalf("bare CREATE SCHEMA public remained:\n%s", data)
 	}
 	info, err := os.Stat(outPath)
 	if err != nil {

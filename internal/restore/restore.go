@@ -221,7 +221,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 			}
 			applyErr := restoreApplySchemaSQL(ctx, cfg.dsn, inputDir)
 			if applyErr != nil {
-				return fmt.Errorf("validate schema: %w (schema.sql apply failed: %v)", err, applyErr)
+				return fmt.Errorf("apply schema.sql: %w", applyErr)
 			}
 			target, err = db.LoadPostgresSchemas(ctx, dbConn, schemaFilter)
 			if err != nil {

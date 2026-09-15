@@ -178,7 +178,7 @@ Run `dolly <command> --help` for command-specific flags.
 
 **TUI and CLI restore differ:** the TUI restores from Dolly dump history. To restore an arbitrary directory, use `dolly restore --input <dir>`.
 
-When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
+When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility, including `CREATE SCHEMA IF NOT EXISTS` so `--trust-schema-sql` can replay into a fresh database that already has `public`. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
 
 Trusted schema replay runs outside the restore transaction, so acknowledge both conditions explicitly:
 

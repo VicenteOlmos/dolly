@@ -14,7 +14,9 @@ var unsupportedSchemaSetVars = map[string]struct{}{
 	"transaction_timeout": {},
 }
 
-// Sanitize removes compatibility-breaking SET lines for older restore targets.
+// Sanitize removes compatibility-breaking SET lines for older restore targets
+// and rewrites CREATE SCHEMA to CREATE SCHEMA IF NOT EXISTS so replay into a
+// fresh database (which already has public) does not abort.
 // It is not a security validation boundary for schema SQL.
 func Sanitize(in []byte) ([]byte, error) {
 	var out bytes.Buffer
@@ -24,7 +26,7 @@ func Sanitize(in []byte) ([]byte, error) {
 		if shouldStripSchemaSetLine(line) {
 			continue
 		}
-		out.WriteString(line)
+		out.WriteString(rewriteCreateSchemaIfNotExists(line))
 		out.WriteByte('\n')
 	}
 	if err := sc.Err(); err != nil {
@@ -41,7 +43,7 @@ func SanitizeReader(r io.Reader, w io.Writer) error {
 		if shouldStripSchemaSetLine(line) {
 			continue
 		}
-		if _, err := io.WriteString(w, line+"\n"); err != nil {
+		if _, err := io.WriteString(w, rewriteCreateSchemaIfNotExists(line)+"\n"); err != nil {
 			return err
 		}
 	}
@@ -49,6 +51,41 @@ func SanitizeReader(r io.Reader, w io.Writer) error {
 		return fmt.Errorf("scan schema.sql: %w", err)
 	}
 	return nil
+}
+
+const createSchemaKeyword = "create schema"
+const ifNotExistsKeyword = "if not exists"
+
+// rewriteCreateSchemaIfNotExists inserts IF NOT EXISTS into a CREATE SCHEMA
+// statement. pg_dump emits a bare CREATE SCHEMA public; which fails against
+// every newly created database. Lines that already have IF NOT EXISTS, or that
+// are comments, are left unchanged.
+func rewriteCreateSchemaIfNotExists(line string) string {
+	start := 0
+	for start < len(line) && (line[start] == ' ' || line[start] == '\t') {
+		start++
+	}
+	if start >= len(line) || line[start] == '-' {
+		return line
+	}
+	rest := line[start:]
+	if len(rest) < len(createSchemaKeyword) || !strings.EqualFold(rest[:len(createSchemaKeyword)], createSchemaKeyword) {
+		return line
+	}
+	after := rest[len(createSchemaKeyword):]
+	i := 0
+	for i < len(after) && (after[i] == ' ' || after[i] == '\t') {
+		i++
+	}
+	namePart := after[i:]
+	if len(namePart) >= len(ifNotExistsKeyword) && strings.EqualFold(namePart[:len(ifNotExistsKeyword)], ifNotExistsKeyword) {
+		return line
+	}
+	ws := after[:i]
+	if ws == "" {
+		ws = " "
+	}
+	return line[:start] + rest[:len(createSchemaKeyword)] + ws + "IF NOT EXISTS " + namePart
 }
 
 func shouldStripSchemaSetLine(line string) bool {

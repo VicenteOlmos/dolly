@@ -166,7 +166,7 @@ Ejecute `dolly <command> --help` para consultar los flags específicos de cada c
 
 **La restauración mediante TUI y CLI es diferente:** la TUI restaura desde el historial de volcados de Dolly. Para restaurar un directorio arbitrario, use `dolly restore --input <dir>`.
 
-Cuando `pg_dump` está en el `PATH`, Dolly captura `schema.sql` y lo sanitiza para permitir restauraciones compatibles entre versiones. Restore nunca ejecuta ese SQL a menos que pase explícitamente `--trust-schema-sql` para artefactos revisados.
+Cuando `pg_dump` está en el `PATH`, Dolly captura `schema.sql` y lo sanitiza para permitir restauraciones compatibles entre versiones, incluyendo `CREATE SCHEMA IF NOT EXISTS` para que `--trust-schema-sql` pueda reproducirse en una base nueva que ya tiene `public`. Restore nunca ejecuta ese SQL a menos que pase explícitamente `--trust-schema-sql` para artefactos revisados.
 
 La reproducción de esquema de confianza se ejecuta fuera de la transacción de restore, así que confirme ambas condiciones explícitamente:
 

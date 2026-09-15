@@ -7,6 +7,7 @@ All notable operator-facing changes to Dolly are documented here.
 ### Restore
 
 - **Timestamp COPY restore** — `--no-transaction` binary COPY parses dumped `date` / `timestamp` / `timestamptz` values into `time.Time` (and PostgreSQL `infinity` / `-infinity` into pgtype infinity values) so timezone-naive timestamps no longer fail with OID 1114 encode errors. Dumps write tz-naive timestamps and dates without a UTC `Z` offset; existing RFC 3339 dumps with `Z` still restore.
+- **Trusted schema replay into a fresh database** — schema capture and `--trust-schema-sql` sanitize rewrite `CREATE SCHEMA` to `CREATE SCHEMA IF NOT EXISTS` so replay does not abort on the default `public` schema. When schema apply fails, restore reports that apply error as the primary failure instead of wrapping it in a missing-table validation message (#257).
 
 ## [0.3.5](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.5) — 2026-08-05
 
