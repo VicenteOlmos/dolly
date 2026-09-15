@@ -507,10 +507,12 @@ func runParallelDump(ctx context.Context, plan *ParallelPlan, workers int) error
 					Elapsed: time.Since(plan.startedAt),
 				})
 				stagingPath := parallelStagingPath(plan.stagingDir, job.table)
-				if err := parallelStreamTable(ctx, q, job.table, stagingPath, plan.cfg.rowTransform); err != nil {
+				exported, err := parallelStreamTable(ctx, q, job.table, stagingPath, plan.cfg.rowTransform)
+				if err != nil {
 					recordErr(err)
 					return
 				}
+				plan.tables[job.index].RowCount = rowCountPtr(exported)
 				n := completed.Add(1)
 				emit(ProgressEvent{
 					Phase:   "table_end",
@@ -561,6 +563,11 @@ func parallelStagingPath(stagingDir string, table db.Table) string {
 }
 
 func publishParallelArtifacts(plan *ParallelPlan) error {
+	metaTmp, err := writeMetadata(plan.outputDir, plan.tables, nil, plan.cfg.schemas, plan.sequences, provenanceForWrite(&plan.cfg, plan.tables))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
+	}
+	plan.metaTmpPath = metaTmp
 	for _, table := range plan.tables {
 		src := parallelStagingPath(plan.stagingDir, table)
 		dst := tableDataPath(plan.outputDir, table)

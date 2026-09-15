@@ -472,20 +472,22 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Total:   len(sorted),
 			Elapsed: time.Since(startedAt),
 		})
+		var n int64
 		var streamErr error
 		plan, hasPlan := dispatchPlans[tableKey(table.Schema, table.Name)]
 		if hasPlan && plan.Resumable {
-			streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
+			n, streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
 		} else {
 			if hasPlan && plan.Strategy == KeyStrategyNormalStream {
 				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; using non-resumable normal streaming\n",
 					qualifiedName(table.Schema, table.Name))
 			}
-			streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
+			n, streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
 		}
 		if streamErr != nil {
 			return streamErr
 		}
+		sorted[i].RowCount = rowCountPtr(n)
 		emitProgress(&cfg, ProgressEvent{
 			Phase:   "table_end",
 			Table:   table.Name,
@@ -493,6 +495,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Total:   len(sorted),
 			Elapsed: time.Since(startedAt),
 		})
+	}
+
+	metaPath, err = writeMetadata(outputDir, sorted, nil, cfg.schemas, sequences, provenanceForWrite(&cfg, sorted))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
 	}
 
 	if err := os.Rename(metaPath, filepath.Join(outputDir, "metadata.json")); err != nil {
@@ -720,9 +727,11 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 		if pkErr == nil {
 			orderCol = pkCol
 		}
-		if err := streamTableFiltered(ctx, q, table, outputDir, clauses, cfg.rowTransform, orderCol); err != nil {
+		n, err := streamTableFiltered(ctx, q, table, outputDir, clauses, cfg.rowTransform, orderCol)
+		if err != nil {
 			return err
 		}
+		included[i].RowCount = rowCountPtr(n)
 		emitProgress(cfg, ProgressEvent{
 			Phase:   "table_end",
 			Table:   table.Name,
@@ -730,6 +739,11 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 			Total:   len(included),
 			Elapsed: time.Since(startedAt),
 		})
+	}
+
+	metaPath, err = writeMetadata(outputDir, included, manifest, cfg.schemas, nil, provenanceForWrite(cfg, included))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
 	}
 
 	if err := os.Rename(metaPath, filepath.Join(outputDir, "metadata.json")); err != nil {
