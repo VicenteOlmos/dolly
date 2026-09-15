@@ -226,6 +226,48 @@ func TestResolveSeedTableUnambiguousBareName(t *testing.T) {
 	}
 }
 
+func TestResolveSeedTableDottedAndQuoted(t *testing.T) {
+	pk := []db.Column{{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1}}
+	tables := []db.Table{
+		{Schema: "public", Name: "foo.bar", Columns: pk},
+		{Schema: "public", Name: "a.b.c", Columns: pk},
+		{Schema: "public", Name: "UserTable", Columns: pk},
+		{Schema: "foo", Name: "bar", Columns: pk},
+	}
+
+	tbl, err := resolveSeedTable("foo.bar", []db.Table{tables[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "foo.bar" {
+		t.Fatalf("got %s.%s, want public.foo.bar", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable("a.b.c", []db.Table{tables[1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "a.b.c" {
+		t.Fatalf("got %s.%s, want public.a.b.c", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable(`public."UserTable"`, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "UserTable" {
+		t.Fatalf("got %s.%s, want public.UserTable", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable("foo.bar", tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "foo" || tbl.Name != "bar" {
+		t.Fatalf("qualified foo.bar should win over literal name, got %s.%s", tbl.Schema, tbl.Name)
+	}
+}
+
 func TestValidateSeedsTyped(t *testing.T) {
 	tables := []db.Table{
 		{

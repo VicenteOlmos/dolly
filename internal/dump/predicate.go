@@ -84,33 +84,47 @@ func ApplySubsetLimitDefaults(l SubsetLimits) SubsetLimits {
 }
 
 // resolveSeedTable maps a seed "table" value onto dump-scope metadata.
-// schema.table is exact. A bare name must match exactly one table in scope.
+// schema.table is exact when that table exists. Otherwise the value is an
+// exact table name, which must match exactly one table in scope.
 func resolveSeedTable(raw string, tables []db.Table) (db.Table, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
 		return db.Table{}, fmt.Errorf("missing table")
 	}
 	if strings.Contains(s, ".") {
-		qt, err := ParseQualifiedTable(s)
-		if err != nil {
-			return db.Table{}, err
-		}
-		for _, t := range tables {
-			if t.Schema == qt.Schema && t.Name == qt.Name {
-				return t, nil
+		qt, parseErr := ParseQualifiedTable(s)
+		if parseErr == nil {
+			for _, t := range tables {
+				if t.Schema == qt.Schema && t.Name == qt.Name {
+					return t, nil
+				}
 			}
+		}
+		tbl, nameErr := findSeedTableByName(s, tables)
+		if nameErr == nil {
+			return tbl, nil
+		}
+		if !isUnknownSeedTable(nameErr) {
+			return db.Table{}, nameErr
+		}
+		if parseErr != nil {
+			return db.Table{}, parseErr
 		}
 		return db.Table{}, fmt.Errorf("unknown table %q", qt.Normalized())
 	}
+	return findSeedTableByName(s, tables)
+}
+
+func findSeedTableByName(name string, tables []db.Table) (db.Table, error) {
 	var matches []db.Table
 	for _, t := range tables {
-		if t.Name == s {
+		if t.Name == name {
 			matches = append(matches, t)
 		}
 	}
 	switch len(matches) {
 	case 0:
-		return db.Table{}, fmt.Errorf("unknown table %q", s)
+		return db.Table{}, fmt.Errorf("unknown table %q", name)
 	case 1:
 		return matches[0], nil
 	default:
@@ -119,8 +133,12 @@ func resolveSeedTable(raw string, tables []db.Table) (db.Table, error) {
 			names[i] = qualifiedName(t.Schema, t.Name)
 		}
 		sort.Strings(names)
-		return db.Table{}, fmt.Errorf("ambiguous table %q: matches %s", s, strings.Join(names, ", "))
+		return db.Table{}, fmt.Errorf("ambiguous table %q: matches %s", name, strings.Join(names, ", "))
 	}
+}
+
+func isUnknownSeedTable(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "unknown table ")
 }
 
 // ValidateSeeds checks seeds against schema metadata before I/O.
