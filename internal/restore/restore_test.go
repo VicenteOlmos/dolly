@@ -240,6 +240,39 @@ func TestRestoreMissingSchemaDefaultRejectsBeforeSchemaApply(t *testing.T) {
 	}
 }
 
+func TestRestoreTrustedSchemaApplyFailureIsPrimary(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	origApply := restoreApplySchemaSQL
+	defer func() { restoreApplySchemaSQL = origApply }()
+	restoreApplySchemaSQL = func(context.Context, string, string) error {
+		return errors.New(`psql schema.sql: exit status 3 (stderr: ERROR:  schema "public" already exists)`)
+	}
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
+	err = Restore(context.Background(), sqlDB, dir, WithTrustedSchemaSQL(), WithoutTransaction())
+	if err == nil {
+		t.Fatal("expected schema apply error")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "apply schema.sql:") {
+		t.Fatalf("error = %q, want apply schema.sql as primary failure", msg)
+	}
+	if !strings.Contains(msg, `schema "public" already exists`) {
+		t.Fatalf("error = %q, want underlying apply cause", msg)
+	}
+	if strings.Contains(msg, "not found in target schema") {
+		t.Fatalf("error = %q, should not wrap missing-table validation", msg)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestoreMissingSchemaWithoutTransactionAppliesSchema(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureDump(t, dir)

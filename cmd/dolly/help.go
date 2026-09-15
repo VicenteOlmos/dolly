@@ -111,7 +111,7 @@ func printDumpUsage() {
 	fmt.Fprintln(os.Stderr, "  dump.chunk_tables / dump.chunk_table_files  keyset-chunked table selectors (replaced by CLI flags when set)")
 	fmt.Fprintln(os.Stderr, "  dump.workers  parallel table dump workers (default 1; CLI --workers overrides)")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "schema.sql is captured when pg_dump is on PATH and sanitized for cross-version restore compatibility.")
+	fmt.Fprintln(os.Stderr, "schema.sql is captured when pg_dump is on PATH and sanitized for cross-version restore compatibility, including CREATE SCHEMA IF NOT EXISTS.")
 }
 
 func printRestoreUsage() {
@@ -134,6 +134,7 @@ func printRestoreUsage() {
 	fmt.Fprintln(os.Stderr, "        Use only for trusted clean targets or very large restores; default is atomic")
 	fmt.Fprintln(os.Stderr, "  --trust-schema-sql")
 	fmt.Fprintln(os.Stderr, "        replay reviewed schema.sql when target tables are missing; requires --no-transaction --yes")
+	fmt.Fprintln(os.Stderr, "        CREATE SCHEMA is rewritten to IF NOT EXISTS so a fresh database's public schema does not abort replay")
 	fmt.Fprintln(os.Stderr, "  --yes")
 	fmt.Fprintln(os.Stderr, "        confirm destructive or advanced operations (required with --replace, --no-transaction, or --trust-schema-sql)")
 	fmt.Fprintln(os.Stderr, "  --workers int")

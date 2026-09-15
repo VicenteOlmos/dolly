@@ -1104,6 +1104,95 @@ func TestIntegrationParallelRestorePartialFailure(t *testing.T) {
 	assertParallelParentSequenceBaseline(t, conn, ctx)
 }
 
+func TestIntegrationTrustedSchemaSQLRestoresIntoExistingPublic(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	dir := t.TempDir()
+
+	const table = "dolly_trust_schema_fresh_public"
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS public.`+table)
+	})
+	if _, err := conn.ExecContext(ctx, `DROP TABLE IF EXISTS public.`+table); err != nil {
+		t.Fatal(err)
+	}
+
+	meta := dump.Metadata{
+		GeneratedAt: "2026-01-01T00:00:00Z",
+		Schema:      "public",
+		Tables: []db.Table{
+			{
+				Schema: "public",
+				Name:   table,
+				Columns: []db.Column{
+					{Name: "id", DataType: "integer", IsNullable: false, PrimaryKey: true, OrdinalPosition: 1},
+				},
+			},
+		},
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	line, err := json.Marshal(map[string]any{"id": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, table+".ndjson"), append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	schemaSQL := fmt.Sprintf("CREATE SCHEMA public;\nCREATE TABLE public.%s (id integer PRIMARY KEY);\n", table)
+	if err := os.WriteFile(filepath.Join(dir, "schema.sql"), []byte(schemaSQL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Restore(ctx, conn, dir, WithTrustedSchemaSQL(), WithoutTransaction(), WithDSN(dsn)); err != nil {
+		t.Fatalf("trusted schema restore into existing public: %v", err)
+	}
+
+	var id int
+	if err := conn.QueryRowContext(ctx, `SELECT id FROM public.`+table).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != 1 {
+		t.Fatalf("id = %d, want 1", id)
+	}
+}
+
+func TestIntegrationApplySchemaSQLCreateSchemaIfNotExistsOnPublic(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	dir := t.TempDir()
+
+	const table = "dolly_trusted_schema_public_exists"
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS public.`+table)
+	})
+
+	schemaSQL := fmt.Sprintf(`CREATE SCHEMA public;
+CREATE TABLE public.%s (id integer);`, table)
+	if err := os.WriteFile(filepath.Join(dir, "schema.sql"), []byte(schemaSQL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applySchemaSQL(ctx, dsn, dir); err != nil {
+		t.Fatalf("apply schema.sql against existing public: %v", err)
+	}
+
+	var regclass *string
+	if err := conn.QueryRowContext(ctx, `SELECT to_regclass('public.`+table+`')`).Scan(&regclass); err != nil {
+		t.Fatal(err)
+	}
+	if regclass == nil {
+		t.Fatal("expected table after CREATE SCHEMA public replay into existing public")
+	}
+}
+
 func TestIntegrationApplySchemaSQLSingleTransactionRollsBackOnError(t *testing.T) {
 	conn := openIntegrationDB(t)
 	ctx := context.Background()
