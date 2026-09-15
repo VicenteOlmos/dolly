@@ -296,7 +296,7 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 \
 dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1000
 ```
 
-`--percent` conflicts with `--seed-file` and `--slow-connection`. FK closure can make a subset dump larger than the requested percentage.
+`--percent` conflicts with `--seed-file` and `--slow-connection`. FK closure can make a subset dump larger than the requested percentage. In a seed file, `"table"` may be `schema.table`; a bare name must match exactly one table in the dump scope.
 
 ### Faster bulk restore — advanced
 

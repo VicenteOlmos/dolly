@@ -4,6 +4,10 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+### Dump
+
+- **Schema-qualified seed tables** — `--seed-file` predicates accept `schema.table`. A bare table name that matches more than one table in the dump scope fails with the candidate list instead of picking one.
+
 ### Dump metadata
 
 - **`row_count`** — `metadata.json` records the number of rows written to each table's NDJSON file instead of the catalog `n_live_tup` estimate, which is often `0` before `ANALYZE`.

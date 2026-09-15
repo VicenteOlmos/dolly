@@ -119,18 +119,26 @@ func ParseQualifiedTable(raw string) (QualifiedTable, error) {
 		if dot < 0 {
 			return QualifiedTable{}, fmt.Errorf("invalid table selector %q: unqualified name", raw)
 		}
-		if strings.Contains(s[dot+1:], ".") {
-			return QualifiedTable{}, fmt.Errorf("invalid table selector %q: extra dots require quoted identifiers", raw)
-		}
 		schema, err = parseUnquotedIdentComponent(s[:dot])
 		if err != nil {
 			return QualifiedTable{}, fmt.Errorf("invalid table selector %q: %w", raw, err)
 		}
-		name, err = parseUnquotedIdentComponent(s[dot+1:])
+		s = strings.TrimSpace(s[dot+1:])
+		if s == "" {
+			return QualifiedTable{}, fmt.Errorf("invalid table selector %q: missing table name", raw)
+		}
+		if strings.HasPrefix(s, `"`) {
+			name, s, err = parseQuotedIdent(s)
+		} else {
+			if strings.Contains(s, ".") {
+				return QualifiedTable{}, fmt.Errorf("invalid table selector %q: extra dots require quoted identifiers", raw)
+			}
+			name, err = parseUnquotedIdentComponent(s)
+			s = ""
+		}
 		if err != nil {
 			return QualifiedTable{}, fmt.Errorf("invalid table selector %q: %w", raw, err)
 		}
-		s = ""
 	}
 	if strings.TrimSpace(s) != "" {
 		return QualifiedTable{}, fmt.Errorf("invalid table selector %q: unexpected trailing input", raw)

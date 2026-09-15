@@ -70,6 +70,7 @@ func printDumpUsage() {
 	fmt.Fprintln(os.Stderr, "        base backoff between slow-connection retries (default: config or 500ms)")
 	fmt.Fprintln(os.Stderr, "  --seed-file string")
 	fmt.Fprintln(os.Stderr, "        JSON seed file for subset dump (omit for full-schema dump)")
+	fmt.Fprintln(os.Stderr, "        Seed table names may be schema.table; a bare name must be unique in dump scope")
 	fmt.Fprintln(os.Stderr, "  --percent int")
 	fmt.Fprintln(os.Stderr, "        percent-based subset dump (1-100). Selects recent root rows, then FK closure")
 	fmt.Fprintln(os.Stderr, "        adds required related rows (output may exceed the percentage)")

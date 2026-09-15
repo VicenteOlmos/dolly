@@ -21,6 +21,8 @@ func TestParseQualifiedTable(t *testing.T) {
 		{name: "unquoted", raw: "public.users", want: QualifiedTable{Schema: "public", Name: "users"}},
 		{name: "quoted both", raw: `"my.schema"."my.table"`, want: QualifiedTable{Schema: "my.schema", Name: "my.table"}},
 		{name: "quoted escape", raw: `"pub""lic"."us""ers"`, want: QualifiedTable{Schema: `pub"lic`, Name: `us"ers`}},
+		{name: "unquoted schema quoted table", raw: `public."UserTable"`, want: QualifiedTable{Schema: "public", Name: "UserTable"}},
+		{name: "unquoted schema quoted dotted table", raw: `public."foo.bar"`, want: QualifiedTable{Schema: "public", Name: "foo.bar"}},
 		{name: "blank", raw: "  ", wantErr: "empty"},
 		{name: "unqualified", raw: "users", wantErr: "unqualified"},
 		{name: "extra dot unquoted", raw: "a.b.c", wantErr: "extra dots"},
