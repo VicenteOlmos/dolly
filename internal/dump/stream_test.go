@@ -97,6 +97,29 @@ func TestStreamTable(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "timestamp date timestamptz",
+			table: db.Table{
+				Schema: "public",
+				Name:   "events",
+				Columns: []db.Column{
+					{Name: "id", DataType: "integer"},
+					{Name: "sin_zona", DataType: "timestamp without time zone"},
+					{Name: "con_zona", DataType: "timestamp with time zone"},
+					{Name: "solo_fecha", DataType: "date"},
+				},
+			},
+			rows: sqlmock.NewRows([]string{"id", "sin_zona", "con_zona", "solo_fecha"}).
+				AddRow(
+					1,
+					time.Date(2023, 6, 22, 13, 36, 35, 0, time.UTC),
+					time.Date(2023, 6, 22, 9, 36, 35, 0, time.FixedZone("EDT", -4*3600)),
+					time.Date(2023, 6, 22, 0, 0, 0, 0, time.UTC),
+				),
+			want: []string{
+				`{"con_zona":"2023-06-22T09:36:35-04:00","id":1,"sin_zona":"2023-06-22T13:36:35","solo_fecha":"2023-06-22"}`,
+			},
+		},
+		{
 			name: "bool type",
 			table: db.Table{
 				Schema: "public",
