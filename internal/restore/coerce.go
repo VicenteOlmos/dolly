@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
@@ -86,13 +87,43 @@ func coerceValue(dataType string, raw any) (any, error) {
 			return nil, fmt.Errorf("expected string, got %T", raw)
 		}
 		return s, nil
-	case "date":
-		s, ok := raw.(string)
-		if !ok {
-			return nil, fmt.Errorf("expected date string, got %T", raw)
-		}
-		return s, nil
+	case "date", "timestamp without time zone", "timestamp", "timestamp with time zone", "timestamptz":
+		return coerceTemporal(dataType, raw)
 	default:
 		return raw, nil
 	}
+}
+
+func coerceTemporal(dataType string, raw any) (any, error) {
+	switch v := raw.(type) {
+	case time.Time:
+		return v, nil
+	case string:
+		if v == "infinity" || v == "-infinity" {
+			return v, nil
+		}
+		t, err := parseTemporal(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s value %q", dataType, v)
+		}
+		return t, nil
+	default:
+		return nil, fmt.Errorf("expected timestamp string, got %T", raw)
+	}
+}
+
+func parseTemporal(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02",
+	} {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse timestamp")
 }
