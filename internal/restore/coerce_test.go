@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestCoerceRowInteger(t *testing.T) {
@@ -84,14 +85,66 @@ func TestCoerceTemporalInvalid(t *testing.T) {
 	if _, err := coerceValue("timestamp without time zone", "not-a-timestamp"); err == nil {
 		t.Fatal("expected error")
 	}
-	if _, err := coerceValue("date", float64(1)); err == nil {
+	err := mustCoerceError(t, "date", float64(1))
+	if !strings.Contains(err.Error(), "date") {
+		t.Fatalf("date type error = %q, want dataType in message", err)
+	}
+}
+
+func TestCoerceTemporalInfinity(t *testing.T) {
+	tests := []struct {
+		dataType string
+		raw      string
+		mod      pgtype.InfinityModifier
+		check    func(t *testing.T, got any, mod pgtype.InfinityModifier)
+	}{
+		{"date", "infinity", pgtype.Infinity, checkDateInfinity},
+		{"date", "-infinity", pgtype.NegativeInfinity, checkDateInfinity},
+		{"timestamp without time zone", "infinity", pgtype.Infinity, checkTimestampInfinity},
+		{"timestamp", "-infinity", pgtype.NegativeInfinity, checkTimestampInfinity},
+		{"timestamp with time zone", "infinity", pgtype.Infinity, checkTimestamptzInfinity},
+		{"timestamptz", "-infinity", pgtype.NegativeInfinity, checkTimestamptzInfinity},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dataType+" "+tt.raw, func(t *testing.T) {
+			got, err := coerceValue(tt.dataType, tt.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.check(t, got, tt.mod)
+		})
+	}
+}
+
+func mustCoerceError(t *testing.T, dataType string, raw any) error {
+	t.Helper()
+	_, err := coerceValue(dataType, raw)
+	if err == nil {
 		t.Fatal("expected error")
 	}
-	got, err := coerceValue("timestamp with time zone", "infinity")
-	if err != nil {
-		t.Fatal(err)
+	return err
+}
+
+func checkDateInfinity(t *testing.T, got any, mod pgtype.InfinityModifier) {
+	t.Helper()
+	d, ok := got.(pgtype.Date)
+	if !ok || !d.Valid || d.InfinityModifier != mod {
+		t.Fatalf("got %#v, want pgtype.Date infinity %d", got, mod)
 	}
-	if got != "infinity" {
-		t.Fatalf("got %v, want infinity passthrough", got)
+}
+
+func checkTimestampInfinity(t *testing.T, got any, mod pgtype.InfinityModifier) {
+	t.Helper()
+	ts, ok := got.(pgtype.Timestamp)
+	if !ok || !ts.Valid || ts.InfinityModifier != mod {
+		t.Fatalf("got %#v, want pgtype.Timestamp infinity %d", got, mod)
+	}
+}
+
+func checkTimestamptzInfinity(t *testing.T, got any, mod pgtype.InfinityModifier) {
+	t.Helper()
+	ts, ok := got.(pgtype.Timestamptz)
+	if !ok || !ts.Valid || ts.InfinityModifier != mod {
+		t.Fatalf("got %#v, want pgtype.Timestamptz infinity %d", got, mod)
 	}
 }

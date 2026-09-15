@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func coerceRow(columns []db.Column, colNames map[string]bool, row map[string]any) ([]any, error) {
@@ -99,8 +100,8 @@ func coerceTemporal(dataType string, raw any) (any, error) {
 	case time.Time:
 		return v, nil
 	case string:
-		if v == "infinity" || v == "-infinity" {
-			return v, nil
+		if inf, ok := temporalInfinity(dataType, v); ok {
+			return inf, nil
 		}
 		t, err := parseTemporal(v)
 		if err != nil {
@@ -108,7 +109,27 @@ func coerceTemporal(dataType string, raw any) (any, error) {
 		}
 		return t, nil
 	default:
-		return nil, fmt.Errorf("expected timestamp string, got %T", raw)
+		return nil, fmt.Errorf("expected %s string, got %T", dataType, raw)
+	}
+}
+
+func temporalInfinity(dataType, v string) (any, bool) {
+	var mod pgtype.InfinityModifier
+	switch v {
+	case "infinity":
+		mod = pgtype.Infinity
+	case "-infinity":
+		mod = pgtype.NegativeInfinity
+	default:
+		return nil, false
+	}
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "date":
+		return pgtype.Date{Valid: true, InfinityModifier: mod}, true
+	case "timestamp with time zone", "timestamptz":
+		return pgtype.Timestamptz{Valid: true, InfinityModifier: mod}, true
+	default:
+		return pgtype.Timestamp{Valid: true, InfinityModifier: mod}, true
 	}
 }
 

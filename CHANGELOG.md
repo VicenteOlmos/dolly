@@ -6,7 +6,7 @@ All notable operator-facing changes to Dolly are documented here.
 
 ### Restore
 
-- **Timestamp COPY restore** — `--no-transaction` binary COPY parses dumped `date` / `timestamp` / `timestamptz` values into `time.Time` so timezone-naive timestamps no longer fail with OID 1114 encode errors. Dumps write tz-naive timestamps and dates without a UTC `Z` offset; existing RFC 3339 dumps with `Z` still restore.
+- **Timestamp COPY restore** — `--no-transaction` binary COPY parses dumped `date` / `timestamp` / `timestamptz` values into `time.Time` (and PostgreSQL `infinity` / `-infinity` into pgtype infinity values) so timezone-naive timestamps no longer fail with OID 1114 encode errors. Dumps write tz-naive timestamps and dates without a UTC `Z` offset; existing RFC 3339 dumps with `Z` still restore.
 
 ## [0.3.5](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.5) — 2026-08-05
 
