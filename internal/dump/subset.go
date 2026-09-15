@@ -55,19 +55,11 @@ func planSubset(ctx context.Context, q querier, tables []db.Table, cfg SubsetCon
 		byName[tableKey(t.Schema, t.Name)] = t
 	}
 	resolveTable := func(name string) (string, error) {
-		if _, ok := byName[name]; ok {
-			return name, nil
+		tbl, err := resolveSeedTable(name, tables)
+		if err != nil {
+			return "", err
 		}
-		var matches []string
-		for key, table := range byName {
-			if table.Name == name {
-				matches = append(matches, key)
-			}
-		}
-		if len(matches) != 1 {
-			return "", fmt.Errorf("seed table %q is ambiguous or not selected", name)
-		}
-		return matches[0], nil
+		return tableKey(tbl.Schema, tbl.Name), nil
 	}
 	pkColumn := func(tableName string) (string, error) {
 		if col, ok := pkCol[tableName]; ok {

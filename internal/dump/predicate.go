@@ -2,6 +2,7 @@ package dump
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
@@ -82,23 +83,77 @@ func ApplySubsetLimitDefaults(l SubsetLimits) SubsetLimits {
 	return l
 }
 
+// resolveSeedTable maps a seed "table" value onto dump-scope metadata.
+// schema.table is exact when that table exists. Otherwise the value is an
+// exact table name, which must match exactly one table in scope.
+func resolveSeedTable(raw string, tables []db.Table) (db.Table, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return db.Table{}, fmt.Errorf("missing table")
+	}
+	if strings.Contains(s, ".") {
+		qt, parseErr := ParseQualifiedTable(s)
+		if parseErr == nil {
+			for _, t := range tables {
+				if t.Schema == qt.Schema && t.Name == qt.Name {
+					return t, nil
+				}
+			}
+		}
+		tbl, nameErr := findSeedTableByName(s, tables)
+		if nameErr == nil {
+			return tbl, nil
+		}
+		if !isUnknownSeedTable(nameErr) {
+			return db.Table{}, nameErr
+		}
+		if parseErr != nil {
+			return db.Table{}, parseErr
+		}
+		return db.Table{}, fmt.Errorf("unknown table %q", qt.Normalized())
+	}
+	return findSeedTableByName(s, tables)
+}
+
+func findSeedTableByName(name string, tables []db.Table) (db.Table, error) {
+	var matches []db.Table
+	for _, t := range tables {
+		if t.Name == name {
+			matches = append(matches, t)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return db.Table{}, fmt.Errorf("unknown table %q", name)
+	case 1:
+		return matches[0], nil
+	default:
+		names := make([]string, len(matches))
+		for i, t := range matches {
+			names[i] = qualifiedName(t.Schema, t.Name)
+		}
+		sort.Strings(names)
+		return db.Table{}, fmt.Errorf("ambiguous table %q: matches %s", name, strings.Join(names, ", "))
+	}
+}
+
+func isUnknownSeedTable(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "unknown table ")
+}
+
 // ValidateSeeds checks seeds against schema metadata before I/O.
 func ValidateSeeds(seeds []RowPredicate, tables []db.Table) error {
 	if len(seeds) == 0 {
 		return fmt.Errorf("subset: at least one seed predicate is required")
-	}
-	byName := make(map[string]db.Table, len(tables))
-	for _, t := range tables {
-		byName[t.Name] = t
 	}
 	for i, raw := range seeds {
 		p := normalizePredicate(raw)
 		if p.Table == "" {
 			return fmt.Errorf("subset: seed %d: missing table", i)
 		}
-		tbl, ok := byName[p.Table]
-		if !ok {
-			return fmt.Errorf("subset: seed %d: unknown table %q", i, p.Table)
+		tbl, err := resolveSeedTable(p.Table, tables)
+		if err != nil {
+			return fmt.Errorf("subset: seed %d: %w", i, err)
 		}
 		if _, err := primaryKeyColumn(tbl); err != nil {
 			return fmt.Errorf("subset: seed %d: %w", i, err)

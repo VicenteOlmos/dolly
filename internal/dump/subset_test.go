@@ -110,6 +110,63 @@ func TestPlanSubsetTableSeed(t *testing.T) {
 	}
 }
 
+func TestPlanSubsetQualifiedSeedSelectsSchema(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	seedRows := sqlmock.NewRows([]string{"id"}).AddRow(int64(1))
+	mock.ExpectQuery(`SELECT "id" FROM "a"\."thing" WHERE`).
+		WithArgs(int64(1)).
+		WillReturnRows(seedRows)
+
+	cfg := SubsetConfig{
+		Seeds: []RowPredicate{
+			{Table: "a.thing", Column: "id", Op: PredicateEq, Value: int64(1)},
+		},
+		Limits: SubsetLimits{MaxDepth: 5, MaxTables: 10, MaxRows: 1000, MaxInListSize: 500},
+	}
+
+	plan, err := planSubset(context.Background(), sqlDB, collidingSeedTables(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := plan.tables[tableKey("a", "thing")]; !ok {
+		t.Fatal("missing a.thing in plan")
+	}
+	if _, ok := plan.tables[tableKey("b", "thing")]; ok {
+		t.Fatal("b.thing should not be in plan")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestPlanSubsetAmbiguousBareSeedFailsClosed(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	cfg := SubsetConfig{
+		Seeds: []RowPredicate{
+			{Table: "thing", Column: "id", Op: PredicateEq, Value: int64(1)},
+		},
+		Limits: SubsetLimits{MaxDepth: 5, MaxTables: 10, MaxRows: 1000, MaxInListSize: 500},
+	}
+
+	_, err = planSubset(context.Background(), sqlDB, collidingSeedTables(), cfg)
+	if err == nil || !strings.Contains(err.Error(), `ambiguous table "thing": matches a.thing, b.thing`) {
+		t.Fatalf("error = %v, want ambiguous table listing candidates", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
 func TestPlanSubsetMaxTablesExceeded(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -164,7 +221,7 @@ func TestStreamTableFilteredUsesWhere(t *testing.T) {
 		WillReturnRows(rows)
 
 	dir := t.TempDir()
-	if err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
+	if _, err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -331,7 +388,7 @@ func TestStreamTableFilteredEmptyResult(t *testing.T) {
 		WillReturnRows(rows)
 
 	dir := t.TempDir()
-	if err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
+	if _, err := streamTableFiltered(context.Background(), sqlDB, table, dir, clauses, nil, ""); err != nil {
 		t.Fatal(err)
 	}
 

@@ -79,6 +79,7 @@ func TestPrintDumpUsage(t *testing.T) {
 		"--no-transaction",
 		"--slow-connection",
 		"--seed-file",
+		"schema.table",
 		"--max-depth",
 		"default 10",
 		"CREATE SCHEMA IF NOT EXISTS",

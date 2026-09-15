@@ -234,7 +234,7 @@ func TestStreamTableSanitizedVsPlain(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(rows)
 
 	plainDir := t.TempDir()
-	if err := streamTable(context.Background(), sqlDB, table, plainDir, nil); err != nil {
+	if _, err := streamTable(context.Background(), sqlDB, table, plainDir, nil); err != nil {
 		t.Fatal(err)
 	}
 	plain, err := os.ReadFile(filepath.Join(plainDir, "users.ndjson"))
@@ -247,7 +247,7 @@ func TestStreamTableSanitizedVsPlain(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(rows2)
 
 	sanDir := t.TempDir()
-	if err := streamTable(context.Background(), sqlDB, table, sanDir, SanitizeByPattern); err != nil {
+	if _, err := streamTable(context.Background(), sqlDB, table, sanDir, SanitizeByPattern); err != nil {
 		t.Fatal(err)
 	}
 	sanitized, err := os.ReadFile(filepath.Join(sanDir, "users.ndjson"))

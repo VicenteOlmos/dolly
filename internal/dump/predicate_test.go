@@ -66,9 +66,20 @@ func TestValidateSeeds(t *testing.T) {
 			},
 		},
 		{
+			name: "qualified table",
+			seeds: []RowPredicate{
+				{Table: "public.tbl_a", Column: "id", Op: PredicateEq, Value: 1},
+			},
+		},
+		{
 			name:    "unknown table",
 			seeds:   []RowPredicate{{Table: "missing", Column: "id", Op: PredicateEq, Value: 1}},
 			wantErr: "unknown table",
+		},
+		{
+			name:    "unknown qualified table",
+			seeds:   []RowPredicate{{Table: "risk.emissors", Column: "id", Op: PredicateEq, Value: 1}},
+			wantErr: `unknown table "risk.emissors"`,
 		},
 		{
 			name:    "unknown column",
@@ -100,6 +111,160 @@ func TestValidateSeeds(t *testing.T) {
 				t.Fatalf("ValidateSeeds() = %v, want %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func collidingSeedTables() []db.Table {
+	aCols := []db.Column{
+		{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1},
+		{Name: "tag", DataType: "text", OrdinalPosition: 2},
+	}
+	bCols := []db.Column{
+		{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1},
+		{Name: "tag", DataType: "text", OrdinalPosition: 2},
+		{Name: "only_b", DataType: "text", OrdinalPosition: 3},
+	}
+	return []db.Table{
+		{Schema: "a", Name: "thing", Columns: aCols},
+		{Schema: "b", Name: "thing", Columns: bCols},
+	}
+}
+
+func TestValidateSeedsSchemaQualified(t *testing.T) {
+	tables := collidingSeedTables()
+	tests := []struct {
+		name    string
+		seeds   []RowPredicate
+		wantErr string
+	}{
+		{
+			name: "qualified a.thing",
+			seeds: []RowPredicate{
+				{Table: "a.thing", Column: "id", Op: PredicateEq, Value: 1},
+			},
+		},
+		{
+			name: "qualified b.thing",
+			seeds: []RowPredicate{
+				{Table: "b.thing", Column: "id", Op: PredicateEq, Value: 1},
+			},
+		},
+		{
+			name: "quoted qualified",
+			seeds: []RowPredicate{
+				{Table: `"a"."thing"`, Column: "id", Op: PredicateEq, Value: 1},
+			},
+		},
+		{
+			name: "column belongs to qualified table",
+			seeds: []RowPredicate{
+				{Table: "b.thing", Column: "only_b", Op: PredicateEq, Value: "x"},
+			},
+		},
+		{
+			name: "column missing on qualified table",
+			seeds: []RowPredicate{
+				{Table: "a.thing", Column: "only_b", Op: PredicateEq, Value: "x"},
+			},
+			wantErr: `unknown column "only_b" on table "a.thing"`,
+		},
+		{
+			name: "ambiguous bare name lists candidates",
+			seeds: []RowPredicate{
+				{Table: "thing", Column: "id", Op: PredicateEq, Value: 1},
+			},
+			wantErr: `ambiguous table "thing": matches a.thing, b.thing`,
+		},
+		{
+			name: "unknown qualified in scope of colliding names",
+			seeds: []RowPredicate{
+				{Table: "c.thing", Column: "id", Op: PredicateEq, Value: 1},
+			},
+			wantErr: `unknown table "c.thing"`,
+		},
+		{
+			name: "invalid extra dots",
+			seeds: []RowPredicate{
+				{Table: "a.b.c", Column: "id", Op: PredicateEq, Value: 1},
+			},
+			wantErr: "extra dots",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateSeeds(tt.seeds, tables)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateSeeds() = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateSeeds() = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveSeedTableUnambiguousBareName(t *testing.T) {
+	tables := collidingSeedTables()
+	tbl, err := resolveSeedTable("departments", fixtureTables())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "departments" {
+		t.Fatalf("got %s.%s, want public.departments", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable("a.thing", tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "a" || tbl.Name != "thing" {
+		t.Fatalf("got %s.%s, want a.thing", tbl.Schema, tbl.Name)
+	}
+}
+
+func TestResolveSeedTableDottedAndQuoted(t *testing.T) {
+	pk := []db.Column{{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1}}
+	tables := []db.Table{
+		{Schema: "public", Name: "foo.bar", Columns: pk},
+		{Schema: "public", Name: "a.b.c", Columns: pk},
+		{Schema: "public", Name: "UserTable", Columns: pk},
+		{Schema: "foo", Name: "bar", Columns: pk},
+	}
+
+	tbl, err := resolveSeedTable("foo.bar", []db.Table{tables[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "foo.bar" {
+		t.Fatalf("got %s.%s, want public.foo.bar", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable("a.b.c", []db.Table{tables[1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "a.b.c" {
+		t.Fatalf("got %s.%s, want public.a.b.c", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable(`public."UserTable"`, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "public" || tbl.Name != "UserTable" {
+		t.Fatalf("got %s.%s, want public.UserTable", tbl.Schema, tbl.Name)
+	}
+
+	tbl, err = resolveSeedTable("foo.bar", tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Schema != "foo" || tbl.Name != "bar" {
+		t.Fatalf("qualified foo.bar should win over literal name, got %s.%s", tbl.Schema, tbl.Name)
 	}
 }
 

@@ -81,7 +81,7 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	fs.IntVar(&flags.ChunkSize, "chunk-size", 0, "rows per chunk in slow-connection mode (default: config slow_chunk_size or 1000)")
 	fs.IntVar(&flags.RetryMax, "retry-max", 0, "max query retries per chunk in slow-connection mode (0 = disabled)")
 	fs.StringVar(&flags.RetryBase, "retry-base", "", "base backoff between slow-connection retries (default: config or 500ms)")
-	fs.StringVar(&flags.SeedFile, "seed-file", "", "JSON seed file for subset dump (omit for full-schema dump)")
+	fs.StringVar(&flags.SeedFile, "seed-file", "", "JSON seed file for subset dump (omit for full-schema dump; table may be schema.table)")
 	fs.IntVar(&flags.Percent, "percent", 0, "percent-based subset dump (1-100). Selects recent root rows, then FK closure. Conflicts with --seed-file")
 	fs.IntVar(&flags.MaxDepth, "max-depth", 0, "subset max FK closure depth (default 10)")
 	fs.IntVar(&flags.MaxTables, "max-tables", 0, "subset max tables in closure (default 50)")

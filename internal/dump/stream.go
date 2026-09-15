@@ -372,24 +372,25 @@ func preserveColumnSet(table db.Table, original, transformed map[string]any) map
 	return out
 }
 
-func streamTable(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) error {
+func streamTable(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) (int64, error) {
 	finalPath := tableDataPath(dir, table)
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
+		return 0, fmt.Errorf("create data directory: %w", err)
 	}
 	tmpPath := finalPath + ".tmp"
-	if err := streamTableToPath(ctx, q, table, tmpPath, rowTransform); err != nil {
-		return err
+	n, err := streamTableToPath(ctx, q, table, tmpPath, rowTransform)
+	if err != nil {
+		return 0, err
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("rename table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("rename table %q: %w", table.Name, err)
 	}
-	return nil
+	return n, nil
 }
 
-func streamTableToPath(ctx context.Context, q querier, table db.Table, path string, rowTransform RowTransform) error {
+func streamTableToPath(ctx context.Context, q querier, table db.Table, path string, rowTransform RowTransform) (int64, error) {
 	if err := ValidateTableName(table.Name); err != nil {
-		return err
+		return 0, err
 	}
 	cols := make([]string, len(table.Columns))
 	for i, c := range table.Columns {
@@ -401,16 +402,16 @@ func streamTableToPath(ctx context.Context, q querier, table db.Table, path stri
 
 	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("query table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("query table %q: %w", table.Name, err)
 	}
 	defer rows.Close()
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
+		return 0, fmt.Errorf("create data directory: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("create file for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("create file for table %q: %w", table.Name, err)
 	}
 	defer f.Close()
 
@@ -432,6 +433,7 @@ func streamTableToPath(ctx context.Context, q querier, table db.Table, path stri
 		logSanitizationWarning(table)
 	}
 
+	var exported int64
 	for rows.Next() {
 		values := make([]any, len(table.Columns))
 		valuePtrs := make([]any, len(table.Columns))
@@ -440,7 +442,7 @@ func streamTableToPath(ctx context.Context, q querier, table db.Table, path stri
 		}
 
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("scan row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("scan row for table %q: %w", table.Name, err)
 		}
 
 		rowMap := make(map[string]any, len(table.Columns))
@@ -450,41 +452,42 @@ func streamTableToPath(ctx context.Context, q querier, table db.Table, path stri
 
 		rowMap, err := applyRowTransform(table, rowTransform, rowMap)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		data, err := marshalRow(table, rowMap)
 		if err != nil {
-			return fmt.Errorf("marshal row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("marshal row for table %q: %w", table.Name, err)
 		}
 
 		if _, err := w.Write(data); err != nil {
-			return fmt.Errorf("write row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("write row for table %q: %w", table.Name, err)
 		}
 		if err := w.WriteByte('\n'); err != nil {
-			return fmt.Errorf("write row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("write row for table %q: %w", table.Name, err)
 		}
+		exported++
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate rows for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("iterate rows for table %q: %w", table.Name, err)
 	}
 
 	if err := w.Flush(); err != nil {
-		return fmt.Errorf("flush table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("flush table %q: %w", table.Name, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close file for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("close file for table %q: %w", table.Name, err)
 	}
 
 	succeeded = true
 
-	return nil
+	return exported, nil
 }
 
-func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir string, clauses []compiledWhere, rowTransform RowTransform, orderCol string) error {
+func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir string, clauses []compiledWhere, rowTransform RowTransform, orderCol string) (int64, error) {
 	if err := ValidateTableName(table.Name); err != nil {
-		return err
+		return 0, err
 	}
 	cols := make([]string, len(table.Columns))
 	for i, c := range table.Columns {
@@ -493,7 +496,7 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 
 	whereSQL, args, err := mergeWhereClauses(clauses, 1)
 	if err != nil {
-		return fmt.Errorf("build where for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("build where for table %q: %w", table.Name, err)
 	}
 
 	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
@@ -505,18 +508,18 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("query table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("query table %q: %w", table.Name, err)
 	}
 	defer rows.Close()
 
 	finalPath := tableDataPath(dir, table)
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
+		return 0, fmt.Errorf("create data directory: %w", err)
 	}
 	tmpPath := finalPath + ".tmp"
 	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("create file for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("create file for table %q: %w", table.Name, err)
 	}
 	defer f.Close()
 
@@ -538,6 +541,7 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 		logSanitizationWarning(table)
 	}
 
+	var exported int64
 	for rows.Next() {
 		values := make([]any, len(table.Columns))
 		valuePtrs := make([]any, len(table.Columns))
@@ -546,7 +550,7 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 		}
 
 		if err := rows.Scan(valuePtrs...); err != nil {
-			return fmt.Errorf("scan row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("scan row for table %q: %w", table.Name, err)
 		}
 
 		rowMap := make(map[string]any, len(table.Columns))
@@ -556,39 +560,40 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 
 		rowMap, err := applyRowTransform(table, rowTransform, rowMap)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		data, err := marshalRow(table, rowMap)
 		if err != nil {
-			return fmt.Errorf("marshal row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("marshal row for table %q: %w", table.Name, err)
 		}
 
 		if _, err := w.Write(data); err != nil {
-			return fmt.Errorf("write row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("write row for table %q: %w", table.Name, err)
 		}
 		if err := w.WriteByte('\n'); err != nil {
-			return fmt.Errorf("write row for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("write row for table %q: %w", table.Name, err)
 		}
+		exported++
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate rows for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("iterate rows for table %q: %w", table.Name, err)
 	}
 
 	if err := w.Flush(); err != nil {
-		return fmt.Errorf("flush table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("flush table %q: %w", table.Name, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close file for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("close file for table %q: %w", table.Name, err)
 	}
 
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("rename table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("rename table %q: %w", table.Name, err)
 	}
 	succeeded = true
 
-	return nil
+	return exported, nil
 }
 
 // streamTableSlow dumps a table in keyset chunks using the selected resumable
@@ -605,14 +610,14 @@ func streamTableFiltered(ctx context.Context, q querier, table db.Table, dir str
 //     checkpoint is removed.
 //   - On any streaming error the temp file and checkpoint are preserved so
 //     the next run can resume.
-func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform, retry slowRetryConfig, chunkSize int) error {
+func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform, retry slowRetryConfig, chunkSize int) (int64, error) {
 	if err := ValidateTableName(table.Name); err != nil {
-		return err
+		return 0, err
 	}
 
 	finalPath := tableDataPath(dir, table)
 	if err := os.MkdirAll(filepath.Dir(finalPath), 0o700); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
+		return 0, fmt.Errorf("create data directory: %w", err)
 	}
 	ckptPath := slowCheckpointPath(dir, table)
 	tmpPath := finalPath + ".tmp"
@@ -634,14 +639,18 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		os.Remove(ckptPath)
 		os.Remove(ckptPath + ".tmp")
 		os.Remove(tmpPath)
-		return nil
+		n, err := countNDJSONRows(finalPath)
+		if err != nil {
+			return 0, err
+		}
+		return n, nil
 	}
 
 	descriptor := SelectKeyDescriptor(table)
 	switch descriptor.Strategy {
 	case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex:
 	default:
-		return fmt.Errorf("slow-connection mode: table %q has no resumable key", table.Name)
+		return 0, fmt.Errorf("slow-connection mode: table %q has no resumable key", table.Name)
 	}
 	keyCols := descriptor.ColumnNames()
 
@@ -665,7 +674,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 			}
 		}
 		if !found {
-			return fmt.Errorf("slow-connection mode: key column %q not found on table %q", keyCol, table.Name)
+			return 0, fmt.Errorf("slow-connection mode: key column %q not found on table %q", keyCol, table.Name)
 		}
 	}
 
@@ -688,7 +697,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		hasGen := cp.Strategy != "" || len(cp.KeyColumns) > 0 || cp.KeyFingerprint != "" || len(cp.LastKey) > 0
 		hasLeg := len(cp.PKColumns) > 0 || len(cp.LastPK) > 0
 		if cp.PKColumn != "" && (hasGen || hasLeg) {
-			return fmt.Errorf("load checkpoint for table %q: checkpoint mixes legacy single-pk with other identity fields", table.Name)
+			return 0, fmt.Errorf("load checkpoint for table %q: checkpoint mixes legacy single-pk with other identity fields", table.Name)
 		}
 		if len(cp.keyColumnNames()) == 0 && cp.PKColumn != "" {
 			// ponytail: legacy single-PK checkpoint — discard and restart fresh.
@@ -696,7 +705,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 			os.Remove(ckptPath)
 			os.Remove(ckptPath + ".tmp")
 		} else if err := validateCheckpointDescriptor(cp, descriptor); err != nil {
-			return fmt.Errorf("load checkpoint for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("load checkpoint for table %q: %w", table.Name, err)
 		} else if err := validateSlowCheckpointTemp(tmpPath, cp); err != nil {
 			// ponytail: corrupt/mismatched checkpoint+temp — reset and start fresh.
 			os.Remove(tmpPath)
@@ -705,7 +714,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		} else {
 			v, err := checkpointKeyValues(cp.lastKeyValues(), keyTypes)
 			if err != nil {
-				return fmt.Errorf("load checkpoint for table %q: %w", table.Name, err)
+				return 0, fmt.Errorf("load checkpoint for table %q: %w", table.Name, err)
 			}
 			lastKey = v
 			appendMode = true
@@ -720,7 +729,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		f, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	}
 	if err != nil {
-		return fmt.Errorf("create file for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("create file for table %q: %w", table.Name, err)
 	}
 	defer f.Close()
 
@@ -728,12 +737,18 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	// and would truncate away committed rows on a first-chunk rollback. Capture
 	// the real file size now; subsequent chunks update the offset after flush.
 	var rollbackOffset int64
+	var exported int64
 	if appendMode {
 		fi, err := f.Stat()
 		if err != nil {
-			return fmt.Errorf("stat temp file for table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("stat temp file for table %q: %w", table.Name, err)
 		}
 		rollbackOffset = fi.Size()
+		n, err := countNDJSONRows(tmpPath)
+		if err != nil {
+			return 0, fmt.Errorf("count resumed rows for table %q: %w", table.Name, err)
+		}
+		exported = n
 	}
 	resumed := appendMode
 
@@ -749,7 +764,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return 0, err
 		}
 		var query string
 		var args []any
@@ -769,7 +784,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		// Record file offset before writing the chunk. If checkpoint save fails
 		// after the flush, we truncate back to this offset to avoid duplicates.
 		if err := w.Flush(); err != nil {
-			return fmt.Errorf("flush table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("flush table %q: %w", table.Name, err)
 		}
 		var offset int64
 		if resumed {
@@ -778,21 +793,21 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		} else {
 			offset, err = f.Seek(0, io.SeekCurrent)
 			if err != nil {
-				return fmt.Errorf("seek table %q: %w", table.Name, err)
+				return 0, fmt.Errorf("seek table %q: %w", table.Name, err)
 			}
 		}
 
-		chunkDone, chunkErr := func() (bool, error) {
+		chunkDone, chunkRows, chunkErr := func() (bool, int, error) {
 			for attempt := 0; ; attempt++ {
 				rows, err := q.QueryContext(ctx, query, args...)
 				if err != nil {
 					// Preserve the existing contract: query startup retries any
 					// error under the configured bounded policy.
 					if ctx.Err() != nil {
-						return false, ctx.Err()
+						return false, 0, ctx.Err()
 					}
 					if maxAttempts == 0 || attempt >= maxAttempts {
-						return false, fmt.Errorf("query table %q chunk: %w", table.Name, err)
+						return false, 0, fmt.Errorf("query table %q chunk: %w", table.Name, err)
 					}
 					backoff := baseDelay << uint(attempt)
 					if backoff > maxBackoff {
@@ -801,7 +816,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 					select {
 					case <-time.After(backoff):
 					case <-ctx.Done():
-						return false, ctx.Err()
+						return false, 0, ctx.Err()
 					}
 					continue
 				}
@@ -818,7 +833,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 
 					if err := rows.Scan(valuePtrs...); err != nil {
 						_ = rows.Close()
-						return false, fmt.Errorf("scan row for table %q: %w", table.Name, err)
+						return false, 0, fmt.Errorf("scan row for table %q: %w", table.Name, err)
 					}
 
 					rowMap := make(map[string]any, len(table.Columns))
@@ -829,13 +844,13 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 					rowMap, err = applyRowTransform(table, rowTransform, rowMap)
 					if err != nil {
 						_ = rows.Close()
-						return false, err
+						return false, 0, err
 					}
 
 					data, marshalErr := marshalRow(table, rowMap)
 					if marshalErr != nil {
 						_ = rows.Close()
-						return false, fmt.Errorf("marshal row for table %q: %w", table.Name, marshalErr)
+						return false, 0, fmt.Errorf("marshal row for table %q: %w", table.Name, marshalErr)
 					}
 
 					chunkLines = append(chunkLines, data)
@@ -851,7 +866,7 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 				if iterateErr != nil {
 					wrapped := fmt.Errorf("iterate rows for table %q: %w", table.Name, iterateErr)
 					if !slowRetryable(iterateErr) || maxAttempts == 0 || attempt >= maxAttempts {
-						return false, wrapped
+						return false, 0, wrapped
 					}
 					backoff := baseDelay << uint(attempt)
 					if backoff > maxBackoff {
@@ -860,42 +875,43 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 					select {
 					case <-time.After(backoff):
 					case <-ctx.Done():
-						return false, ctx.Err()
+						return false, 0, ctx.Err()
 					}
 					continue
 				}
 
 				for _, data := range chunkLines {
 					if _, err := w.Write(data); err != nil {
-						return false, fmt.Errorf("write row for table %q: %w", table.Name, err)
+						return false, 0, fmt.Errorf("write row for table %q: %w", table.Name, err)
 					}
 					if err := w.WriteByte('\n'); err != nil {
-						return false, fmt.Errorf("write row for table %q: %w", table.Name, err)
+						return false, 0, fmt.Errorf("write row for table %q: %w", table.Name, err)
 					}
 				}
 				if rowCount > 0 {
 					lastKey = chunkLast
 				}
 
-				return rowCount < chunkSize, nil
+				return rowCount < chunkSize, rowCount, nil
 			}
 		}()
 		if chunkErr != nil {
-			return chunkErr
+			return 0, chunkErr
 		}
 
 		// Persist progress after each chunk so we can resume.
 		if err := w.Flush(); err != nil {
-			return fmt.Errorf("flush table %q: %w", table.Name, err)
+			return 0, fmt.Errorf("flush table %q: %w", table.Name, err)
 		}
 		if lastKey != nil {
 			if err := saveSlowCheckpoint(ckptPath, table, descriptor, lastKey); err != nil {
 				// ponytail: checkpoint failed after flush; truncate the chunk so
 				// the next resume cannot see duplicate rows.
 				_ = f.Truncate(offset)
-				return fmt.Errorf("save checkpoint for table %q: %w", table.Name, err)
+				return 0, fmt.Errorf("save checkpoint for table %q: %w", table.Name, err)
 			}
 		}
+		exported += int64(chunkRows)
 
 		if chunkDone {
 			break
@@ -903,19 +919,19 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	}
 
 	if err := w.Flush(); err != nil {
-		return fmt.Errorf("flush table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("flush table %q: %w", table.Name, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close file for table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("close file for table %q: %w", table.Name, err)
 	}
 
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("rename table %q: %w", table.Name, err)
+		return 0, fmt.Errorf("rename table %q: %w", table.Name, err)
 	}
 
 	// ponytail: best-effort cleanup — checkpoint/temp no longer needed after rename.
 	os.Remove(ckptPath)
 	os.Remove(ckptPath + ".tmp")
 
-	return nil
+	return exported, nil
 }

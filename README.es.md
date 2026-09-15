@@ -182,7 +182,7 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --trust-schema-sql --no-transac
 dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1000
 ```
 
-`--percent` es incompatible con `--seed-file` y `--slow-connection`. El cierre de claves foráneas puede hacer que un volcado parcial supere el porcentaje solicitado.
+`--percent` es incompatible con `--seed-file` y `--slow-connection`. El cierre de claves foráneas puede hacer que un volcado parcial supere el porcentaje solicitado. En un archivo de semillas, `"table"` puede ser `schema.table`; un nombre sin esquema debe coincidir con exactamente una tabla en el alcance del volcado.
 
 ### Restauración masiva más rápida — avanzado
 
