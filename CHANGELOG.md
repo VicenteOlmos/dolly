@@ -4,6 +4,10 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+### Dump metadata
+
+- **`row_count`** — `metadata.json` records the number of rows written to each table's NDJSON file instead of the catalog `n_live_tup` estimate, which is often `0` before `ANALYZE`.
+
 ## [0.3.5](https://github.com/VicenteOlmos/dolly/releases/tag/v0.3.5) — 2026-08-05
 
 ### Resilient dumps

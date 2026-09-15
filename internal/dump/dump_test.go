@@ -68,6 +68,14 @@ func TestDumpFullFlow(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "metadata.json.tmp")); err == nil {
 		t.Fatal("metadata.json.tmp should not exist")
 	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tables) != 1 || meta.Tables[0].RowCount == nil || *meta.Tables[0].RowCount != 2 {
+		t.Fatalf("users row_count = %v, want 2", meta.Tables)
+	}
 }
 
 func TestDumpWithSchemasMulti(t *testing.T) {
@@ -126,6 +134,9 @@ func TestDumpWithSchemasMulti(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, *table.DataFile)); err != nil {
 			t.Fatalf("table %s data file: %v", table.Schema, err)
 		}
+		if table.RowCount == nil || *table.RowCount != 1 {
+			t.Fatalf("table %s.%s row_count = %v, want 1", table.Schema, table.Name, table.RowCount)
+		}
 	}
 	if len(paths) != 2 {
 		t.Fatalf("same-name cross-schema paths collided: %v", paths)
@@ -183,6 +194,83 @@ func TestDumpEmptyTable(t *testing.T) {
 	}
 	if len(meta.Tables) != 1 || meta.Tables[0].DataFile == nil || *meta.Tables[0].DataFile != "data/7075626c6963.656d7074795f74626c.ndjson" {
 		t.Fatalf("empty table data_file = %#v", meta.Tables)
+	}
+	if meta.Tables[0].RowCount == nil || *meta.Tables[0].RowCount != 0 {
+		t.Fatalf("empty table row_count = %v, want 0", meta.Tables[0].RowCount)
+	}
+}
+
+func TestDumpMetadataRowCountUsesExportedRows(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "emissors", int64(0))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)[\s\S]*table_type = 'BASE TABLE'[\s\S]*ORDER BY t\.table_schema, t\.table_name`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "emissors", "rut", "bigint", "NO", 1, true).
+		AddRow("public", "emissors", "name", "text", "YES", 2, false).
+		AddRow("public", "emissors", "ind", "integer", "YES", 3, false)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
+
+	streamRows := sqlmock.NewRows([]string{"rut", "name", "ind"}).
+		AddRow(int64(1), "a", 0).
+		AddRow(int64(2), "b", 0).
+		AddRow(int64(3), "c", 0)
+	mock.ExpectQuery("SELECT .* FROM .*").
+		WillReturnRows(streamRows)
+
+	mock.ExpectCommit()
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Tables) != 1 || meta.Tables[0].Name != "emissors" {
+		t.Fatalf("tables = %+v, want emissors", meta.Tables)
+	}
+	if meta.Tables[0].RowCount == nil || *meta.Tables[0].RowCount != 3 {
+		t.Fatalf("row_count = %v, want 3 exported rows (catalog estimate was 0)", meta.Tables[0].RowCount)
+	}
+	if meta.Provenance == nil || meta.Provenance.TotalRowEstimate != 3 {
+		t.Fatalf("total_row_estimate = %+v, want 3", meta.Provenance)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, *meta.Tables[0].DataFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotLines := 0
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		if line != "" {
+			gotLines++
+		}
+	}
+	if gotLines != 3 {
+		t.Fatalf("ndjson lines = %d, want 3", gotLines)
 	}
 }
 

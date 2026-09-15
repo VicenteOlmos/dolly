@@ -191,7 +191,7 @@ func withTestWorkerSessions(t *testing.T, q querier) {
 	t.Cleanup(func() { parallelWorkerSessionOpener = old })
 }
 
-func withParallelStream(t *testing.T, fn func(context.Context, querier, db.Table, string, RowTransform) error) {
+func withParallelStream(t *testing.T, fn func(context.Context, querier, db.Table, string, RowTransform) (int64, error)) {
 	t.Helper()
 	old := parallelStreamTable
 	parallelStreamTable = fn
@@ -281,7 +281,7 @@ func TestParallelProgressCallbackSerialized(t *testing.T) {
 	assignDataFiles(tables)
 	var invocations int
 	seen := make(map[string]struct{}, len(tables)*2)
-	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) error { return nil })
+	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) (int64, error) { return 0, nil })
 	err := runTestParallelDump(t, tables, 2, config{
 		onProgress: func(ev ProgressEvent) {
 			invocations++
@@ -313,7 +313,7 @@ func TestParallelSchedulerRespectsWorkerCap(t *testing.T) {
 	}
 	assignDataFiles(tables)
 	var active, peak atomic.Int32
-	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) error {
+	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) (int64, error) {
 		cur := active.Add(1)
 		for {
 			oldPeak := peak.Load()
@@ -322,7 +322,7 @@ func TestParallelSchedulerRespectsWorkerCap(t *testing.T) {
 			}
 		}
 		defer active.Add(-1)
-		return nil
+		return 0, nil
 	})
 	if err := runTestParallelDump(t, tables, 3, config{}); err != nil {
 		t.Fatal(err)
@@ -341,11 +341,11 @@ func TestParallelDumpFailurePreservesPriorArtifacts(t *testing.T) {
 	if err := os.WriteFile(metaTmp, []byte(`{"schema":"public"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	withParallelStream(t, func(_ context.Context, _ querier, table db.Table, path string, _ RowTransform) error {
+	withParallelStream(t, func(_ context.Context, _ querier, table db.Table, path string, _ RowTransform) (int64, error) {
 		if table.Name == "fail" {
-			return errParallelTestFailure
+			return 0, errParallelTestFailure
 		}
-		return os.WriteFile(path, []byte("x"), 0o600)
+		return 0, os.WriteFile(path, []byte("x"), 0o600)
 	})
 	withTestWorkerSessions(t, stubQuerier{})
 	plan := &ParallelPlan{
@@ -375,11 +375,11 @@ func TestParallelDumpFailureCleansRunOwnedArtifacts(t *testing.T) {
 	if err := os.WriteFile(metaTmp, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	withParallelStream(t, func(_ context.Context, _ querier, table db.Table, path string, _ RowTransform) error {
+	withParallelStream(t, func(_ context.Context, _ querier, table db.Table, path string, _ RowTransform) (int64, error) {
 		if table.Name == "fail" {
-			return errParallelTestFailure
+			return 0, errParallelTestFailure
 		}
-		return os.WriteFile(path, []byte("x"), 0o600)
+		return 0, os.WriteFile(path, []byte("x"), 0o600)
 	})
 	withTestWorkerSessions(t, stubQuerier{})
 	plan := &ParallelPlan{cfg: config{}, outputDir: dir, tables: tables, stagingDir: staging, metaTmpPath: metaTmp, startedAt: time.Now(), coordinator: &snapshotCoordinator{snapshotLit: "'1-2-3'"}}
@@ -464,10 +464,10 @@ func TestSnapshotLifecycleFailureCancelsActiveWorkers(t *testing.T) {
 	}
 	tickCh := withManualMonitorTicks(t)
 	startedCh := make(chan struct{})
-	withParallelStream(t, func(ctx context.Context, _ querier, _ db.Table, _ string, _ RowTransform) error {
+	withParallelStream(t, func(ctx context.Context, _ querier, _ db.Table, _ string, _ RowTransform) (int64, error) {
 		close(startedCh)
 		<-ctx.Done()
-		return ctx.Err()
+		return 0, ctx.Err()
 	})
 	withTestWorkerSessions(t, stubQuerier{})
 	oldCheck := parallelSnapshotLivenessCheck
@@ -538,8 +538,8 @@ func TestParallelDumpCleanupDirProbePreservesDestination(t *testing.T) {
 	}
 	t.Cleanup(func() { parallelTestHooks.onCleanupStart = oldHook })
 
-	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) error {
-		return errParallelTestFailure
+	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) (int64, error) {
+		return 0, errParallelTestFailure
 	})
 	withTestWorkerSessions(t, stubQuerier{})
 	plan := &ParallelPlan{
@@ -564,10 +564,10 @@ func TestParallelDumpCancelPreservesPriorArtifacts(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
-	withParallelStream(t, func(ctx context.Context, _ querier, _ db.Table, _ string, _ RowTransform) error {
+	withParallelStream(t, func(ctx context.Context, _ querier, _ db.Table, _ string, _ RowTransform) (int64, error) {
 		close(started)
 		<-ctx.Done()
-		return ctx.Err()
+		return 0, ctx.Err()
 	})
 	withTestWorkerSessions(t, stubQuerier{})
 	plan := &ParallelPlan{
@@ -667,8 +667,8 @@ func parallelDumpCleanupSIGKILLChild(t *testing.T) {
 	defer func() { parallelTestHooks.onCleanupStagingRemoved = oldRemoved }()
 
 	oldStream := parallelStreamTable
-	parallelStreamTable = func(context.Context, querier, db.Table, string, RowTransform) error {
-		return errParallelTestFailure
+	parallelStreamTable = func(context.Context, querier, db.Table, string, RowTransform) (int64, error) {
+		return 0, errParallelTestFailure
 	}
 	defer func() { parallelStreamTable = oldStream }()
 
@@ -699,8 +699,8 @@ func TestParallelDumpJoinsWorkerCloseAndCoordinatorCloseErrors(t *testing.T) {
 	tables := []db.Table{{Schema: "public", Name: "fail"}}
 	assignDataFiles(tables)
 	dir, staging := mustStaging(t)
-	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) error {
-		return errParallelTestFailure
+	withParallelStream(t, func(context.Context, querier, db.Table, string, RowTransform) (int64, error) {
+		return 0, errParallelTestFailure
 	})
 	oldOpener := parallelWorkerSessionOpener
 	parallelWorkerSessionOpener = func(context.Context, *sql.DB, string) (querier, func() error, error) {

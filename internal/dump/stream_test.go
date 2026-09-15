@@ -22,7 +22,8 @@ import (
 )
 
 func streamTableSlowDefault(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) error {
-	return streamTableSlow(ctx, q, table, dir, rowTransform, slowRetryConfig{}, DefaultSlowChunkSize)
+	_, err := streamTableSlow(ctx, q, table, dir, rowTransform, slowRetryConfig{}, DefaultSlowChunkSize)
+	return err
 }
 
 // slowQuerySQL builds the exact SELECT streamTableSlow issues for keyset pagination.
@@ -127,7 +128,7 @@ func TestStreamTable(t *testing.T) {
 				WillReturnRows(tt.rows)
 
 			dir := t.TempDir()
-			err = streamTable(context.Background(), sqlDB, tt.table, dir, nil)
+			_, err = streamTable(context.Background(), sqlDB, tt.table, dir, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("streamTable() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -182,7 +183,7 @@ func TestStreamTableQueryError(t *testing.T) {
 		Columns: []db.Column{{Name: "id", DataType: "integer"}},
 	}
 
-	err = streamTable(context.Background(), sqlDB, table, dir, nil)
+	_, err = streamTable(context.Background(), sqlDB, table, dir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -216,7 +217,7 @@ func TestStreamTableRowsError(t *testing.T) {
 		Columns: []db.Column{{Name: "id", DataType: "integer"}},
 	}
 
-	err = streamTable(context.Background(), sqlDB, table, dir, nil)
+	_, err = streamTable(context.Background(), sqlDB, table, dir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -242,7 +243,7 @@ func TestStreamTableContextCancellation(t *testing.T) {
 		Columns: []db.Column{{Name: "id", DataType: "integer"}},
 	}
 
-	err = streamTable(ctx, sqlDB, table, dir, nil)
+	_, err = streamTable(ctx, sqlDB, table, dir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -278,7 +279,7 @@ func TestStreamTableManyRows(t *testing.T) {
 		WillReturnRows(rows)
 
 	dir := t.TempDir()
-	err = streamTable(context.Background(), sqlDB, table, dir, nil)
+	_, err = streamTable(context.Background(), sqlDB, table, dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,7 +512,7 @@ func TestStreamTableSlowCompositeUniqueIndex(t *testing.T) {
 		WillReturnError(fmt.Errorf("connection reset"))
 
 	dir := t.TempDir()
-	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, 2)
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, 2)
 	if err == nil {
 		t.Fatal("expected query error")
 	}
@@ -812,7 +813,7 @@ func TestStreamTableSlowConfigurableChunkSize(t *testing.T) {
 		WillReturnRows(rows2)
 
 	dir := t.TempDir()
-	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, chunkSize)
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, chunkSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1668,7 +1669,7 @@ func TestStreamTableSlowRetrySucceedsAfterFailures(t *testing.T) {
 	dir := t.TempDir()
 	fq := &flakyQuerier{inner: sqlDB, failsRemaining: 2, failErr: fmt.Errorf("connection reset")}
 	retry := slowRetryConfig{max: 3, base: time.Millisecond}
-	if err := streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
+	if _, err := streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1711,7 +1712,7 @@ func TestStreamTableSlowRetryExhaustedPreservesCheckpoint(t *testing.T) {
 
 	fq := &flakyQuerier{inner: sqlDB, failsRemaining: 1, failErr: fmt.Errorf("connection reset")}
 	retry := slowRetryConfig{max: 1, base: time.Millisecond}
-	err = streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize)
+	_, err = streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize)
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
 	}
@@ -1750,7 +1751,7 @@ func TestStreamTableSlowRetryNoRetryOnCanceled(t *testing.T) {
 	}
 
 	retry := slowRetryConfig{max: 5, base: time.Millisecond}
-	err = streamTableSlow(ctx, sqlDB, table, t.TempDir(), nil, retry, DefaultSlowChunkSize)
+	_, err = streamTableSlow(ctx, sqlDB, table, t.TempDir(), nil, retry, DefaultSlowChunkSize)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1779,7 +1780,7 @@ func TestStreamTableSlowRowsErrRetryable(t *testing.T) {
 
 	dir := t.TempDir()
 	retry := slowRetryConfig{max: 3, base: time.Millisecond}
-	if err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
+	if _, err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1809,7 +1810,7 @@ func TestStreamTableSlowRowsErrNonRetryable(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(rows)
 
 	dir := t.TempDir()
-	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 3, base: time.Millisecond}, DefaultSlowChunkSize)
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 3, base: time.Millisecond}, DefaultSlowChunkSize)
 	if err == nil || !strings.Contains(err.Error(), "iterate rows") {
 		t.Fatalf("error = %v, want iteration failure", err)
 	}
@@ -1837,7 +1838,7 @@ func TestStreamTableSlowRowsErrExhaustion(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 1, base: time.Millisecond}, DefaultSlowChunkSize)
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 1, base: time.Millisecond}, DefaultSlowChunkSize)
 	if err == nil || !strings.Contains(err.Error(), "iterate rows") {
 		t.Fatalf("error = %v, want exhausted iteration failure", err)
 	}
