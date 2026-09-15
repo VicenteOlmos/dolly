@@ -4,6 +4,10 @@ All notable operator-facing changes to Dolly are documented here.
 
 ## Unreleased
 
+### Dump
+
+- **Schema-qualified seed tables** — `--seed-file` predicates accept `schema.table`. A bare table name that matches more than one table in the dump scope fails with the candidate list instead of picking one.
+
 ### Restore
 
 - **Timestamp COPY restore** — `--no-transaction` binary COPY parses dumped `date` / `timestamp` / `timestamptz` values into `time.Time` (and PostgreSQL `infinity` / `-infinity` into pgtype infinity values) so timezone-naive timestamps no longer fail with OID 1114 encode errors. Dumps write tz-naive timestamps and dates without a UTC `Z` offset; existing RFC 3339 dumps with `Z` still restore.

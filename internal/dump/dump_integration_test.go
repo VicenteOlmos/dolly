@@ -299,6 +299,99 @@ func TestIntegrationSubsetDumpTableSeed(t *testing.T) {
 	}
 }
 
+func TestIntegrationSubsetDumpQualifiedSeedAcrossSchemas(t *testing.T) {
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	schemaA := fmt.Sprintf("seed_a_%d", suffix)
+	schemaB := fmt.Sprintf("seed_b_%d", suffix)
+
+	for _, q := range []string{
+		fmt.Sprintf(`CREATE SCHEMA %s`, schemaA),
+		fmt.Sprintf(`CREATE SCHEMA %s`, schemaB),
+		fmt.Sprintf(`CREATE TABLE %s.thing (id int primary key, tag text)`, schemaA),
+		fmt.Sprintf(`CREATE TABLE %s.thing (id int primary key, tag text)`, schemaB),
+		fmt.Sprintf(`INSERT INTO %s.thing VALUES (1, 'from-a')`, schemaA),
+		fmt.Sprintf(`INSERT INTO %s.thing VALUES (1, 'from-b')`, schemaB),
+	} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = conn.ExecContext(context.Background(), fmt.Sprintf(`DROP SCHEMA IF EXISTS %s, %s CASCADE`, schemaA, schemaB))
+	})
+
+	dir := t.TempDir()
+	cfg := SubsetConfig{
+		Seeds: []RowPredicate{
+			{Table: schemaA + ".thing", Column: "id", Op: PredicateEq, Value: int64(1)},
+		},
+		Limits: DefaultSubsetLimits(),
+	}
+	if err := Dump(ctx, conn, dir, WithSchemas([]string{schemaA, schemaB}), WithSubset(cfg)); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotA, gotB bool
+	var aTable db.Table
+	for _, table := range meta.Tables {
+		if table.Name != "thing" {
+			continue
+		}
+		switch table.Schema {
+		case schemaA:
+			gotA = true
+			aTable = table
+		case schemaB:
+			gotB = true
+		}
+	}
+	if !gotA {
+		t.Fatalf("dump missing %s.thing, tables=%v", schemaA, meta.Tables)
+	}
+	if gotB {
+		t.Fatalf("dump included %s.thing; qualified seed should select only %s.thing", schemaB, schemaA)
+	}
+	if aTable.DataFile == nil {
+		t.Fatal("qualified seed table missing data_file")
+	}
+	lines, err := readNDJSONLines(tableDataPath(dir, aTable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("rows = %d, want 1: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "from-a") {
+		t.Fatalf("row = %s, want tag from-a", lines[0])
+	}
+	if strings.Contains(lines[0], "from-b") {
+		t.Fatalf("row = %s, must not include from-b", lines[0])
+	}
+
+	_, err = planSubset(ctx, conn, []db.Table{
+		{Schema: schemaA, Name: "thing", Columns: []db.Column{
+			{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1},
+			{Name: "tag", DataType: "text", OrdinalPosition: 2},
+		}},
+		{Schema: schemaB, Name: "thing", Columns: []db.Column{
+			{Name: "id", DataType: "integer", PrimaryKey: true, OrdinalPosition: 1},
+			{Name: "tag", DataType: "text", OrdinalPosition: 2},
+		}},
+	}, SubsetConfig{
+		Seeds:  []RowPredicate{{Table: "thing", Column: "id", Op: PredicateEq, Value: int64(1)}},
+		Limits: DefaultSubsetLimits(),
+	})
+	if err == nil || !strings.Contains(err.Error(), `ambiguous table "thing"`) || !strings.Contains(err.Error(), schemaA+".thing") || !strings.Contains(err.Error(), schemaB+".thing") {
+		t.Fatalf("bare name error = %v, want ambiguous listing both schemas", err)
+	}
+}
+
 func TestIntegrationSubsetDumpMaxTablesExceeded(t *testing.T) {
 	conn := openIntegrationDB(t)
 	dir := t.TempDir()
