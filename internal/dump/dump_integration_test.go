@@ -883,8 +883,8 @@ func TestIntegrationDumpSlowMixedSchemaStrategies(t *testing.T) {
 		}
 	})
 	fallbackQualified := schema + ".fallback_logs"
-	wantWarn := "warning: table \"" + fallbackQualified + "\" has no safe key; using non-resumable normal streaming"
-	if strings.TrimSpace(stderr) != wantWarn {
+	wantWarn := snapshotInconsistentWarning + "\n" + "warning: table \"" + fallbackQualified + "\" has no safe key; using non-resumable normal streaming"
+	if strings.TrimSpace(stderr) != strings.TrimSpace(wantWarn) {
 		t.Fatalf("stderr = %q, want exactly %q", stderr, wantWarn)
 	}
 

@@ -258,6 +258,9 @@ func TestDumpMetadataRowCountUsesExportedRows(t *testing.T) {
 	if meta.Provenance == nil || meta.Provenance.TotalRowEstimate != 3 {
 		t.Fatalf("total_row_estimate = %+v, want 3", meta.Provenance)
 	}
+	if !meta.Provenance.SnapshotConsistent {
+		t.Fatalf("snapshot_consistent = false, want true for transactional dump")
+	}
 
 	data, err := os.ReadFile(filepath.Join(dir, *meta.Tables[0].DataFile))
 	if err != nil {
@@ -307,10 +310,13 @@ func TestDumpSlowMetadataRowCountUsesExportedRows(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(streamRows)
 
-	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}))
+	stderr := captureStderr(func() {
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithSlowConnection(), WithProvenance(Provenance{}))
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertSnapshotInconsistentWarningFirst(t, stderr)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -327,6 +333,9 @@ func TestDumpSlowMetadataRowCountUsesExportedRows(t *testing.T) {
 	}
 	if meta.Provenance == nil || meta.Provenance.TotalRowEstimate != 4 {
 		t.Fatalf("total_row_estimate = %+v, want 4", meta.Provenance)
+	}
+	if meta.Provenance.SnapshotConsistent {
+		t.Fatal("snapshot_consistent = true, want false for slow-connection dump")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, *meta.Tables[0].DataFile))
 	if err != nil {
@@ -1515,6 +1524,24 @@ func captureStderr(fn func()) string {
 	return <-outC
 }
 
+const snapshotInconsistentWarning = "warning: dump is not snapshot-consistent; chunk/slow mode reads tables outside a shared snapshot"
+
+func assertSnapshotInconsistentWarningFirst(t *testing.T, stderr string) string {
+	t.Helper()
+	prefix := snapshotInconsistentWarning + "\n"
+	if strings.HasPrefix(stderr, prefix) {
+		if strings.Count(stderr, snapshotInconsistentWarning) != 1 {
+			t.Fatalf("snapshot warning should appear exactly once:\n%s", stderr)
+		}
+		return strings.TrimPrefix(stderr, prefix)
+	}
+	if strings.TrimSpace(stderr) == snapshotInconsistentWarning {
+		return ""
+	}
+	t.Fatalf("stderr must start with snapshot warning, got:\n%s", stderr)
+	return ""
+}
+
 func eventsCodeUniqueIndexRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
 		"nspname", "relname", "index_name", "index_oid", "indisprimary",
@@ -1599,6 +1626,7 @@ func TestDumpSlowMixedDispatchAndWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	stderr = assertSnapshotInconsistentWarningFirst(t, stderr)
 	assertFallbackWarningsInOrder(t, stderr, "public.logs", "public.notes")
 	meta, err := ReadMetadata(dir)
 	if err != nil {
@@ -1681,8 +1709,9 @@ func TestDumpChunkUniqueAndPKDispatch(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stderr, "no safe key") {
-		t.Fatalf("chunk-only unrequested tables should not warn: %q", stderr)
+	rest := assertSnapshotInconsistentWarningFirst(t, stderr)
+	if strings.TrimSpace(rest) != "" {
+		t.Fatalf("unexpected stderr after snapshot warning: %q", rest)
 	}
 
 	meta, err := ReadMetadata(dir)
@@ -1691,6 +1720,9 @@ func TestDumpChunkUniqueAndPKDispatch(t *testing.T) {
 	}
 	if meta.Provenance == nil || meta.Provenance.ChunkTables == nil {
 		t.Fatal("expected chunk_tables provenance")
+	}
+	if meta.Provenance.SnapshotConsistent {
+		t.Fatal("snapshot_consistent = true, want false for chunk-table dump")
 	}
 	if len(meta.Provenance.ChunkTables.Requested) != 1 {
 		t.Fatalf("requested = %v", meta.Provenance.ChunkTables.Requested)
@@ -1734,6 +1766,7 @@ func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+	stderr = assertSnapshotInconsistentWarningFirst(t, stderr)
 	assertFallbackWarningsInOrder(t, stderr, "public.logs", "public.notes")
 
 	meta, err := ReadMetadata(dir)
@@ -1796,6 +1829,7 @@ func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	stderr = assertSnapshotInconsistentWarningFirst(t, stderr)
 	assertFallbackWarningsInOrder(t, stderr, "public.logs")
 	if _, err := os.Stat(slowCheckpointPath(dir, db.Table{Schema: "public", Name: "logs"})); err == nil {
 		t.Fatal("fallback chunk table should not create checkpoint")
@@ -1895,6 +1929,7 @@ func TestDumpLegacyArtifactGuardBehavior(t *testing.T) {
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)
 		}
+		stderr = assertSnapshotInconsistentWarningFirst(t, stderr)
 		assertFallbackWarningsInOrder(t, stderr, "public.logs")
 	})
 }
