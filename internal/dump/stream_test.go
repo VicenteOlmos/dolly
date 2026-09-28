@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -1561,7 +1560,7 @@ func TestStreamTableSlowResumeCheckpointSaveFailurePreservesPriorRows(t *testing
 	if info.Size() == 0 {
 		t.Fatal("temp file was truncated to 0; prior committed rows lost")
 	}
-	if runtime.GOOS != "windows" && info.Size() != int64(len(priorData)) {
+	if info.Size() != int64(len(priorData)) {
 		t.Fatalf("temp file size = %d, want %d", info.Size(), len(priorData))
 	}
 

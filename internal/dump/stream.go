@@ -724,7 +724,16 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	var f *os.File
 	var err error
 	if appendMode {
-		f, err = os.OpenFile(tmpPath, os.O_APPEND|os.O_WRONLY, 0o600)
+		// O_APPEND opens with FILE_APPEND_DATA on Windows, and that access
+		// mask rejects Truncate. A failed checkpoint save would then leave
+		// the flushed chunk in the temp file.
+		f, err = os.OpenFile(tmpPath, os.O_WRONLY, 0o600)
+		if err == nil {
+			if _, seekErr := f.Seek(0, io.SeekEnd); seekErr != nil {
+				f.Close()
+				err = seekErr
+			}
+		}
 	} else {
 		f, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	}
@@ -733,9 +742,8 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	}
 	defer f.Close()
 
-	// ponytail: O_APPEND keeps the fd offset at 0, so f.SeekCurrent returns 0
-	// and would truncate away committed rows on a first-chunk rollback. Capture
-	// the real file size now; subsequent chunks update the offset after flush.
+	// Capture the real file size before the first resumed chunk. A later
+	// Seek can still report 0 if the writer has not flushed yet.
 	var rollbackOffset int64
 	var exported int64
 	if appendMode {
@@ -905,9 +913,11 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		}
 		if lastKey != nil {
 			if err := saveSlowCheckpoint(ckptPath, table, descriptor, lastKey); err != nil {
-				// ponytail: checkpoint failed after flush; truncate the chunk so
-				// the next resume cannot see duplicate rows.
-				_ = f.Truncate(offset)
+				// Checkpoint failed after flush; drop the chunk so the next
+				// resume cannot see duplicate rows.
+				if truncErr := f.Truncate(offset); truncErr != nil {
+					return 0, fmt.Errorf("save checkpoint for table %q: %w (also truncate temp file: %v)", table.Name, err, truncErr)
+				}
 				return 0, fmt.Errorf("save checkpoint for table %q: %w", table.Name, err)
 			}
 		}
