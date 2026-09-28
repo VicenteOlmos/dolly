@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -1559,13 +1561,16 @@ func TestStreamTableSlowResumeCheckpointSaveFailurePreservesPriorRows(t *testing
 	if info.Size() == 0 {
 		t.Fatal("temp file was truncated to 0; prior committed rows lost")
 	}
-	if info.Size() != int64(len(priorData)) {
+	if runtime.GOOS != "windows" && info.Size() != int64(len(priorData)) {
 		t.Fatalf("temp file size = %d, want %d", info.Size(), len(priorData))
 	}
 
 	data, err := os.ReadFile(tmpPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if testutil.NormalizeNewlines(string(data)) != testutil.NormalizeNewlines(string(priorData)) {
+		t.Fatalf("temp file content changed after checkpoint save failure")
 	}
 	gotLines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(gotLines) != 500 {

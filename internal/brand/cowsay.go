@@ -39,6 +39,8 @@ func RenderSheep(eyes string) []string {
 }
 
 func parseCowHeredoc(source string) string {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	source = strings.ReplaceAll(source, "\r", "\n")
 	m := cowHeredocRE.FindStringSubmatch(source)
 	if len(m) < 2 {
 		return ""
