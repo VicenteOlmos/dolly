@@ -281,6 +281,9 @@ func TestRunCancelAfterStageRemovesCandidate(t *testing.T) {
 	}
 
 	stageReady = nil
+	oldStart := startDetachedProcess
+	startDetachedProcess = func(string, []string) error { return nil }
+	t.Cleanup(func() { startDetachedProcess = oldStart })
 	result, err := Run(context.Background(), Options{
 		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
 		InstalledVersion: "0.3.1",
