@@ -148,51 +148,43 @@ func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.Sequ
 	return true, nil
 }
 
+// sequenceSyncBatch is the table count per SyncSequencesToData lookup.
+// Two placeholders per table stay under PostgreSQL's 65535-parameter limit.
+// Tests shrink it to prove lookups are split.
+var sequenceSyncBatch = 16000
+
+type serialCol struct {
+	schema, table, column string
+}
+
 // SyncSequencesToData advances serial/identity sequences for restored tables
 // to the max value of their owning columns.
 func SyncSequencesToData(ctx context.Context, q execQuerier, tables []db.Table) error {
 	if len(tables) == 0 {
 		return nil
 	}
+	batchSize := sequenceSyncBatch
+	if batchSize < 1 {
+		batchSize = 16000
+	}
 	restoredColumns := make(map[string]bool)
-	tablePredicates := make([]string, 0, len(tables))
-	args := make([]any, 0, len(tables)*2)
-	for i, tbl := range tables {
-		base := i*2 + 1
-		tablePredicates = append(tablePredicates, fmt.Sprintf("($%d,$%d)", base, base+1))
-		args = append(args, tbl.Schema, tbl.Name)
-		for _, col := range tbl.Columns {
-			restoredColumns[tbl.Schema+"\x00"+tbl.Name+"\x00"+col.Name] = true
-		}
-	}
-	query := fmt.Sprintf(`
-		SELECT table_schema, table_name, column_name
-		FROM information_schema.columns
-		WHERE (table_schema, table_name) IN (%s)
-		  AND (
-		    column_default LIKE 'nextval%%'
-		    OR identity_generation IS NOT NULL
-		  )
-		ORDER BY table_schema, table_name, ordinal_position`, strings.Join(tablePredicates, ", "))
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("list serial columns: %w", err)
-	}
-	defer rows.Close()
-
-	type serialCol struct {
-		schema, table, column string
-	}
 	var cols []serialCol
-	for rows.Next() {
-		var c serialCol
-		if err := rows.Scan(&c.schema, &c.table, &c.column); err != nil {
-			return fmt.Errorf("scan serial column: %w", err)
+	for start := 0; start < len(tables); start += batchSize {
+		end := start + batchSize
+		if end > len(tables) {
+			end = len(tables)
 		}
-		cols = append(cols, c)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("list serial columns: %w", err)
+		batch := tables[start:end]
+		for _, tbl := range batch {
+			for _, col := range tbl.Columns {
+				restoredColumns[tbl.Schema+"\x00"+tbl.Name+"\x00"+col.Name] = true
+			}
+		}
+		found, err := listSerialColumns(ctx, q, batch)
+		if err != nil {
+			return err
+		}
+		cols = append(cols, found...)
 	}
 
 	for _, c := range cols {
@@ -212,4 +204,41 @@ func SyncSequencesToData(ctx context.Context, q execQuerier, tables []db.Table) 
 		}
 	}
 	return nil
+}
+
+func listSerialColumns(ctx context.Context, q execQuerier, tables []db.Table) ([]serialCol, error) {
+	predicates := make([]string, len(tables))
+	args := make([]any, 0, len(tables)*2)
+	for i, tbl := range tables {
+		base := i*2 + 1
+		predicates[i] = fmt.Sprintf("($%d,$%d)", base, base+1)
+		args = append(args, tbl.Schema, tbl.Name)
+	}
+	query := fmt.Sprintf(`
+		SELECT table_schema, table_name, column_name
+		FROM information_schema.columns
+		WHERE (table_schema, table_name) IN (%s)
+		  AND (
+		    column_default LIKE 'nextval%%'
+		    OR identity_generation IS NOT NULL
+		  )
+		ORDER BY table_schema, table_name, ordinal_position`, strings.Join(predicates, ", "))
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list serial columns: %w", err)
+	}
+	defer rows.Close()
+
+	var cols []serialCol
+	for rows.Next() {
+		var c serialCol
+		if err := rows.Scan(&c.schema, &c.table, &c.column); err != nil {
+			return nil, fmt.Errorf("scan serial column: %w", err)
+		}
+		cols = append(cols, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list serial columns: %w", err)
+	}
+	return cols, nil
 }

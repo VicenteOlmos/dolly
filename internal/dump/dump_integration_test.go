@@ -1386,3 +1386,40 @@ func TestIntegrationDumpExcludeAllFailsBeforeOutput(t *testing.T) {
 		t.Fatal("metadata.json should not exist when all tables excluded")
 	}
 }
+
+func TestIntegrationDumpOmitsUnownedSequences(t *testing.T) {
+	conn := openIntegrationDB(t)
+	schema := integrationIsolatedSchema(t, conn)
+	ctx := context.Background()
+	for _, stmt := range []string{
+		fmt.Sprintf("CREATE TABLE %s.kept (id serial primary key, name text)", schema),
+		fmt.Sprintf("CREATE TABLE %s.skipped (id serial primary key)", schema),
+		fmt.Sprintf("CREATE SEQUENCE %s.standalone_seq", schema),
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dir := t.TempDir()
+	err := Dump(ctx, conn, dir,
+		WithSchemas([]string{schema}),
+		WithTableSelection(SelectionPolicy{Includes: []SelectorEntry{{
+			Table: QualifiedTable{Schema: schema, Name: "kept"},
+		}}}, nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Sequences) != 1 {
+		t.Fatalf("sequences = %+v, want only %s.kept_id_seq", meta.Sequences, schema)
+	}
+	seq := meta.Sequences[0]
+	if seq.Schema != schema || seq.Name != "kept_id_seq" {
+		t.Fatalf("sequence = %s.%s, want %s.kept_id_seq", seq.Schema, seq.Name, schema)
+	}
+}

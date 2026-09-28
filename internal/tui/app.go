@@ -545,6 +545,9 @@ func (a *App) restoreNeedsConfirm(trustedSchemaSQL bool) (bool, string) {
 	if onConflict == "upsert" {
 		parts = append(parts, "overwrite conflicting rows (upsert)")
 	}
+	if a.cfg.Restore.Workers > 1 {
+		parts = append(parts, "run a non-atomic parallel restore (commits per table; a failure can leave a partial database)")
+	}
 	if len(parts) == 0 {
 		return false, ""
 	}

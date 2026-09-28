@@ -111,6 +111,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err := verifyArchiveSHA256(archiveData, wantSHA); err != nil {
 		return failedResult("%v", err), err
 	}
+	if err := ctx.Err(); err != nil {
+		return failedResult("%v", err), err
+	}
 
 	stageDir := filepath.Dir(target)
 	if opts.CheckOnly {
@@ -141,6 +144,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	oldSHA, oldSize, err := fileDigest(target)
 	if err != nil {
+		return failedResult("%v", err), err
+	}
+	if err := ctx.Err(); err != nil {
 		return failedResult("%v", err), err
 	}
 

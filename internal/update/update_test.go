@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -194,6 +195,55 @@ func TestRunAvailableCheckVerifiesWithoutMutation(t *testing.T) {
 	}
 	if after := fileSHA256(t, target); after != before {
 		t.Fatal("target mutated on check")
+	}
+}
+
+func TestRunCancelAfterDownloadDoesNotReplace(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := buildCurrentArchive(t, []byte("#!/bin/sh\necho newer\n"))
+	checksums := []byte(checksumLine(assetName, archive))
+	target := writeFakeBinary(t, t.TempDir(), "dolly", 0o755)
+	before := fileSHA256(t, target)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repo := defaultRepo
+	tag := "v0.3.2"
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		switch {
+		case strings.Contains(req.URL.Path, "/releases/latest"):
+			_ = json.NewEncoder(rec).Encode(releaseMetadata{
+				TagName: tag,
+				Assets: []releaseAsset{
+					{Name: assetName, BrowserDownloadURL: releaseAssetGitHubURL(repo, tag, assetName)},
+					{Name: "checksums.txt", BrowserDownloadURL: releaseAssetGitHubURL(repo, tag, "checksums.txt")},
+				},
+			})
+		case strings.HasSuffix(req.URL.Path, "/"+assetName):
+			rec.Write(archive)
+			cancel()
+		case strings.HasSuffix(req.URL.Path, "/checksums.txt"):
+			rec.Write(checksums)
+		default:
+			rec.WriteHeader(http.StatusNotFound)
+		}
+		return rec.Result(), nil
+	})
+
+	_, err = Run(ctx, Options{
+		HTTP:             client,
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run err = %v, want context.Canceled", err)
+	}
+	if after := fileSHA256(t, target); after != before {
+		t.Fatal("target replaced after cancellation")
 	}
 }
 

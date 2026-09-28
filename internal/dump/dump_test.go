@@ -460,13 +460,24 @@ func TestDumpWithoutTransaction(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .*").
 		WillReturnRows(streamRows)
 
-	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithoutTransaction())
-	if err != nil {
-		t.Fatal(err)
+	var errDump error
+	stderr := captureStderr(func() {
+		errDump = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithoutTransaction(), WithProvenance(Provenance{}))
+	})
+	if errDump != nil {
+		t.Fatal(errDump)
 	}
+	assertSnapshotInconsistentWarningFirst(t, stderr)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil || meta.Provenance.SnapshotConsistent {
+		t.Fatalf("provenance = %+v, want snapshot_consistent false", meta.Provenance)
 	}
 }
 
@@ -887,6 +898,41 @@ func TestDumpCapturesSequences(t *testing.T) {
 	}
 	if meta.Sequences[0].Name != "users_id_seq" {
 		t.Fatalf("Sequences[0].Name = %q, want users_id_seq", meta.Sequences[0].Name)
+	}
+}
+
+func TestCaptureSequencesBatchesTableLookups(t *testing.T) {
+	old := sequenceLookupBatch
+	sequenceLookupBatch = 1
+	t.Cleanup(func() { sequenceLookupBatch = old })
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	mock.ExpectQuery(`SELECT seq_ns\.nspname`).
+		WithArgs("public", "a").
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
+			AddRow("public", "z_seq", 2, 1))
+	mock.ExpectQuery(`SELECT seq_ns\.nspname`).
+		WithArgs("public", "b").
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
+			AddRow("public", "a_seq", 3, 1))
+
+	got, err := captureSequences(context.Background(), sqlDB, []db.Table{
+		{Schema: "public", Name: "a"},
+		{Schema: "public", Name: "b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "a_seq" || got[1].Name != "z_seq" {
+		t.Fatalf("sequences = %+v, want a_seq then z_seq", got)
 	}
 }
 
@@ -1580,7 +1626,7 @@ func captureStderr(fn func()) string {
 	return <-outC
 }
 
-const snapshotInconsistentWarning = "warning: dump is not snapshot-consistent; chunk/slow mode reads tables outside a shared snapshot"
+const snapshotInconsistentWarning = "warning: dump is not snapshot-consistent; tables are read outside a shared snapshot"
 
 func assertSnapshotInconsistentWarningFirst(t *testing.T, stderr string) string {
 	t.Helper()

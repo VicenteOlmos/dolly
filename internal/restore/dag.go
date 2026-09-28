@@ -20,7 +20,7 @@ type RestoreCycleError struct {
 
 func (e *RestoreCycleError) Error() string {
 	return fmt.Sprintf(
-		"foreign key cycle among tables %s: parallel restore cannot schedule these tables; use serial atomic restore (workers=1) instead",
+		"foreign key cycle among tables %s: restore cannot order these tables; break the cycle before restoring",
 		strings.Join(e.Tables, ", "),
 	)
 }
