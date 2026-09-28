@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +195,9 @@ func TestRunDumpListJSONEmpty(t *testing.T) {
 }
 
 func TestRunDumpListJSONError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 000 does not revoke directory access on Windows")
+	}
 	// Root can read anything — skip.
 	if os.Getuid() == 0 {
 		t.Skip("skipping permission test when running as root")

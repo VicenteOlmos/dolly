@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 const priorSchemaSQL = "-- prior schema\nCREATE TABLE users (id int);\n"
@@ -29,6 +31,7 @@ func TestCaptureWritesSanitizedSchemaWithPrivateMode(t *testing.T) {
 		}
 		_, err := stdout.WriteString(strings.Join([]string{
 			"SET transaction_timeout = 0;",
+			"CREATE SCHEMA public;",
 			"CREATE TABLE public.users (id integer);",
 		}, "\n"))
 		return err
@@ -50,13 +53,17 @@ func TestCaptureWritesSanitizedSchemaWithPrivateMode(t *testing.T) {
 	if !strings.Contains(string(data), "CREATE TABLE public.users") {
 		t.Fatalf("schema missing table:\n%s", data)
 	}
+	if !strings.Contains(string(data), "CREATE SCHEMA IF NOT EXISTS public;") {
+		t.Fatalf("schema missing CREATE SCHEMA IF NOT EXISTS:\n%s", data)
+	}
+	if strings.Contains(string(data), "CREATE SCHEMA public;") {
+		t.Fatalf("bare CREATE SCHEMA public remained:\n%s", data)
+	}
 	info, err := os.Stat(outPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("mode = %o, want 600", got)
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "mode")
 	assertNoRunCaptureTemps(t, outDir)
 }
 

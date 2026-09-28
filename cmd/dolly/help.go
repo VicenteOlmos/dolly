@@ -70,6 +70,7 @@ func printDumpUsage() {
 	fmt.Fprintln(os.Stderr, "        base backoff between slow-connection retries (default: config or 500ms)")
 	fmt.Fprintln(os.Stderr, "  --seed-file string")
 	fmt.Fprintln(os.Stderr, "        JSON seed file for subset dump (omit for full-schema dump)")
+	fmt.Fprintln(os.Stderr, "        Seed table names may be schema.table; a bare name must be unique in dump scope")
 	fmt.Fprintln(os.Stderr, "  --percent int")
 	fmt.Fprintln(os.Stderr, "        percent-based subset dump (1-100). Selects recent root rows, then FK closure")
 	fmt.Fprintln(os.Stderr, "        adds required related rows (output may exceed the percentage)")
@@ -110,7 +111,7 @@ func printDumpUsage() {
 	fmt.Fprintln(os.Stderr, "  dump.chunk_tables / dump.chunk_table_files  keyset-chunked table selectors (replaced by CLI flags when set)")
 	fmt.Fprintln(os.Stderr, "  dump.workers  parallel table dump workers (default 1; CLI --workers overrides)")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "schema.sql is captured when pg_dump is on PATH and sanitized for cross-version restore compatibility.")
+	fmt.Fprintln(os.Stderr, "schema.sql is captured when pg_dump is on PATH and sanitized for cross-version restore compatibility, including CREATE SCHEMA IF NOT EXISTS.")
 }
 
 func printRestoreUsage() {
@@ -133,6 +134,7 @@ func printRestoreUsage() {
 	fmt.Fprintln(os.Stderr, "        Use only for trusted clean targets or very large restores; default is atomic")
 	fmt.Fprintln(os.Stderr, "  --trust-schema-sql")
 	fmt.Fprintln(os.Stderr, "        replay reviewed schema.sql when target tables are missing; requires --no-transaction --yes")
+	fmt.Fprintln(os.Stderr, "        CREATE SCHEMA is rewritten to IF NOT EXISTS so a fresh database's public schema does not abort replay")
 	fmt.Fprintln(os.Stderr, "  --yes")
 	fmt.Fprintln(os.Stderr, "        confirm destructive or advanced operations (required with --replace, --no-transaction, or --trust-schema-sql)")
 	fmt.Fprintln(os.Stderr, "  --workers int")

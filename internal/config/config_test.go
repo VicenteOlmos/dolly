@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 func TestLoadConfigReturnsDefaultsWhenFileMissing(t *testing.T) {
@@ -217,9 +219,7 @@ func TestBootstrapConfigWrites0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("file mode = %o, want 0600", info.Mode().Perm())
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "file mode")
 }
 
 func TestSaveConfigTightensExistingFilePermissions(t *testing.T) {
@@ -237,9 +237,7 @@ func TestSaveConfigTightensExistingFilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("file mode = %o, want 0600", got)
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "file mode")
 }
 
 func TestSaveConfigNoopTightensExistingFilePermissions(t *testing.T) {
@@ -258,9 +256,7 @@ func TestSaveConfigNoopTightensExistingFilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("file mode = %o, want 0600", got)
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "file mode")
 }
 
 func TestBootstrapConfig_idempotent(t *testing.T) {
@@ -413,9 +409,7 @@ func TestSaveConfig_preserves0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("file mode = %o, want 0600", info.Mode().Perm())
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "file mode")
 }
 
 func TestSaveConfigAtomicallyTightensExistingMode(t *testing.T) {
@@ -435,9 +429,7 @@ func TestSaveConfigAtomicallyTightensExistingMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("file mode = %o, want 0600", got)
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "file mode")
 	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config.jsonc.tmp-*"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("temporary config files remain: %v, %v", matches, err)

@@ -13,6 +13,7 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 	"github.com/VicenteOlmos/dolly/internal/dbanalyze"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 var update = flag.Bool("update", false, "update golden files")
@@ -274,7 +275,7 @@ func TestGoldenViews(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tt.name)
 			}
 		})
@@ -315,7 +316,7 @@ func TestGoldenConfigSizes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tc.name)
 			}
 		})
@@ -392,7 +393,7 @@ func TestGoldenConfigEdit(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tc.name)
 			}
 		})
@@ -444,7 +445,7 @@ func TestGoldenConnectionListSizes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tc.name)
 			}
 		})
@@ -496,7 +497,7 @@ func TestGoldenConnectionEditSizes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tc.name)
 			}
 		})
@@ -566,7 +567,7 @@ func TestGoldenModalSizes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tc.name)
 			}
 		})
@@ -613,7 +614,7 @@ func TestGoldenCapabilitiesStripSizes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", sz.name)
 			}
 		})
@@ -773,7 +774,7 @@ func TestGoldenCloneFeatureViews(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read golden: %v (run with -update)", err)
 				}
-				if got != string(want) {
+				if !goldenEqual(got, string(want)) {
 					t.Fatalf("golden mismatch for %s", name)
 				}
 			})
@@ -881,7 +882,7 @@ func TestGoldenDumpResultViews(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden: %v (run with -update)", err)
 			}
-			if got != string(want) {
+			if !goldenEqual(got, string(want)) {
 				t.Fatalf("golden mismatch for %s", tt.name)
 			}
 		})
@@ -932,4 +933,8 @@ func stripANSIForGolden(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func goldenEqual(got, want string) bool {
+	return testutil.NormalizeNewlines(got) == testutil.NormalizeNewlines(want)
 }

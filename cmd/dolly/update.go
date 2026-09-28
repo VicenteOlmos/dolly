@@ -6,10 +6,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/VicenteOlmos/dolly/internal/update"
 )
+
+type updateRunInject struct {
+	http             update.HTTPDoer
+	installedVersion string
+	targetPath       string
+}
 
 type updateFlags struct {
 	check bool
@@ -30,6 +39,7 @@ func printUpdateUsage() {
 
 func updateFlagSet(flags *updateFlags) *flag.FlagSet {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.BoolVar(&flags.check, "check", false, "discover and verify without replacing")
 	fs.BoolVar(&flags.json, "json", false, "emit JSON result")
 	return fs
@@ -52,6 +62,12 @@ func parseUpdateFlags(args []string) (updateFlags, error) {
 }
 
 func runUpdate(args []string) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return runUpdateWithContext(ctx, args, nil)
+}
+
+func runUpdateWithContext(ctx context.Context, args []string, inj *updateRunInject) error {
 	flags, err := parseUpdateFlags(args)
 	if errors.Is(err, errHelp) {
 		return nil
@@ -60,11 +76,21 @@ func runUpdate(args []string) error {
 		return err
 	}
 
-	ctx := context.Background()
-	result, runErr := update.Run(ctx, update.Options{
+	opts := update.Options{
 		InstalledVersion: version,
 		CheckOnly:        flags.check,
-	})
+	}
+	if inj != nil {
+		opts.HTTP = inj.http
+		if inj.installedVersion != "" {
+			opts.InstalledVersion = inj.installedVersion
+		}
+		if inj.targetPath != "" {
+			opts.TargetPath = inj.targetPath
+		}
+	}
+
+	result, runErr := update.Run(ctx, opts)
 	if runErr != nil && result == nil {
 		result = &update.Result{
 			OK:      false,

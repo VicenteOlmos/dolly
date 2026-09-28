@@ -18,6 +18,7 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/restore"
+	"github.com/VicenteOlmos/dolly/internal/runopts"
 )
 
 var (
@@ -106,57 +107,35 @@ func parseRestoreFlags(args []string) (restoreFlags, error) {
 	return flags, nil
 }
 
+func restoreFlagsToOverrides(flags restoreFlags) runopts.RestoreOverrides {
+	return runopts.RestoreOverrides{
+		OnConflict:          flags.OnConflict,
+		Replace:             flags.Replace,
+		NoTransaction:       flags.NoTransaction,
+		TrustSchemaSQL:      flags.TrustSchemaSQL,
+		Workers:             flags.Workers,
+		WorkersSet:          flags.WorkersSet,
+		PartialStateFile:    flags.PartialStateFile,
+		PartialStateFileSet: flags.PartialStateFileSet,
+		AckPartialState:     flags.AckPartialState,
+		Yes:                 flags.Yes,
+	}
+}
+
 func resolveRestoreWorkers(flags restoreFlags, cfg *config.Config) int {
-	if flags.WorkersSet {
-		return flags.Workers
-	}
-	workers := cfg.Restore.Workers
-	if workers <= 0 {
-		workers = 1
-	}
-	return workers
+	return runopts.ResolveRestoreWorkers(restoreFlagsToOverrides(flags), cfg)
 }
 
 func validateRestoreWorkers(workers int) error {
-	if workers < 1 || workers > restore.MaxParallelRestoreWorkers() {
-		return fmt.Errorf("--workers must be between 1 and %d, got %d", restore.MaxParallelRestoreWorkers(), workers)
-	}
-	return nil
+	return runopts.ValidateRestoreWorkers(workers)
 }
 
 func resolveRestorePartialStatePath(flags restoreFlags, cfg *config.Config, inputDir string) string {
-	if flags.PartialStateFileSet {
-		return flags.PartialStateFile
-	}
-	if cfg.Restore.PartialStateFile != "" {
-		return cfg.Restore.PartialStateFile
-	}
-	return restore.DefaultPartialStatePath(inputDir)
+	return runopts.ResolveRestorePartialStatePath(restoreFlagsToOverrides(flags), cfg, inputDir)
 }
 
 func validateParallelRestoreCLI(flags restoreFlags, workers int, policy restore.ConflictPolicy) error {
-	if workers <= 1 {
-		return nil
-	}
-	if !flags.NoTransaction {
-		return errors.New("parallel restore requires --no-transaction")
-	}
-	if !flags.Yes {
-		return errors.New("parallel restore requires --yes to confirm")
-	}
-	if !flags.AckPartialState {
-		return errors.New("parallel restore requires --ack-partial-state")
-	}
-	if flags.Replace {
-		return errors.New("parallel restore is incompatible with --replace")
-	}
-	if flags.TrustSchemaSQL {
-		return errors.New("parallel restore is incompatible with --trust-schema-sql")
-	}
-	if policy != restore.ConflictError {
-		return fmt.Errorf("parallel restore requires --on-conflict error, got %q", flags.OnConflict)
-	}
-	return nil
+	return runopts.ValidateParallelRestoreCLI(restoreFlagsToOverrides(flags), workers, policy)
 }
 
 func runRestore(args []string) (err error) {
@@ -236,28 +215,9 @@ func runRestore(args []string) (err error) {
 		fmt.Fprintf(os.Stderr, "info: target database: %s\n", databaseFromDSN(dsn))
 	}
 
-	var opts []restore.Option
-	if flags.Replace {
-		opts = append(opts, restore.WithReplace())
-	} else {
-		opts = append(opts, restore.WithConflictPolicy(policy))
-	}
-	if flags.NoTransaction {
-		opts = append(opts, restore.WithoutTransaction())
-	}
-	if len(schemas) > 0 {
-		opts = append(opts, restore.WithSchemas(schemas))
-	}
-	opts = append(opts, restore.WithDSN(dsn))
-	if workers > 1 || flags.WorkersSet || cfg.Restore.Workers > 1 {
-		opts = append(opts, restore.WithWorkers(workers))
-	}
-	if workers > 1 {
-		opts = append(opts, restore.WithPartialStateManifest(partialStatePath))
-	}
-
-	if flags.TrustSchemaSQL {
-		opts = append(opts, restore.WithTrustedSchemaSQL())
+	opts, err := runopts.AppendRestoreOptionsFromFlags(restoreFlagsToOverrides(flags), cfg, flags.Input, policy, workers, schemas, dsn)
+	if err != nil {
+		return err
 	}
 
 	opts = append(opts, restore.WithProgress(func(ev restore.ProgressEvent) {

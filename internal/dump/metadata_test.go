@@ -66,6 +66,34 @@ func TestWriteMetadata(t *testing.T) {
 	}
 }
 
+func TestCountNDJSONRows(t *testing.T) {
+	dir := t.TempDir()
+
+	emptyPath := filepath.Join(dir, "empty.ndjson")
+	if err := os.WriteFile(emptyPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err := countNDJSONRows(emptyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("empty file count = %d, want 0", n)
+	}
+
+	rowsPath := filepath.Join(dir, "rows.ndjson")
+	if err := os.WriteFile(rowsPath, []byte("{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, err = countNDJSONRows(rowsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("rows file count = %d, want 3", n)
+	}
+}
+
 func TestWriteMetadataEmpty(t *testing.T) {
 	dir := t.TempDir()
 
