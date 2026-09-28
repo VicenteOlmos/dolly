@@ -887,9 +887,7 @@ func TestPermissionCacheConcurrentOutcomes(t *testing.T) {
 	results := make([]permConcurrentResult, len(writers))
 
 	var currentWriter atomic.Int32
-	var releaseErrArm atomic.Int32
-	var releaseErrWriterIdx atomic.Int32
-	releaseErrWriterIdx.Store(-1)
+	releaseFlags := make([]atomic.Bool, len(writers))
 
 	origReplace := replacePermissionCacheFile
 	releaseErr := errors.New("concurrent release failure")
@@ -902,38 +900,34 @@ func TestPermissionCacheConcurrentOutcomes(t *testing.T) {
 		if clone, ok := permStagedLastCloneName(data); ok && clone == permWriterFail {
 			return errInjectedReplacementFailure
 		}
-		if err := origReplace(src, dst); err != nil {
-			return err
-		}
-		if clone, ok := permStagedLastCloneName(data); ok && clone == permWriterReleaseErr {
-			releaseErrArm.Store(1)
-			for j, w := range writers {
-				if w.clone == permWriterReleaseErr {
-					releaseErrWriterIdx.Store(int32(j))
-					break
-				}
-			}
-		}
-		return nil
+		return origReplace(src, dst)
 	}
 
 	origRelease := lockCacheRelease
 	lockCacheRelease = func(f *os.File) error {
-		if releaseErrArm.Swap(0) == 1 {
+		injected := false
+		data, err := os.ReadFile(path)
+		if err == nil {
+			if clone, ok := permStagedLastCloneName(data); ok && clone == permWriterReleaseErr {
+				for j, w := range writers {
+					if w.clone == permWriterReleaseErr {
+						releaseFlags[j].Store(true)
+						break
+					}
+				}
+				injected = true
+			}
+		}
+		if relErr := origRelease(f); relErr != nil && !injected {
+			return relErr
+		}
+		if injected {
 			return releaseErr
 		}
-		return origRelease(f)
+		return nil
 	}
 
-	warnPermissionCache = func(msg string) {
-		if !strings.Contains(msg, errPermissionCacheCommittedRelease.Error()) {
-			return
-		}
-		j := releaseErrWriterIdx.Load()
-		if j >= 0 && int(j) < len(results) {
-			results[j].committedRelease = true
-		}
-	}
+	warnPermissionCache = func(string) {}
 
 	var wg sync.WaitGroup
 	permConcurrentBarrierStart(&wg, len(writers), func(i int) {
@@ -954,7 +948,7 @@ func TestPermissionCacheConcurrentOutcomes(t *testing.T) {
 		results[i] = permConcurrentResult{
 			key:              key,
 			storeErr:         storeErr,
-			committedRelease: results[i].committedRelease,
+			committedRelease: releaseFlags[i].Load(),
 		}
 	})
 	wg.Wait()
