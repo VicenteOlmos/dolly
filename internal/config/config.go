@@ -50,8 +50,10 @@ type Config struct {
 		MaxRowsPerTable int    `json:"max_rows_per_table"`
 	} `json:"subset"`
 	Restore struct {
-		Workers          int    `json:"workers"`
-		PartialStateFile string `json:"partial_state_file"`
+		Workers           int    `json:"workers"`
+		PartialStateFile  string `json:"partial_state_file"`
+		RestoreOnConflict string `json:"restore_on_conflict"`
+		Replace           bool   `json:"replace"`
 	} `json:"restore"`
 	Dump struct {
 		OutputDir         string   `json:"output_dir"`
@@ -116,6 +118,7 @@ func DefaultConfig() *Config {
 	cfg.Clone.Preflight.CachePermissionsTTL = "24h"
 	cfg.Connections.Scope = "project"
 	cfg.Restore.Workers = 1
+	cfg.Restore.RestoreOnConflict = "error"
 	cfg.Dump.OutputDir = "dolly_dump"
 	cfg.Dump.Workers = 1
 	cfg.Dump.SlowChunkSize = 1000
