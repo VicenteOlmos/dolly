@@ -114,6 +114,7 @@ func CLICatalog() []CLICommand {
 				{Name: "connection", Description: "saved connection profile as source (requires save_connections; use with -ff)"},
 				{Name: "schemas", Description: "comma-separated source schema names (overrides clone.schemas config)"},
 				{Name: "yes", Description: "confirm destructive operations (required with -ff when clone.replace=true)"},
+				{Name: "with-privileges", Description: "schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
 			},
 			ConfigNote: "Reads config.jsonc for env.*, clone.target_url, clone.target_dir, clone.name_template, clone.schemas, clone.replace, clone.restore_on_conflict, and related keys.",
