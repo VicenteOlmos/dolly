@@ -139,11 +139,11 @@ Dolly no inspecciona el tamaño de la base de datos ni las condiciones de red, n
 | <!-- situation:maximum-restore-speed --> Máximo rendimiento de restore | **AVANZADO — NO ATÓMICO** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Restauración paralela de tablas tras reconocer riesgo de estado parcial | Sin reversión atómica; `on-conflict` debe ser `error`; no usar `--replace`, `--trust-schema-sql`, skip ni upsert |
 | <!-- situation:representative-sample --> Muestra para desarrollo/pruebas, no copia completa | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Raíces recientes más cierre de claves foráneas | No es representación estadística; el cierre puede superar el porcentaje |
 | <!-- situation:same-instance-clone --> Clonación más rápida en la misma instancia | `dolly clone --strategy template` | Copia por plantilla en un solo servidor PostgreSQL | Sin conexiones activas en el origen; se niega si la sanitización está activada |
-| <!-- situation:cross-server-large-clone --> Copia grande entre servidores de una sola base | `dolly clone --strategy logical-stream` | Flujo lógico para copias remotas grandes | Sin sanitizar; no es copia física del clúster |
+| <!-- situation:cross-server-large-clone --> Copia grande entre servidores de una sola base | `dolly clone --strategy logical-stream` | Flujo lógico para copias remotas grandes | Se niega si la sanitización está activada; no es copia física del clúster |
 
 `$WORKERS`, `$PERCENT` y `$ROW_CAP` son valores elegidos por el operador; Dolly no los establece automáticamente.
 
-En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, usa flujo normal no reanudable, emite una advertencia calificada por tabla y no crea checkpoint. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
+En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, reanuda con `ctid` y advierte que VACUUM o actualizaciones pueden omitir o duplicar filas. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
 
 Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para conocer los flags. Más detalle en [Flujos de trabajo y límites habituales](#flujos-de-trabajo-y-límites-habituales) y [Estrategias de clonación](#estrategias-de-clonación).
 
@@ -194,6 +194,8 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 
 Este modo puede dejar avances parciales si falla durante el proceso. Prefiera el modo predeterminado cuando necesite una reversión atómica.
 
+La restauración paralela (`--workers` mayor que 1) exige `--ack-partial-state` y escribe `.dolly-restore-partial-state.json` hasta el éxito completo. El manifiesto registra host, puerto y base de datos. Restaurar el mismo volcado en otra base vuelve a cargar todas las tablas. La TUI pide confirmación cuando `restore.workers` es mayor que 1.
+
 ### Estrategias de clonación
 
 <!-- readme:fidelity:schema-replay -->
@@ -203,9 +205,9 @@ La estrategia predeterminada `schema-replay` recrea definiciones de esquema y ob
 | Estrategia | Cuándo usarla | Sanitización |
 |---|---|---|
 | `schema-replay` | Clonación predeterminada entre servidores o para desarrollo | Compatible |
-| `template` | Misma instancia de PostgreSQL; más rápida | No |
-| `logical-stream` | Copia lógica grande entre servidores | No |
-| `physical-backup` | Copia del directorio de todo el clúster | No |
+| `template` | Misma instancia de PostgreSQL; más rápida | Se niega si está activada |
+| `logical-stream` | Copia lógica grande entre servidores | Se niega si está activada |
+| `physical-backup` | Copia del directorio de todo el clúster | Se niega si está activada |
 
 `physical-backup` usa `pg_basebackup`, requiere privilegios de replicación y copia todo el directorio de datos del clúster en lugar de una sola base de datos. Lea [copia de seguridad física](docs/physical-backup.md) antes de usarla.
 

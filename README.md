@@ -140,7 +140,7 @@ Dolly does not inspect your database size or network conditions, and it does not
 | <!-- situation:maximum-restore-speed --> Maximum restore throughput | **ADVANCED — NON-ATOMIC** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Parallel table restore after acknowledging partial-state risk | No atomic rollback; `on-conflict` must be `error`; cannot use `--replace`, `--trust-schema-sql`, skip, or upsert |
 | <!-- situation:representative-sample --> Dev/test sample, not a full copy | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Recent-root selection plus FK closure | Not statistically representative; closure may exceed the target percent |
 | <!-- situation:same-instance-clone --> Fastest clone on the same instance | `dolly clone --strategy template` | Template database copy on one PostgreSQL server | Source must have no active connections; refuses when sanitization is enabled |
-| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Unsanitized; not a physical cluster copy |
+| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Refuses when sanitization is enabled; not a physical cluster copy |
 
 `$WORKERS`, `$PERCENT`, and `$ROW_CAP` are operator-chosen values—Dolly does not set them automatically.
 
@@ -153,7 +153,7 @@ See `dolly dump --help`, `dolly restore --help`, and `dolly clone --help` for fl
 | If you need… | Use | Do not use when |
 |---|---|---|
 | An exact table subset | `--include-table` / `--exclude-table` (or selector files) | You need FK-closure percent sampling (`--percent` / `--seed-file`) |
-| Resumable export of large named tables | `--chunk-table` with `workers=1` | The table lacks a safe PK/unique key and you require resume, or you need parallel dump workers |
+| Resumable export of large named tables | `--chunk-table` with `workers=1` | You need resume that stays correct across VACUUM or updates and the table has no safe key, or you need parallel dump workers |
 | A consistent parallel export | `--workers N` (shared snapshot) | `--no-transaction`, chunk/slow modes, or subset policies |
 | Faster acknowledged restore | `--workers N` with `--no-transaction --yes --ack-partial-state` | You need atomic rollback, `--replace`, skip/upsert, or `--trust-schema-sql` |
 | Atomic rollback on restore failure | Default serial restore (`workers=1`) | You need FK-level concurrency |
@@ -234,7 +234,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump \
 
 **Result/artifacts** numbered `{output}/{n}/` with per-table NDJSON, `metadata.json` chunk provenance, transient checkpoint files under the run directory during export, and final metadata published only after completion.
 
-**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key completes through a qualified, non-resumable normal-stream fallback and creates no checkpoint. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
+**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key resumes with `ctid` and warns that VACUUM or updates can skip or duplicate rows. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
 
 ### Shared-snapshot parallel dump
 
@@ -317,9 +317,9 @@ Default `schema-replay` clone recreates schema and object definitions (including
 | Strategy | When | Sanitization |
 |---|---|---|
 | `schema-replay` | Default cross-server or development clone | Supported |
-| `template` | Same PostgreSQL instance; fastest | No |
-| `logical-stream` | Large cross-server logical copy | No |
-| `physical-backup` | Whole cluster directory copy | No |
+| `template` | Same PostgreSQL instance; fastest | Refuses when enabled |
+| `logical-stream` | Large cross-server logical copy | Refuses when enabled |
+| `physical-backup` | Whole cluster directory copy | Refuses when enabled |
 
 `physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory rather than one database. Read [physical backup](docs/physical-backup.md) before using it.
 
