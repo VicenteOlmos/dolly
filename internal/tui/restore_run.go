@@ -9,6 +9,7 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/restore"
+	"github.com/VicenteOlmos/dolly/internal/runopts"
 )
 
 type restoreConfirmRequestedMsg struct {
@@ -42,24 +43,9 @@ func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir str
 	if err != nil {
 		return err
 	}
-	policy, err := restore.ParseConflictPolicy(cfg.Clone.RestoreOnConflict)
+	opts, err := runopts.RestoreHistoryOptions(cfg, inputDir, schemas, trustedSchemaSQL, dsn)
 	if err != nil {
 		return err
-	}
-	var opts []restore.Option
-	if cfg.Clone.Replace {
-		opts = append(opts, restore.WithReplace())
-	} else {
-		opts = append(opts, restore.WithConflictPolicy(policy))
-	}
-	if len(schemas) > 0 {
-		opts = append(opts, restore.WithSchemas(schemas))
-	}
-	if dsn != "" {
-		opts = append(opts, restore.WithDSN(dsn))
-	}
-	if trustedSchemaSQL {
-		opts = append(opts, restore.WithTrustedSchemaSQL())
 	}
 	if onProgress != nil {
 		opts = append(opts, restore.WithProgress(onProgress))
