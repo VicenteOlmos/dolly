@@ -25,6 +25,7 @@ func TestResolveDataSourceDisabled(t *testing.T) {
 
 func TestResolveDataSourceNotFound(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 	cfg := config.DefaultConfig()
 	cfg.SaveConnections = true
 
