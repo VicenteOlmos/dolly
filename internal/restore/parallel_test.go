@@ -155,6 +155,35 @@ func TestRestoreCycleDoesNotWriteManifest(t *testing.T) {
 	}
 }
 
+func TestRestoreSerialCycleRejectsBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	tables := []db.Table{
+		{Schema: "public", Name: "a", ForeignKeys: []db.ForeignKey{{ReferencedTableSchema: "public", ReferencedTableName: "b"}}},
+		{Schema: "public", Name: "b", ForeignKeys: []db.ForeignKey{{ReferencedTableSchema: "public", ReferencedTableName: "a"}}},
+	}
+	meta := dump.Metadata{Schema: "public", Tables: tables}
+	for _, table := range tables {
+		if err := os.WriteFile(filepath.Join(dir, table.Name+".ndjson"), []byte("{\"id\":1}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeMetadata(t, dir, meta)
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	err = Restore(context.Background(), sqlDB, dir)
+	if !errors.Is(err, ErrRestoreCycle) {
+		t.Fatalf("err = %v, want cycle", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunParallelRestore_levelOrderingAndWorkerCap(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "state.json")

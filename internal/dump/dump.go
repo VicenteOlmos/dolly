@@ -317,6 +317,10 @@ func WithoutSequences() Option {
 	}
 }
 
+func dumpSnapshotConsistent(cfg *config) bool {
+	return !cfg.slowConnection && !hasChunkPolicy(cfg)
+}
+
 func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 	if cfg.provenance == nil {
 		return nil
@@ -330,6 +334,7 @@ func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 		}
 	}
 	p.TotalRowEstimate = total
+	p.SnapshotConsistent = dumpSnapshotConsistent(cfg)
 	return &p
 }
 
@@ -457,6 +462,10 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	metaPath, err := writeMetadata(outputDir, sorted, nil, cfg.schemas, sequences, provenanceForWrite(&cfg, sorted))
 	if err != nil {
 		return fmt.Errorf("write metadata: %w", err)
+	}
+
+	if !dumpSnapshotConsistent(&cfg) {
+		fmt.Fprintf(os.Stderr, "warning: dump is not snapshot-consistent; chunk/slow mode reads tables outside a shared snapshot\n")
 	}
 
 	for i, table := range sorted {
