@@ -193,16 +193,14 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	}
 
 	workers := effectiveRestoreWorkers(cfg.workers)
-	var parallelLevels []RestoreLevel
 	if workers > 1 {
 		if err := validateParallelRestoreOptions(&cfg); err != nil {
 			return err
 		}
-		var err error
-		parallelLevels, err = BuildRestoreLevels(meta.Tables)
-		if err != nil {
-			return err
-		}
+	}
+	restoreLevels, err := BuildRestoreLevels(meta.Tables)
+	if err != nil {
+		return err
 	}
 
 	// Schema validation (outside transaction — schema.sql may need psql).
@@ -254,7 +252,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	}
 
 	if workers > 1 {
-		return runParallelRestore(ctx, &cfg, dbConn, meta, dataPaths, parallelLevels, schemaFilter, workers, startedAt)
+		return runParallelRestore(ctx, &cfg, dbConn, meta, dataPaths, restoreLevels, schemaFilter, workers, startedAt)
 	}
 
 	for i, table := range meta.Tables {
@@ -319,7 +317,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	if err := RestoreSequencesFromMetadata(ctx, seqQ, meta, schemaFilter); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
-	if err := SyncSequencesToData(ctx, seqQ, schemaFilter); err != nil {
+	if err := SyncSequencesToData(ctx, seqQ, meta.Tables); err != nil {
 		return fmt.Errorf("sync sequences to data: %w", err)
 	}
 

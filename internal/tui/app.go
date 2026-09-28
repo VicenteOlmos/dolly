@@ -524,15 +524,25 @@ func (a *App) handleDumpResult(msg dumpResultMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a *App) restoreNeedsConfirm() (bool, string) {
+func (a *App) restoreNeedsConfirm(trustedSchemaSQL bool) (bool, string) {
 	if a.cfg == nil {
+		if trustedSchemaSQL {
+			return true, "run a non-atomic restore (commits per table; schema.sql replay disables rollback)"
+		}
 		return false, ""
 	}
 	var parts []string
-	if a.cfg.Clone.Replace {
+	if trustedSchemaSQL {
+		parts = append(parts, "run a non-atomic restore (commits per table; schema.sql replay disables rollback)")
+	}
+	if a.cfg.Restore.Replace {
 		parts = append(parts, "truncate existing tables before restore")
 	}
-	if a.cfg.Clone.RestoreOnConflict == "upsert" {
+	onConflict := a.cfg.Restore.RestoreOnConflict
+	if onConflict == "" {
+		onConflict = "error"
+	}
+	if onConflict == "upsert" {
 		parts = append(parts, "overwrite conflicting rows (upsert)")
 	}
 	if len(parts) == 0 {
@@ -542,7 +552,7 @@ func (a *App) restoreNeedsConfirm() (bool, string) {
 }
 
 func (a *App) handleRestoreConfirmRequested(msg restoreConfirmRequestedMsg) (tea.Model, tea.Cmd) {
-	needs, policy := a.restoreNeedsConfirm()
+	needs, policy := a.restoreNeedsConfirm(msg.trustedSchemaSQL)
 	if !needs {
 		return a.handleRestoreRequested(restoreRequestedMsg{inputDir: msg.inputDir, trustedSchemaSQL: msg.trustedSchemaSQL})
 	}
