@@ -193,16 +193,14 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	}
 
 	workers := effectiveRestoreWorkers(cfg.workers)
-	var parallelLevels []RestoreLevel
 	if workers > 1 {
 		if err := validateParallelRestoreOptions(&cfg); err != nil {
 			return err
 		}
-		var err error
-		parallelLevels, err = BuildRestoreLevels(meta.Tables)
-		if err != nil {
-			return err
-		}
+	}
+	restoreLevels, err := BuildRestoreLevels(meta.Tables)
+	if err != nil {
+		return err
 	}
 
 	// Schema validation (outside transaction — schema.sql may need psql).
@@ -254,7 +252,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	}
 
 	if workers > 1 {
-		return runParallelRestore(ctx, &cfg, dbConn, meta, dataPaths, parallelLevels, schemaFilter, workers, startedAt)
+		return runParallelRestore(ctx, &cfg, dbConn, meta, dataPaths, restoreLevels, schemaFilter, workers, startedAt)
 	}
 
 	for i, table := range meta.Tables {
