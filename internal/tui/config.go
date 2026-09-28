@@ -234,6 +234,23 @@ func buildConfigFields() []configField {
 			Get:  func(c *config.Config) string { return c.Connections.Default },
 			Set:  func(c *config.Config, v string) error { c.Connections.Default = strings.TrimSpace(v); return nil }},
 
+		// restore section
+		{Section: "restore", Label: "restore_on_conflict", Kind: fieldKindString,
+			Hint: "Row conflict policy for TUI history restore: error, skip, or upsert.",
+			Get:  func(c *config.Config) string { return c.Restore.RestoreOnConflict },
+			Set:  func(c *config.Config, v string) error { c.Restore.RestoreOnConflict = v; return nil }},
+		{Section: "restore", Label: "replace", Kind: fieldKindBool,
+			Hint: "Truncate target tables before history restore (destructive).",
+			Get:  func(c *config.Config) string { return fmt.Sprintf("%v", c.Restore.Replace) },
+			Set: func(c *config.Config, v string) error {
+				b, err := strconv.ParseBool(v)
+				if err != nil {
+					return fmt.Errorf("invalid bool %q", v)
+				}
+				c.Restore.Replace = b
+				return nil
+			}},
+
 		// dump section
 		{Section: "dump", Label: "output_dir", Kind: fieldKindString,
 			Hint: "Default base directory for numbered dump output folders.",
