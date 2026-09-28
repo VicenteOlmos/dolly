@@ -408,13 +408,9 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 		return nil, nil, fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")
 	}
 
-	seqSchemas := cfg.schemas
-	if cfg.selection != nil && (len(cfg.selection.Includes) > 0 || len(cfg.selection.Excludes) > 0) {
-		seqSchemas = schemasFromTables(tables)
-	}
 	var sequences []SequenceState
 	if !cfg.skipSequences {
-		seqs, err := captureSequences(ctx, q, seqSchemas)
+		seqs, err := captureSequences(ctx, q, tables)
 		if err != nil {
 			return nil, nil, fmt.Errorf("capture sequences: %w", err)
 		}

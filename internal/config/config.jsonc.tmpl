@@ -120,6 +120,15 @@
 
   // ── Restore ──────────────────────────────────────────────────────────────
   "restore": {
+    // What to do when a row already exists during TUI history restore (CLI --on-conflict overrides):
+    //   "error"  – abort (default)
+    //   "skip"   – leave existing row unchanged
+    //   "upsert" – overwrite with source value
+    "restore_on_conflict": "error",
+
+    // Truncate target tables before TUI history restore (destructive). CLI --replace overrides when set.
+    "replace": false,
+
     // Parallel table restore workers (default 1 = serial). CLI --workers overrides when set.
     // Values above 1 require --no-transaction --yes --ack-partial-state and conflict policy error.
     "workers": 1,
