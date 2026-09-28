@@ -177,7 +177,7 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		Total:   totalSteps,
 		Elapsed: time.Since(startedAt),
 	})
-	if err := applyTargetFidelity(ctx, tgtDB, func() error {
+	if err := applyTargetFidelity(ctx, srcDB, tgtDB, func() error {
 		return restoreFunc(ctx, tgtDB, dumpDir, opts.RestoreOpts...)
 	}); err != nil {
 		return err

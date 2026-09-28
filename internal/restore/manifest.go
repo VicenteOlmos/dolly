@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/connections"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -41,51 +41,25 @@ func (t PartialStateTarget) empty() bool {
 }
 
 func (t PartialStateTarget) same(other PartialStateTarget) bool {
-	return t.Host == other.Host && t.Port == other.Port && t.Database == other.Database
+	return !t.empty() && !other.empty() && t.Host == other.Host && t.Port == other.Port && t.Database == other.Database
 }
 
-// PartialStateTargetFromConninfo reads host, port, and database from a PostgreSQL
-// URL or keyword connection string. Passwords and users are ignored.
+// PartialStateTargetFromConninfo resolves the same connection settings as the
+// COPY driver. Ambiguous destinations cannot safely reuse committed state.
 func PartialStateTargetFromConninfo(conninfo string) PartialStateTarget {
-	conninfo = strings.TrimSpace(conninfo)
-	if conninfo == "" {
+	if strings.TrimSpace(conninfo) == "" {
 		return PartialStateTarget{}
 	}
-	if strings.Contains(conninfo, "://") {
-		u, err := url.Parse(conninfo)
-		if err != nil {
+	cfg, err := pgconn.ParseConfig(conninfo)
+	if err != nil || cfg.Database == "" || cfg.Host == "" {
+		return PartialStateTarget{}
+	}
+	for _, fallback := range cfg.Fallbacks {
+		if fallback.Host != cfg.Host || fallback.Port != cfg.Port {
 			return PartialStateTarget{}
 		}
-		port := u.Port()
-		if port == "" {
-			port = "5432"
-		}
-		return PartialStateTarget{
-			Host:     u.Hostname(),
-			Port:     port,
-			Database: strings.TrimPrefix(u.Path, "/"),
-		}
 	}
-	fields := map[string]string{}
-	for _, part := range strings.Fields(conninfo) {
-		key, val, ok := strings.Cut(part, "=")
-		if !ok {
-			continue
-		}
-		fields[strings.ToLower(key)] = strings.Trim(val, `"'`)
-	}
-	port := fields["port"]
-	if port == "" {
-		port = "5432"
-	}
-	dbName := fields["dbname"]
-	if dbName == "" {
-		dbName = fields["database"]
-	}
-	if fields["host"] == "" && dbName == "" {
-		return PartialStateTarget{}
-	}
-	return PartialStateTarget{Host: fields["host"], Port: port, Database: dbName}
+	return PartialStateTarget{Host: cfg.Host, Port: fmt.Sprint(cfg.Port), Database: cfg.Database}
 }
 
 // PartialStateManifest records committed, failed, and pending qualified tables.

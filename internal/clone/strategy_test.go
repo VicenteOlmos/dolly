@@ -22,7 +22,7 @@ import (
 )
 
 func init() {
-	applyTargetFidelity = func(_ context.Context, _ *sql.DB, restore func() error) error {
+	applyTargetFidelity = func(_ context.Context, _, _ *sql.DB, restore func() error) error {
 		if err := restore(); err != nil {
 			return fmt.Errorf("restore: %w", err)
 		}

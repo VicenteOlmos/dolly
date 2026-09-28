@@ -26,6 +26,29 @@ func TestPartialStateTargetFromConninfo(t *testing.T) {
 	if !PartialStateTargetFromConninfo("").empty() {
 		t.Fatal("empty conninfo should have an empty target")
 	}
+	quoted := PartialStateTargetFromConninfo(`host='/tmp/pg one' dbname=app`)
+	if quoted.Host != "/tmp/pg one" || quoted.Database != "app" {
+		t.Fatalf("quoted target = %+v", quoted)
+	}
+	if PartialStateTargetFromConninfo("service=missing_service_name").same(PartialStateTargetFromConninfo("service=another_missing_service")) {
+		t.Fatal("unresolved services must not reuse state")
+	}
+	if !PartialStateTargetFromConninfo("host=a,b dbname=app").empty() {
+		t.Fatal("failover host must not reuse state")
+	}
+}
+
+func TestPartialStateTargetFromService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pg_service.conf")
+	if err := os.WriteFile(path, []byte("[one]\nhost=first.example\ndbname=app\n[two]\nhost=second.example\ndbname=app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PGSERVICEFILE", path)
+	one := PartialStateTargetFromConninfo("service=one")
+	two := PartialStateTargetFromConninfo("service=two")
+	if one.empty() || two.empty() || one.same(two) {
+		t.Fatalf("services collapsed: one=%+v two=%+v", one, two)
+	}
 }
 
 func TestMergePartialStateManifestForRetry(t *testing.T) {
