@@ -23,7 +23,8 @@ func OpenStore(cfg *config.Config, cwd string) (ConnectionStore, error) {
 	if !encrypt {
 		fmt.Fprintf(os.Stderr, "connections.encrypt not set; defaulting to true when save_connections is enabled\n")
 		encrypt = true
-	} else {
+	}
+	if encrypt {
 		if _, err := loadEncryptionKey(); err != nil {
 			return nil, err
 		}

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/dumphistory"
+	"github.com/VicenteOlmos/dolly/internal/runopts"
 	"github.com/VicenteOlmos/dolly/internal/schemacapture"
 )
 
@@ -34,6 +36,10 @@ var (
 	dumpLoadConfig    = config.LoadConfig
 	dumpCaptureSchema = captureSchema // test seam: replace in tests
 )
+
+// ErrResumePlanMismatch is returned when persisted strategy provenance disagrees
+// with the canonical dump plan for a resumable candidate directory.
+var ErrResumePlanMismatch = errors.New("resume plan mismatch")
 
 type dumpFlags struct {
 	DSN               string
@@ -76,7 +82,7 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	fs.IntVar(&flags.ChunkSize, "chunk-size", 0, "rows per chunk in slow-connection mode (default: config slow_chunk_size or 1000)")
 	fs.IntVar(&flags.RetryMax, "retry-max", 0, "max query retries per chunk in slow-connection mode (0 = disabled)")
 	fs.StringVar(&flags.RetryBase, "retry-base", "", "base backoff between slow-connection retries (default: config or 500ms)")
-	fs.StringVar(&flags.SeedFile, "seed-file", "", "JSON seed file for subset dump (omit for full-schema dump)")
+	fs.StringVar(&flags.SeedFile, "seed-file", "", "JSON seed file for subset dump (omit for full-schema dump; table may be schema.table)")
 	fs.IntVar(&flags.Percent, "percent", 0, "percent-based subset dump (1-100). Selects recent root rows, then FK closure. Conflicts with --seed-file")
 	fs.IntVar(&flags.MaxDepth, "max-depth", 0, "subset max FK closure depth (default 10)")
 	fs.IntVar(&flags.MaxTables, "max-tables", 0, "subset max tables in closure (default 50)")
@@ -142,217 +148,37 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 	return flags, nil
 }
 
-func applySubsetLimits(limits dump.SubsetLimits, flags dumpFlags, cfg *config.Config) dump.SubsetLimits {
-	if flags.MaxDepth > 0 {
-		limits.MaxDepth = flags.MaxDepth
+func dumpFlagsToOverrides(flags dumpFlags) runopts.DumpOverrides {
+	return runopts.DumpOverrides{
+		NoTransaction:     flags.NoTransaction,
+		SlowConnection:    flags.SlowConnection,
+		ChunkSize:         flags.ChunkSize,
+		RetryMax:          flags.RetryMax,
+		RetryBase:         flags.RetryBase,
+		SeedFile:          flags.SeedFile,
+		Percent:           flags.Percent,
+		MaxDepth:          flags.MaxDepth,
+		MaxTables:         flags.MaxTables,
+		MaxRows:           flags.MaxRows,
+		MaxRowsPerTable:   flags.MaxRowsPerTable,
+		MaxInListSize:     flags.MaxInListSize,
+		IncludeTables:     flags.IncludeTables,
+		ExcludeTables:     flags.ExcludeTables,
+		IncludeTableFiles: flags.IncludeTableFiles,
+		ExcludeTableFiles: flags.ExcludeTableFiles,
+		ChunkTables:       flags.ChunkTables,
+		ChunkTableFiles:   flags.ChunkTableFiles,
+		Workers:           flags.Workers,
+		WorkersSet:        flags.WorkersSet,
 	}
-	if flags.MaxTables > 0 {
-		limits.MaxTables = flags.MaxTables
-	}
-	if flags.MaxRows > 0 {
-		limits.MaxRows = flags.MaxRows
-	}
-	if flags.MaxRowsPerTable > 0 {
-		limits.MaxRowsPerTable = flags.MaxRowsPerTable
-	} else if cfg.Subset.MaxRowsPerTable > 0 {
-		limits.MaxRowsPerTable = cfg.Subset.MaxRowsPerTable
-	}
-	if flags.MaxInListSize > 0 {
-		limits.MaxInListSize = flags.MaxInListSize
-	}
-	return limits
-}
-
-func resolveDumpWorkers(flags dumpFlags, cfg *config.Config) int {
-	if flags.WorkersSet {
-		return flags.Workers
-	}
-	workers := cfg.Dump.Workers
-	if workers <= 0 {
-		workers = 1
-	}
-	return workers
-}
-
-func validateDumpWorkers(flags dumpFlags, cfg *config.Config, workers int) error {
-	if workers < 1 || workers > dump.MaxParallelWorkers() {
-		return fmt.Errorf("--workers must be between 1 and %d, got %d", dump.MaxParallelWorkers(), workers)
-	}
-	if workers <= 1 {
-		return nil
-	}
-	if flags.NoTransaction {
-		return errors.New("--workers > 1 requires a read-only transaction snapshot; remove --no-transaction")
-	}
-	if flags.SlowConnection {
-		return errors.New("--workers and --slow-connection are incompatible")
-	}
-	if hasChunkFlags(flags) || chunkPolicyConfigured(cfg) {
-		return errors.New("--workers and chunk-table selectors are incompatible")
-	}
-	effectiveSeedFile := flags.SeedFile
-	if effectiveSeedFile == "" && cfg.Subset.SeedFile != "" {
-		effectiveSeedFile = cfg.Subset.SeedFile
-	}
-	effectivePercent := flags.Percent
-	if effectivePercent == 0 {
-		effectivePercent = cfg.Subset.Percent
-	}
-	if effectiveSeedFile != "" {
-		return errors.New("--workers and --seed-file (subset dump) are incompatible")
-	}
-	if effectivePercent > 0 {
-		return errors.New("--workers and --percent (subset dump) are incompatible")
-	}
-	return nil
 }
 
 func buildDumpOptions(flags dumpFlags, cfg *config.Config) ([]dump.Option, error) {
-	var opts []dump.Option
-	if flags.NoTransaction {
-		opts = append(opts, dump.WithoutTransaction())
-	}
-
-	// Resolve effective subset settings: CLI overrides config.
-	effectiveSeedFile := flags.SeedFile
-	if effectiveSeedFile == "" && cfg.Subset.SeedFile != "" {
-		effectiveSeedFile = cfg.Subset.SeedFile
-	}
-	effectivePercent := flags.Percent
-	if effectivePercent == 0 {
-		effectivePercent = cfg.Subset.Percent
-	}
-
-	if effectivePercent < 0 || effectivePercent > 100 {
-		return nil, fmt.Errorf("--percent must be between 1 and 100, got %d", effectivePercent)
-	}
-	if effectiveSeedFile != "" && effectivePercent > 0 {
-		return nil, errors.New("--percent and --seed-file are mutually exclusive")
-	}
-	if flags.SlowConnection && effectiveSeedFile != "" {
-		return nil, errors.New("--slow-connection and --seed-file (subset dump) are incompatible")
-	}
-	if flags.SlowConnection && effectivePercent > 0 {
-		return nil, errors.New("--slow-connection and --percent (subset dump) are incompatible")
-	}
-	if (hasChunkFlags(flags) || chunkPolicyConfigured(cfg)) && effectiveSeedFile != "" {
-		return nil, errors.New("--chunk-table and --seed-file (subset dump) are incompatible")
-	}
-	if (hasChunkFlags(flags) || chunkPolicyConfigured(cfg)) && effectivePercent > 0 {
-		return nil, errors.New("--chunk-table and --percent (subset dump) are incompatible")
-	}
-	workers := resolveDumpWorkers(flags, cfg)
-	if err := validateDumpWorkers(flags, cfg, workers); err != nil {
-		return nil, err
-	}
-	if flags.SlowConnection || hasChunkFlags(flags) {
-		if flags.SlowConnection {
-			opts = append(opts, dump.WithSlowConnection())
-		}
-
-		chunkSize := flags.ChunkSize
-		if chunkSize <= 0 && cfg.Dump.SlowChunkSize > 0 {
-			chunkSize = cfg.Dump.SlowChunkSize
-		}
-		if chunkSize <= 0 {
-			chunkSize = dump.DefaultSlowChunkSize
-		}
-		const maxChunkSize = 1000000
-		if chunkSize > maxChunkSize {
-			fmt.Fprintf(os.Stderr, "chunk-size %d exceeds max %d, capping to %d\n", chunkSize, maxChunkSize, maxChunkSize)
-			chunkSize = maxChunkSize
-		}
-		opts = append(opts, dump.WithSlowChunkSize(chunkSize))
-
-		retryMax := flags.RetryMax
-		if retryMax <= 0 && cfg.Dump.SlowRetryMax > 0 {
-			retryMax = cfg.Dump.SlowRetryMax
-		}
-		if retryMax > 0 {
-			retryBaseStr := flags.RetryBase
-			if retryBaseStr == "" {
-				retryBaseStr = cfg.Dump.SlowRetryBase
-			}
-			if retryBaseStr == "" {
-				retryBaseStr = "500ms"
-			}
-			retryBase, err := time.ParseDuration(retryBaseStr)
-			if err != nil {
-				return nil, fmt.Errorf("parse retry base duration %q: %w", retryBaseStr, err)
-			}
-			if retryBase <= 0 {
-				return nil, errors.New("slow-connection retry base must be positive when retry-max > 0")
-			}
-			opts = append(opts, dump.WithSlowRetry(retryMax, retryBase))
-		}
-	} else if chunkPolicyConfigured(cfg) {
-		chunkSize := cfg.Dump.SlowChunkSize
-		if chunkSize <= 0 {
-			chunkSize = dump.DefaultSlowChunkSize
-		}
-		opts = append(opts, dump.WithSlowChunkSize(chunkSize))
-		if cfg.Dump.SlowRetryMax > 0 {
-			retryBaseStr := cfg.Dump.SlowRetryBase
-			if retryBaseStr == "" {
-				retryBaseStr = "500ms"
-			}
-			retryBase, err := time.ParseDuration(retryBaseStr)
-			if err != nil {
-				return nil, fmt.Errorf("parse retry base duration %q: %w", retryBaseStr, err)
-			}
-			if retryBase <= 0 {
-				return nil, errors.New("chunk retry base must be positive when slow_retry_max > 0")
-			}
-			opts = append(opts, dump.WithSlowRetry(cfg.Dump.SlowRetryMax, retryBase))
-		}
-	}
-
-	if effectiveSeedFile != "" {
-		subCfg, err := dump.ParseSeedFile(effectiveSeedFile)
-		if err != nil {
-			return nil, err
-		}
-		subCfg.Limits = dump.ApplySubsetLimitDefaults(subCfg.Limits)
-		subCfg.Limits = applySubsetLimits(subCfg.Limits, flags, cfg)
-		opts = append(opts, dump.WithSubset(subCfg))
-	}
-
-	if effectivePercent > 0 {
-		subCfg := dump.SubsetConfig{
-			Percent: effectivePercent,
-			Limits:  dump.DefaultSubsetLimits(),
-		}
-		subCfg.Limits = applySubsetLimits(subCfg.Limits, flags, cfg)
-		opts = append(opts, dump.WithSubset(subCfg))
-	}
-
-	if policy, ignored, err := resolveTableSelection(flags, cfg); err != nil {
-		return nil, err
-	} else if policy != nil {
-		opts = append(opts, dump.WithTableSelection(*policy, ignored))
-	}
-
-	if chunkPolicy, chunkIgnored, err := resolveChunkPolicy(flags, cfg); err != nil {
-		return nil, err
-	} else if chunkPolicy != nil {
-		opts = append(opts, dump.WithChunkTablePolicy(*chunkPolicy, chunkIgnored))
-	}
-
-	opts = append(opts, dump.WithWorkers(workers))
-
-	return opts, nil
-}
-
-func hasChunkFlags(flags dumpFlags) bool {
-	return len(flags.ChunkTables) > 0 || len(flags.ChunkTableFiles) > 0
-}
-
-func chunkPolicyConfigured(cfg *config.Config) bool {
-	return len(cfg.Dump.ChunkTables) > 0 || len(cfg.Dump.ChunkTableFiles) > 0
+	return runopts.BuildDumpOptions(dumpFlagsToOverrides(flags), cfg)
 }
 
 func effectiveResilientDumpMode(flags dumpFlags, cfg *config.Config) bool {
-	return flags.SlowConnection || hasChunkFlags(flags) || chunkPolicyConfigured(cfg)
+	return runopts.EffectiveResilientDumpMode(dumpFlagsToOverrides(flags), cfg)
 }
 
 type resumableDumpExpectation struct {
@@ -369,13 +195,13 @@ func buildResumableDumpExpectation(flags dumpFlags, cfg *config.Config, dsn stri
 		schemas:             append([]string(nil), schemas...),
 		sanitizationEnabled: sanitizationEnabled,
 	}
-	chunkPolicy, _, err := resolveChunkPolicy(flags, cfg)
+	chunkPolicy, _, err := runopts.ResolveChunkPolicy(dumpFlagsToOverrides(flags), cfg)
 	if err != nil {
 		return resumableDumpExpectation{}, err
 	}
 	exp.chunkFingerprint = dump.ChunkPolicyResumeFingerprint(chunkPolicy)
 
-	selPolicy, _, err := resolveTableSelection(flags, cfg)
+	selPolicy, _, err := runopts.ResolveTableSelection(dumpFlagsToOverrides(flags), cfg)
 	if err != nil {
 		return resumableDumpExpectation{}, err
 	}
@@ -393,43 +219,91 @@ func provenanceMatchesResumable(meta *dump.Provenance, exp resumableDumpExpectat
 	return dump.SelectionResumeProvenanceMatches(exp.selectionFingerprint, meta.TableSelection)
 }
 
-func resolveChunkPolicy(flags dumpFlags, cfg *config.Config) (*dump.ChunkPolicy, []dump.IgnoredFileLine, error) {
-	direct := cfg.Dump.ChunkTables
-	files := cfg.Dump.ChunkTableFiles
-	sourceKind, sourceName := "config", "dump.chunk_tables"
-
-	if hasChunkFlags(flags) {
-		direct = flags.ChunkTables
-		files = flags.ChunkTableFiles
-		sourceKind, sourceName = "flag", "--chunk-table"
+func persistedStrategiesValid(records []dump.TableStrategyRecord) bool {
+	if len(records) == 0 {
+		return false
 	}
-
-	return dump.BuildChunkPolicyWithSources(direct, files, sourceKind, sourceName)
+	seen := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		if rec.Table == "" {
+			return false
+		}
+		if _, ok := seen[rec.Table]; ok {
+			return false
+		}
+		seen[rec.Table] = struct{}{}
+		switch rec.Strategy {
+		case dump.KeyStrategyPrimaryKey, dump.KeyStrategyUniqueIndex:
+			if !rec.Resumable || len(rec.KeyColumns) == 0 || rec.Fingerprint == "" {
+				return false
+			}
+			for _, col := range rec.KeyColumns {
+				if col == "" {
+					return false
+				}
+			}
+		case dump.KeyStrategyNormalStream:
+			if rec.Resumable || len(rec.KeyColumns) > 0 || rec.Fingerprint != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
-func resolveTableSelection(flags dumpFlags, cfg *config.Config) (*dump.SelectionPolicy, []dump.IgnoredFileLine, error) {
-	includeDirect := cfg.Dump.IncludeTables
-	includeFiles := cfg.Dump.IncludeTableFiles
-	excludeDirect := cfg.Dump.ExcludeTables
-	excludeFiles := cfg.Dump.ExcludeTableFiles
-	includeKind, includeName := "config", "dump.include_tables"
-	excludeKind, excludeName := "config", "dump.exclude_tables"
-
-	if len(flags.IncludeTables) > 0 || len(flags.IncludeTableFiles) > 0 {
-		includeDirect = flags.IncludeTables
-		includeFiles = flags.IncludeTableFiles
-		includeKind, includeName = "flag", "--include-table"
+func strategyRecordsEqual(a, b []dump.TableStrategyRecord) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	if len(flags.ExcludeTables) > 0 || len(flags.ExcludeTableFiles) > 0 {
-		excludeDirect = flags.ExcludeTables
-		excludeFiles = flags.ExcludeTableFiles
-		excludeKind, excludeName = "flag", "--exclude-table"
+	for i := range a {
+		if a[i].Table != b[i].Table ||
+			a[i].Strategy != b[i].Strategy ||
+			a[i].Resumable != b[i].Resumable ||
+			a[i].Fingerprint != b[i].Fingerprint {
+			return false
+		}
+		if !slices.Equal(a[i].KeyColumns, b[i].KeyColumns) {
+			return false
+		}
 	}
+	return true
+}
 
-	return dump.BuildSelectionPolicyWithSources(
-		includeDirect, includeFiles, excludeDirect, excludeFiles,
-		includeKind, includeName, excludeKind, excludeName,
-	)
+func resumePlanValidator(persisted []dump.TableStrategyRecord) dump.PlanValidator {
+	want := append([]dump.TableStrategyRecord(nil), persisted...)
+	return func(plan dump.PreparedDumpPlan) error {
+		if !strategyRecordsEqual(want, plan.Strategies) {
+			return ErrResumePlanMismatch
+		}
+		return nil
+	}
+}
+
+func appendDumpRuntimeOpts(base []dump.Option, flags dumpFlags, seq int, baseDir, dsn string, schemas []string, sanitized bool, persisted []dump.TableStrategyRecord, validateResume bool) []dump.Option {
+	runOpts := append([]dump.Option(nil), base...)
+	runOpts = append(runOpts, dump.WithSchemas(schemas))
+	runOpts = append(runOpts, dump.SanitizationOptions(sanitized)...)
+	sanitizationEnabled := sanitized
+	runOpts = append(runOpts, dump.WithProvenance(dump.Provenance{
+		Seq:             seq,
+		BaseDir:         baseDir,
+		SourceDatabase:  databaseFromDSN(dsn),
+		SourceSignature: sourceSignatureFromDSN(dsn),
+		Schemas:         append([]string(nil), schemas...),
+		Sanitized:       &sanitizationEnabled,
+	}))
+	runOpts = append(runOpts, dump.WithProgress(func(ev dump.ProgressEvent) {
+		if flags.JSON {
+			return
+		}
+		_ = Render(os.Stderr, ev, isStderrTerminal(os.Stderr.Fd()))
+	}))
+	if validateResume && len(persisted) > 0 {
+		runOpts = append(runOpts, dump.WithPlanValidator(resumePlanValidator(persisted)))
+	}
+	return runOpts
 }
 
 func runDump(args []string) (err error) {
@@ -517,14 +391,27 @@ func runDump(args []string) (err error) {
 	var outputDir string
 	var seq int
 	freshAllocated := false
+	var persistedStrategies []dump.TableStrategyRecord
+	resumeCandidate := false
 	resumeExpect, err := buildResumableDumpExpectation(flags, cfg, dsn, schemas, cfg.Sanitization.Enabled)
 	if err != nil {
 		return err
 	}
 	if effectiveResilientDumpMode(flags, cfg) {
 		if resumable, resumableSeq, ok := findResumableDumpDir(out, resumeExpect); ok {
-			outputDir = resumable
-			seq = resumableSeq
+			meta, readErr := readMetadataTmp(resumable)
+			if readErr == nil && meta.Provenance != nil && persistedStrategiesValid(meta.Provenance.Strategies) {
+				outputDir = resumable
+				seq = resumableSeq
+				persistedStrategies = append([]dump.TableStrategyRecord(nil), meta.Provenance.Strategies...)
+				resumeCandidate = true
+			} else {
+				outputDir, seq, err = dumphistory.AllocateDir(out, store)
+				if err != nil {
+					return fmt.Errorf("allocate dump directory: %w", err)
+				}
+				freshAllocated = true
+			}
 		} else {
 			outputDir, seq, err = dumphistory.AllocateDir(out, store)
 			if err != nil {
@@ -540,32 +427,29 @@ func runDump(args []string) (err error) {
 		freshAllocated = true
 	}
 
-	opts = append(opts, dump.WithSchemas(schemas))
-	opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
-	sanitizationEnabled := cfg.Sanitization.Enabled
-	opts = append(opts, dump.WithProvenance(dump.Provenance{
-		Seq:             seq,
-		BaseDir:         out,
-		SourceDatabase:  databaseFromDSN(dsn),
-		SourceSignature: sourceSignatureFromDSN(dsn),
-		Schemas:         append([]string(nil), schemas...),
-		Sanitized:       &sanitizationEnabled,
-	}))
-
-	opts = append(opts, dump.WithProgress(func(ev dump.ProgressEvent) {
-		if flags.JSON {
-			return
+	runOpts := appendDumpRuntimeOpts(opts, flags, seq, out, dsn, schemas, cfg.Sanitization.Enabled, persistedStrategies, resumeCandidate)
+	if err := dumpRun(ctx, db, outputDir, runOpts...); err != nil {
+		if resumeCandidate && errors.Is(err, ErrResumePlanMismatch) {
+			outputDir, seq, err = dumphistory.AllocateDir(out, store)
+			if err != nil {
+				return fmt.Errorf("allocate dump directory: %w", err)
+			}
+			freshAllocated = true
+			runOpts = appendDumpRuntimeOpts(opts, flags, seq, out, dsn, schemas, cfg.Sanitization.Enabled, nil, false)
+			if err = dumpRun(ctx, db, outputDir, runOpts...); err != nil {
+				if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
+					_ = removeFreshEmptyDumpDir(outputDir)
+				}
+				return fmt.Errorf("dump: %w", err)
+			}
+		} else {
+			if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
+				_ = removeFreshEmptyDumpDir(outputDir)
+			}
+			return fmt.Errorf("dump: %w", err)
 		}
-		_ = Render(os.Stderr, ev, isStderrTerminal(os.Stderr.Fd()))
-	}))
-
-	if err := dumpRun(ctx, db, outputDir, opts...); err != nil {
-		if freshAllocated && (dump.IsTableSelectionError(err) || dump.IsChunkPolicyError(err) || dump.IsNoTablesError(err)) {
-			_ = removeFreshEmptyDumpDir(outputDir)
-		}
-		return fmt.Errorf("dump: %w", err)
 	}
-	fmt.Fprintln(os.Stderr, "dump complete")
+	fmt.Fprintf(os.Stderr, "dump complete: %s (seq %d)\n", outputDir, seq)
 
 	if err := dumpCaptureSchema(ctx, dsn, outputDir, schemas); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: schema capture: %v\n", err)

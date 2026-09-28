@@ -139,6 +139,55 @@ func TestCloneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDropDatabaseTerminatesActiveTargetAndUnblocksRecreate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+
+	ctx := context.Background()
+	name := fmt.Sprintf("dolly_cleanup_tgt_%d", os.Getpid())
+	adminDSN, err := RewriteDSN(dsn, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	_, _ = admin.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, name))
+	if err := CreateDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	targetDSN, err := RewriteDSN(dsn, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := sql.Open("pgx", targetDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	if err := blocker.PingContext(ctx); err != nil {
+		t.Fatalf("open active target session: %v", err)
+	}
+
+	if err := dropDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("cleanup target: %v", err)
+	}
+	if err := CreateDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("immediate recreate: %v", err)
+	}
+	if err := dropDatabase(ctx, adminDSN, name); err != nil {
+		t.Fatalf("final cleanup: %v", err)
+	}
+}
+
 func createIntegrationSource(t *testing.T, db *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
@@ -800,7 +849,7 @@ func TestRestoreSequencesPreservesCalledOnEqualPG16(t *testing.T) {
 	if _, err := tgtDB.ExecContext(ctx, `SELECT setval('public.monotonic_seq', 10, true)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := restoreSequences(ctx, srcDB, tgtDB); err != nil {
+	if err := restoreSequences(ctx, srcDB, tgtDB, nil); err != nil {
 		t.Fatal(err)
 	}
 	var called bool
@@ -845,7 +894,7 @@ func TestRestoreSequencesAdversarialConcurrentPG16(t *testing.T) {
 		_, err := tgtDB.ExecContext(ctx, `INSERT INTO public.seq_observed (v) VALUES ($1)`, v)
 		return err
 	})
-	loop(func() error { return restoreSequences(ctx, srcDB, tgtDB) })
+	loop(func() error { return restoreSequences(ctx, srcDB, tgtDB, nil) })
 	select {
 	case err := <-errCh:
 		cancel()
@@ -1163,6 +1212,100 @@ func TestCloneRoundTripCopyStreamScopedRolePG16(t *testing.T) {
 	}
 	if auditSchemaExists {
 		t.Fatal("audit schema should not be replayed for app-only scoped clone")
+	}
+}
+
+func TestCloneCopyStreamScopedSequenceRestorePG16(t *testing.T) {
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+	if !strings.Contains(dsn, "sslmode=") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + "sslmode=disable"
+	}
+	ctx := context.Background()
+	fix := setupScopedPreflightFixture(t, dsn)
+	srcDB, err := sql.Open("pgx", fix.srcDSN)
+	if err != nil {
+		t.Fatalf("open source: %v", err)
+	}
+	requirePgDumpMajorMatch(t, srcDB)
+	_ = srcDB.Close()
+	srcAdminDSN, err := RewriteDSN(dsn, fix.srcDB)
+	if err != nil {
+		t.Fatalf("rewrite source admin DSN: %v", err)
+	}
+	srcAdmin, err := sql.Open("pgx", srcAdminDSN)
+	if err != nil {
+		t.Fatalf("open source admin: %v", err)
+	}
+	if _, err := srcAdmin.ExecContext(ctx, `
+		INSERT INTO app.readable (id) VALUES (1);
+		CREATE SEQUENCE audit.secret_id_seq;
+	`); err != nil {
+		t.Fatalf("seed source data: %v", err)
+	}
+	_ = srcAdmin.Close()
+	admin, err := sql.Open("pgx", fix.adminDSN)
+	if err != nil {
+		t.Fatalf("open admin: %v", err)
+	}
+	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`GRANT CREATE, TEMPORARY ON DATABASE "%s" TO "%s"`, fix.tgtDB, fix.role)); err != nil {
+		t.Fatalf("grant target database privileges: %v", err)
+	}
+	_ = admin.Close()
+	tgtAdminDSN, err := RewriteDSN(dsn, fix.tgtDB)
+	if err != nil {
+		t.Fatalf("rewrite target admin DSN: %v", err)
+	}
+	tgtAdmin, err := sql.Open("pgx", tgtAdminDSN)
+	if err != nil {
+		t.Fatalf("open target admin: %v", err)
+	}
+	if _, err := tgtAdmin.ExecContext(ctx, fmt.Sprintf(`GRANT ALL ON SCHEMA app TO "%s"`, fix.role)); err != nil {
+		t.Fatalf("grant target schema privileges: %v", err)
+	}
+	if _, err := tgtAdmin.ExecContext(ctx, `DROP SCHEMA IF EXISTS app CASCADE`); err != nil {
+		t.Fatalf("reset target app schema: %v", err)
+	}
+	_ = tgtAdmin.Close()
+	if err := Run(ctx, Options{
+		SourceDSN:  fix.srcDSN,
+		CloneName:  fix.cloneName,
+		TargetDSN:  fix.tgtDSN,
+		SkipCreate: true,
+		Strategy:   "logical-stream",
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"app"})},
+	}); err != nil {
+		t.Fatalf("clone run: %v", err)
+	}
+	tgtDB, err := sql.Open("pgx", fix.tgtDSN)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer tgtDB.Close()
+	var rowCount int
+	var auditSchemaExists, auditSeqExists bool
+	if err := tgtDB.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count(*)::int FROM app.readable),
+			EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = 'audit'),
+			EXISTS(SELECT 1 FROM pg_sequences WHERE schemaname = 'audit' AND sequencename = 'secret_id_seq')
+	`).Scan(&rowCount, &auditSchemaExists, &auditSeqExists); err != nil {
+		t.Fatalf("verify scoped clone: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("app.readable rows = %d, want 1", rowCount)
+	}
+	if auditSchemaExists {
+		t.Fatal("audit schema should not exist on scoped target")
+	}
+	if auditSeqExists {
+		t.Fatal("audit.secret_id_seq should not exist on scoped target")
 	}
 }
 

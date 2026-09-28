@@ -13,7 +13,7 @@ import (
 // lookPath is overridable for testing precondition checks.
 var lookPath = exec.LookPath
 
-var schemaReplayCleanupTimeout = 10 * time.Second
+var schemaReplayCleanupTimeout = 30 * time.Second
 
 // SchemaReplayStrategy replays schema via pg_dump --schema-only | psql,
 // then dumps and restores data.

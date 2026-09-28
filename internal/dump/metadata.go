@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -53,6 +54,15 @@ type Metadata struct {
 	Sequences   []SequenceState `json:"sequences,omitempty"`
 }
 
+// TableStrategyRecord captures the persisted streaming plan for one table.
+type TableStrategyRecord struct {
+	Table       string      `json:"table"`
+	Strategy    KeyStrategy `json:"strategy"`
+	Resumable   bool        `json:"resumable"`
+	KeyColumns  []string    `json:"key_columns,omitempty"`
+	Fingerprint string      `json:"fingerprint,omitempty"`
+}
+
 // Provenance records dump identity and source context for history/restore tracking.
 type Provenance struct {
 	Seq              int                       `json:"seq"`
@@ -64,7 +74,72 @@ type Provenance struct {
 	TableCount       int                       `json:"table_count"`
 	TotalRowEstimate int64                     `json:"total_row_estimate,omitempty"`
 	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
-	ChunkTables      *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
+	ChunkTables        *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
+	Strategies         []TableStrategyRecord     `json:"strategies,omitempty"`
+	SnapshotConsistent bool                      `json:"snapshot_consistent"`
+}
+
+// BuildStrategyRecords returns deterministic strategy provenance for explicitly
+// planned tables. Tables must already be in dump order; records follow that order.
+func BuildStrategyRecords(tables []db.Table, plans map[string]KeyDescriptor) []TableStrategyRecord {
+	if len(plans) == 0 {
+		return nil
+	}
+	records := make([]TableStrategyRecord, 0, len(plans))
+	for _, table := range tables {
+		plan, ok := plans[tableKey(table.Schema, table.Name)]
+		if !ok {
+			continue
+		}
+		records = append(records, tableStrategyRecord(plan))
+	}
+	return records
+}
+
+func tableStrategyRecord(plan KeyDescriptor) TableStrategyRecord {
+	rec := TableStrategyRecord{
+		Table:     qualifiedName(plan.TableSchema, plan.TableName),
+		Strategy:  plan.Strategy,
+		Resumable: plan.Resumable,
+	}
+	if plan.Resumable {
+		rec.KeyColumns = plan.ColumnNames()
+		rec.Fingerprint = plan.Fingerprint
+	}
+	return rec
+}
+
+func rowCountPtr(n int64) *int64 {
+	return &n
+}
+
+// countNDJSONRows counts exported rows by newline. Dump writers emit one JSON
+// object plus '\n' per row, including after the last row.
+func countNDJSONRows(path string) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	var n int64
+	buf := make([]byte, 32*1024)
+	for {
+		nr, err := f.Read(buf)
+		for _, b := range buf[:nr] {
+			if b == '\n' {
+				n++
+			}
+		}
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if nr == 0 {
+			return n, nil
+		}
+	}
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {

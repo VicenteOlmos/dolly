@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,10 +17,46 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func streamTableSlowDefault(ctx context.Context, q querier, table db.Table, dir string, rowTransform RowTransform) error {
-	return streamTableSlow(ctx, q, table, dir, rowTransform, slowRetryConfig{}, DefaultSlowChunkSize)
+	_, err := streamTableSlow(ctx, q, table, dir, rowTransform, slowRetryConfig{}, DefaultSlowChunkSize)
+	return err
+}
+
+// slowQuerySQL builds the exact SELECT streamTableSlow issues for keyset pagination.
+func slowQuerySQL(table db.Table, chunkSize int, resumeKeyArity int) string {
+	descriptor := SelectKeyDescriptor(table)
+	keyCols := descriptor.ColumnNames()
+
+	cols := make([]string, len(table.Columns))
+	for i, c := range table.Columns {
+		cols[i] = pgx.Identifier{c.Name}.Sanitize()
+	}
+	keyIdents := make([]string, len(keyCols))
+	for i, k := range keyCols {
+		keyIdents[i] = pgx.Identifier{k}.Sanitize()
+	}
+	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
+	colList := strings.Join(cols, ", ")
+	keyOrder := strings.Join(keyIdents, ", ")
+
+	if resumeKeyArity == 0 {
+		return fmt.Sprintf("SELECT %s FROM %s ORDER BY %s LIMIT %d", colList, tableIdent, keyOrder, chunkSize)
+	}
+	placeholders := make([]string, resumeKeyArity)
+	for i := range placeholders {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return fmt.Sprintf("SELECT %s FROM %s WHERE (%s) > (%s) ORDER BY %s LIMIT %d",
+		colList, tableIdent, keyOrder, strings.Join(placeholders, ", "), keyOrder, chunkSize)
+}
+
+func slowQueryPattern(table db.Table, chunkSize int, resumeKeyArity int) string {
+	return "^" + regexp.QuoteMeta(slowQuerySQL(table, chunkSize, resumeKeyArity)) + "$"
 }
 
 func TestStreamTable(t *testing.T) {
@@ -61,6 +99,29 @@ func TestStreamTable(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "timestamp date timestamptz",
+			table: db.Table{
+				Schema: "public",
+				Name:   "events",
+				Columns: []db.Column{
+					{Name: "id", DataType: "integer"},
+					{Name: "sin_zona", DataType: "timestamp without time zone"},
+					{Name: "con_zona", DataType: "timestamp with time zone"},
+					{Name: "solo_fecha", DataType: "date"},
+				},
+			},
+			rows: sqlmock.NewRows([]string{"id", "sin_zona", "con_zona", "solo_fecha"}).
+				AddRow(
+					1,
+					time.Date(2023, 6, 22, 13, 36, 35, 0, time.UTC),
+					time.Date(2023, 6, 22, 9, 36, 35, 0, time.FixedZone("EDT", -4*3600)),
+					time.Date(2023, 6, 22, 0, 0, 0, 0, time.UTC),
+				),
+			want: []string{
+				`{"con_zona":"2023-06-22T09:36:35-04:00","id":1,"sin_zona":"2023-06-22T13:36:35","solo_fecha":"2023-06-22"}`,
+			},
+		},
+		{
 			name: "bool type",
 			table: db.Table{
 				Schema: "public",
@@ -91,7 +152,7 @@ func TestStreamTable(t *testing.T) {
 				WillReturnRows(tt.rows)
 
 			dir := t.TempDir()
-			err = streamTable(context.Background(), sqlDB, tt.table, dir, nil)
+			_, err = streamTable(context.Background(), sqlDB, tt.table, dir, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("streamTable() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -146,7 +207,7 @@ func TestStreamTableQueryError(t *testing.T) {
 		Columns: []db.Column{{Name: "id", DataType: "integer"}},
 	}
 
-	err = streamTable(context.Background(), sqlDB, table, dir, nil)
+	_, err = streamTable(context.Background(), sqlDB, table, dir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -180,7 +241,7 @@ func TestStreamTableRowsError(t *testing.T) {
 		Columns: []db.Column{{Name: "id", DataType: "integer"}},
 	}
 
-	err = streamTable(context.Background(), sqlDB, table, dir, nil)
+	_, err = streamTable(context.Background(), sqlDB, table, dir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -206,7 +267,7 @@ func TestStreamTableContextCancellation(t *testing.T) {
 		Columns: []db.Column{{Name: "id", DataType: "integer"}},
 	}
 
-	err = streamTable(ctx, sqlDB, table, dir, nil)
+	_, err = streamTable(ctx, sqlDB, table, dir, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -242,7 +303,7 @@ func TestStreamTableManyRows(t *testing.T) {
 		WillReturnRows(rows)
 
 	dir := t.TempDir()
-	err = streamTable(context.Background(), sqlDB, table, dir, nil)
+	_, err = streamTable(context.Background(), sqlDB, table, dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,9 +420,240 @@ func TestStreamTableSlowNoPKError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for table without primary key")
 	}
-	if !strings.Contains(err.Error(), "no primary key") {
-		t.Fatalf("error missing no-PK context: %v", err)
+	if !strings.Contains(err.Error(), "no resumable key") {
+		t.Fatalf("error missing no-resumable-key context: %v", err)
 	}
+}
+
+func streamUniqueTable() db.Table {
+	return db.Table{
+		Schema: "public", Name: "events",
+		Columns: []db.Column{{Name: "code", DataType: "text", OrdinalPosition: 1}, {Name: "note", DataType: "text", OrdinalPosition: 2}},
+		UniqueIndexes: []db.UniqueIndexInfo{{
+			IndexSchema: "public", IndexName: "events_code_key", IndexOID: 20,
+			IsValid: true, IsReady: true, AccessMethod: "btree",
+			KeyColumns: []db.UniqueIndexColumn{{Name: "code", Position: 1, Attnum: 1, OpclassOID: 1978}},
+		}},
+	}
+}
+
+func TestStreamTableSlowUniqueIndexFirstPage(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := streamUniqueTable()
+	mock.ExpectQuery(slowQueryPattern(table, DefaultSlowChunkSize, 0)).
+		WithoutArgs().
+		WillReturnRows(sqlmock.NewRows([]string{"code", "note"}).AddRow("a", "one").AddRow("b", "two"))
+
+	dir := t.TempDir()
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	want := `{"code":"a","note":"one"}
+{"code":"b","note":"two"}`
+	if got := strings.TrimSpace(readTableNDJSON(t, dir, "events")); got != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestStreamTableSlowUniqueIndexResume(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := streamUniqueTable()
+	desc := SelectKeyDescriptor(table)
+	dir := t.TempDir()
+	tmpPath := filepath.Join(dir, "events.ndjson.tmp")
+	if err := os.WriteFile(tmpPath, []byte(`{"code":"a","note":"one"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ckpt, _ := json.Marshal(slowCheckpoint{
+		Table: "events", Strategy: KeyStrategyUniqueIndex, KeyColumns: []string{"code"},
+		KeyFingerprint: desc.Fingerprint, LastKey: []any{"a"},
+	})
+	if err := os.WriteFile(checkpointPath(dir, "events"), ckpt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mock.ExpectQuery(slowQueryPattern(table, DefaultSlowChunkSize, 1)).
+		WithArgs("a").
+		WillReturnRows(sqlmock.NewRows([]string{"code", "note"}).AddRow("b", "two"))
+
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(readTableNDJSON(t, dir, "events")), "\n")
+	if len(got) != 2 || got[1] != `{"code":"b","note":"two"}` {
+		t.Fatalf("output = %v", got)
+	}
+}
+
+func TestStreamTableSlowCompositeUniqueIndex(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := db.Table{
+		Schema: "public", Name: "pairs",
+		Columns: []db.Column{
+			{Name: "tenant", DataType: "text", OrdinalPosition: 1},
+			{Name: "seq", DataType: "integer", OrdinalPosition: 2},
+			{Name: "val", DataType: "text", OrdinalPosition: 3},
+		},
+		UniqueIndexes: []db.UniqueIndexInfo{{
+			IndexSchema: "public", IndexName: "pairs_tenant_seq_key", IndexOID: 30,
+			IsValid: true, IsReady: true, AccessMethod: "btree",
+			KeyColumns: []db.UniqueIndexColumn{
+				{Name: "tenant", Position: 1, Attnum: 1, OpclassOID: 1978},
+				{Name: "seq", Position: 2, Attnum: 2, OpclassOID: 1978},
+			},
+		}},
+	}
+	desc := SelectKeyDescriptor(table)
+
+	rows1 := sqlmock.NewRows([]string{"tenant", "seq", "val"}).
+		AddRow("t1", 1, "a").AddRow("t1", 2, "b")
+	mock.ExpectQuery(slowQueryPattern(table, 2, 0)).
+		WithoutArgs().
+		WillReturnRows(rows1)
+	mock.ExpectQuery(slowQueryPattern(table, 2, 2)).
+		WithArgs("t1", int64(2)).
+		WillReturnError(fmt.Errorf("connection reset"))
+
+	dir := t.TempDir()
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, 2)
+	if err == nil {
+		t.Fatal("expected query error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	ckptPath := slowCheckpointPath(dir, table)
+	if _, err := os.Stat(ckptPath); err != nil {
+		t.Fatal("checkpoint must persist after partial chunk failure")
+	}
+	ckpt, err := loadSlowCheckpoint(ckptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ckpt.Strategy != KeyStrategyUniqueIndex || ckpt.KeyFingerprint != desc.Fingerprint ||
+		!slices.Equal(ckpt.KeyColumns, []string{"tenant", "seq"}) || len(ckpt.LastKey) != 2 {
+		t.Fatalf("checkpoint = %+v", ckpt)
+	}
+	if ckpt.LastKey[0] != "t1" {
+		t.Fatalf("last key tenant = %v", ckpt.LastKey[0])
+	}
+	if n, ok := ckpt.LastKey[1].(json.Number); !ok || n.String() != "2" {
+		t.Fatalf("last key seq = %v", ckpt.LastKey[1])
+	}
+}
+
+func TestStreamTableSlowNormalStreamRejected(t *testing.T) {
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := db.Table{
+		Schema: "public", Name: "unsafe",
+		Columns: []db.Column{{Name: "code", DataType: "text", IsNullable: true, OrdinalPosition: 1}},
+		UniqueIndexes: []db.UniqueIndexInfo{{
+			IndexSchema: "public", IndexName: "unsafe_code_key", IndexOID: 10,
+			IsValid: true, IsReady: true, AccessMethod: "btree",
+			KeyColumns: []db.UniqueIndexColumn{{Name: "code", Position: 1, Attnum: 1, OpclassOID: 1978, IsNullable: true}},
+		}},
+	}
+	err = streamTableSlowDefault(context.Background(), sqlDB, table, t.TempDir(), nil)
+	if err == nil || !strings.Contains(err.Error(), "no resumable key") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestStreamTableSlowUniqueIndexDescriptorMismatch(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := streamUniqueTable()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "events.ndjson.tmp"), []byte(`{"code":"a","note":"one"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ckpt, _ := json.Marshal(slowCheckpoint{
+		Table: "events", Strategy: KeyStrategyUniqueIndex, KeyColumns: []string{"code"},
+		KeyFingerprint: "deadbeef", LastKey: []any{"a"},
+	})
+	if err := os.WriteFile(checkpointPath(dir, "events"), ckpt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+	if err == nil || !strings.Contains(err.Error(), "fingerprint mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected DB query before checkpoint validation: %v", err)
+	}
+}
+
+func TestStreamTableSlowUniqueIndexCheckpointStrategyMismatchRejectsBeforeQuery(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := streamUniqueTable()
+	desc := SelectKeyDescriptor(table)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "events.ndjson.tmp"), []byte(`{"code":"a","note":"one"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ckpt, _ := json.Marshal(slowCheckpoint{
+		Table:          "events",
+		Strategy:       KeyStrategyPrimaryKey,
+		KeyColumns:     []string{"code"},
+		KeyFingerprint: desc.Fingerprint,
+		LastKey:        []any{"a"},
+	})
+	if err := os.WriteFile(checkpointPath(dir, "events"), ckpt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+	if err == nil || !strings.Contains(err.Error(), "strategy mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unexpected DB query before checkpoint validation: %v", err)
+	}
+}
+
+func readTableNDJSON(t *testing.T, dir, table string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, table+".ndjson"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func TestStreamTableSlowCompositePKIntInt(t *testing.T) {
@@ -545,7 +837,7 @@ func TestStreamTableSlowConfigurableChunkSize(t *testing.T) {
 		WillReturnRows(rows2)
 
 	dir := t.TempDir()
-	err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, chunkSize)
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, chunkSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,9 +997,12 @@ func TestStreamTableSlowResumeFromCheckpoint(t *testing.T) {
 		WithArgs(int64(500)).
 		WillReturnRows(resumeRows)
 
-	err = streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+	n, err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, DefaultSlowChunkSize)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n != 502 {
+		t.Fatalf("exported row count = %d, want 502 (500 resumed + 2 new)", n)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -922,16 +1217,19 @@ func TestStreamTableSlowSkipCompletedTable(t *testing.T) {
 	}
 
 	dir := t.TempDir()
+	finalPath := filepath.Join(dir, "users.ndjson")
 	// Pre-create the final .ndjson so the table appears already completed.
-	if err := os.WriteFile(filepath.Join(dir, "users.ndjson"), []byte(`{"id":1}`), 0o644); err != nil {
+	if err := os.WriteFile(finalPath, []byte("{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Should return nil without querying DB. sqlmock with no expectations
-	// would fail if any SQL call were made.
-	err = streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+	// Should return the existing file's row count without querying DB.
+	n, err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{}, DefaultSlowChunkSize)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("exported row count = %d, want 3 from already-completed file", n)
 	}
 }
 
@@ -1059,8 +1357,18 @@ func TestStreamTableSlowBigintCheckpointPrecision(t *testing.T) {
 	if err := os.WriteFile(ckptPath, ckptData, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(ckptData), fmt.Sprintf(`"last_pk":[%d]`, bigID)) {
-		t.Fatalf("checkpoint did not store exact bigint: %s", string(ckptData))
+	savePath := filepath.Join(t.TempDir(), "bigids.ckpt.json")
+	saveDesc := SelectKeyDescriptor(table)
+	if err := saveSlowCheckpoint(savePath, table, saveDesc, []any{bigID}); err != nil {
+		t.Fatal(err)
+	}
+	saveData, _ := os.ReadFile(savePath)
+	wantKey := fmt.Sprintf(`"last_key":[%d]`, bigID)
+	if !strings.Contains(string(saveData), wantKey) {
+		t.Fatalf("generalized save missing last_key: %s", saveData)
+	}
+	if strings.Contains(string(saveData), `"last_pk"`) {
+		t.Fatalf("generalized save must not use last_pk: %s", saveData)
 	}
 
 	sqlDB2, mock2, err := sqlmock.New()
@@ -1260,6 +1568,9 @@ func TestStreamTableSlowResumeCheckpointSaveFailurePreservesPriorRows(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	if testutil.NormalizeNewlines(string(data)) != testutil.NormalizeNewlines(string(priorData)) {
+		t.Fatalf("temp file content changed after checkpoint save failure")
+	}
 	gotLines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(gotLines) != 500 {
 		t.Fatalf("got %d lines, want 500", len(gotLines))
@@ -1391,7 +1702,7 @@ func TestStreamTableSlowRetrySucceedsAfterFailures(t *testing.T) {
 	dir := t.TempDir()
 	fq := &flakyQuerier{inner: sqlDB, failsRemaining: 2, failErr: fmt.Errorf("connection reset")}
 	retry := slowRetryConfig{max: 3, base: time.Millisecond}
-	if err := streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
+	if _, err := streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1434,7 +1745,7 @@ func TestStreamTableSlowRetryExhaustedPreservesCheckpoint(t *testing.T) {
 
 	fq := &flakyQuerier{inner: sqlDB, failsRemaining: 1, failErr: fmt.Errorf("connection reset")}
 	retry := slowRetryConfig{max: 1, base: time.Millisecond}
-	err = streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize)
+	_, err = streamTableSlow(context.Background(), fq, table, dir, nil, retry, DefaultSlowChunkSize)
 	if err == nil {
 		t.Fatal("expected error after retries exhausted")
 	}
@@ -1473,11 +1784,270 @@ func TestStreamTableSlowRetryNoRetryOnCanceled(t *testing.T) {
 	}
 
 	retry := slowRetryConfig{max: 5, base: time.Millisecond}
-	err = streamTableSlow(ctx, sqlDB, table, t.TempDir(), nil, retry, DefaultSlowChunkSize)
+	_, err = streamTableSlow(ctx, sqlDB, table, t.TempDir(), nil, retry, DefaultSlowChunkSize)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
+}
+
+func TestStreamTableSlowRowsErrRetryable(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := pkUsersTable()
+	first := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "v1").
+		AddRow(2, "v2").
+		RowError(1, &pgconn.PgError{Code: "40001"})
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(first)
+	second := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "v1").
+		AddRow(2, "v2")
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(second)
+
+	dir := t.TempDir()
+	retry := slowRetryConfig{max: 3, base: time.Millisecond}
+	if _, err := streamTableSlow(context.Background(), sqlDB, table, dir, nil, retry, DefaultSlowChunkSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(tableDataPath(dir, table))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2 without duplicates: %s", len(lines), data)
+	}
+}
+
+func TestStreamTableSlowRowsErrNonRetryable(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := pkUsersTable()
+	rows := sqlmock.NewRows([]string{"id", "name"}).
+		AddRow(1, "v1").
+		RowError(0, &pgconn.PgError{Code: "22012"})
+	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(rows)
+
+	dir := t.TempDir()
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 3, base: time.Millisecond}, DefaultSlowChunkSize)
+	if err == nil || !strings.Contains(err.Error(), "iterate rows") {
+		t.Fatalf("error = %v, want iteration failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tableDataPath(dir, table)); !os.IsNotExist(err) {
+		t.Fatal("final data file must not be published")
+	}
+}
+
+func TestStreamTableSlowRowsErrExhaustion(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := pkUsersTable()
+	for range 2 {
+		rows := sqlmock.NewRows([]string{"id", "name"}).
+			AddRow(1, "v1").
+			RowError(0, &pgconn.PgError{Code: "40001"})
+		mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT 1000").WillReturnRows(rows)
+	}
+
+	dir := t.TempDir()
+	_, err = streamTableSlow(context.Background(), sqlDB, table, dir, nil, slowRetryConfig{max: 1, base: time.Millisecond}, DefaultSlowChunkSize)
+	if err == nil || !strings.Contains(err.Error(), "iterate rows") {
+		t.Fatalf("error = %v, want exhausted iteration failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tableDataPath(dir, table)); !os.IsNotExist(err) {
+		t.Fatal("final data file must not be published")
+	}
+}
+
+func pkUsersTable() db.Table {
+	return db.Table{Schema: "public", Name: "users", Columns: []db.Column{
+		{Name: "id", DataType: "integer", PrimaryKey: true}, {Name: "name", DataType: "text"},
+	}}
+}
+
+func TestCheckpointFormatDiscrimination(t *testing.T) {
+	table := pkUsersTable()
+	desc := SelectKeyDescriptor(table)
+	gen := func(lastKey []any) slowCheckpoint {
+		return slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: lastKey}
+	}
+
+	validateCases := []struct {
+		cp      slowCheckpoint
+		wantErr string
+	}{
+		{gen([]any{json.Number("1")}), ""},
+		{slowCheckpoint{PKColumns: []string{"id"}, LastPK: []any{json.Number("1")}}, ""},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: "deadbeef", LastKey: []any{json.Number("1")}}, "fingerprint mismatch"},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"other"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "key columns mismatch"},
+		{slowCheckpoint{PKColumns: []string{"other"}, LastPK: []any{json.Number("1")}}, "pk columns mismatch"},
+		{slowCheckpoint{PKColumn: "id"}, ""},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, LastKey: []any{json.Number("1")}}, "fingerprint required"},
+		{slowCheckpoint{KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "strategy required"},
+		{gen([]any{json.Number("1")}).withLegacy(), "mixes generalized and legacy"},
+		{slowCheckpoint{PKColumn: "id", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "mixes legacy single-pk"},
+		{slowCheckpoint{Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id", "code"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "key arity mismatch"},
+		{slowCheckpoint{Strategy: "bogus", KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "unknown strategy"},
+	}
+	for i, tt := range validateCases {
+		name := tt.wantErr
+		if name == "" {
+			name = fmt.Sprintf("ok%d", i)
+		}
+		t.Run(name, func(t *testing.T) {
+			err := validateCheckpointDescriptor(&tt.cp, desc)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	dir := t.TempDir()
+	path := checkpointPath(dir, "users")
+	if err := saveSlowCheckpoint(path, table, desc, []any{int64(42)}); err != nil {
+		t.Fatal(err)
+	}
+	cp, err := loadSlowCheckpoint(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cp.Strategy != KeyStrategyPrimaryKey || !slices.Equal(cp.KeyColumns, []string{"id"}) ||
+		cp.KeyFingerprint != desc.Fingerprint || len(cp.LastKey) != 1 {
+		t.Fatalf("generalized save: strategy=%q cols=%v fp=%q last=%v", cp.Strategy, cp.KeyColumns, cp.KeyFingerprint, cp.LastKey)
+	}
+	if n, ok := cp.LastKey[0].(json.Number); !ok || n.String() != "42" {
+		t.Fatalf("generalized save LastKey = %v", cp.LastKey)
+	}
+	saveData, _ := os.ReadFile(path)
+	if strings.Contains(string(saveData), `"last_pk"`) {
+		t.Fatalf("generalized save must not use last_pk: %s", saveData)
+	}
+
+	uidesc := KeyDescriptor{Strategy: KeyStrategyUniqueIndex, Columns: []KeyColumn{{Name: "code"}}, Fingerprint: "abc"}
+	if err := validateCheckpointDescriptor(&slowCheckpoint{PKColumns: []string{"id"}, LastPK: []any{json.Number("1")}}, uidesc); err == nil ||
+		!strings.Contains(err.Error(), "legacy checkpoint incompatible") {
+		t.Fatalf("legacy vs non-PK descriptor: err=%v", err)
+	}
+
+	legacy, err := loadSlowCheckpointFromData([]byte(`{"table":"users","pk_columns":["id"],"last_pk":[99]}`))
+	if err != nil || !slices.Equal(legacy.PKColumns, []string{"id"}) || len(legacy.LastPK) != 1 {
+		t.Fatalf("legacy load: cp=%+v err=%v", legacy, err)
+	}
+
+	tmpPath := filepath.Join(dir, "users.ndjson.tmp")
+	if err := os.WriteFile(tmpPath, []byte(`{"id":7,"name":"seven"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSlowCheckpointTemp(tmpPath, &slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, LastKey: []any{json.Number("7")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	resumeDir := t.TempDir()
+	resumeTmp := filepath.Join(resumeDir, "users.ndjson.tmp")
+	if err := os.WriteFile(resumeTmp, []byte(`{"id":10,"name":"ten"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resumeCkpt, _ := json.Marshal(gen([]any{json.Number("10")}))
+	if err := os.WriteFile(checkpointPath(resumeDir, "users"), resumeCkpt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery("SELECT .* FROM .* WHERE .* > .* ORDER BY .* LIMIT 1000").WithArgs(int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow(11, "eleven"))
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, resumeDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(resumeDir, "users.ndjson"))
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(got) != 2 || got[1] != `{"id":11,"name":"eleven"}` {
+		t.Fatalf("resume output = %s", data)
+	}
+
+	mismatchDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mismatchDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject := func(dir string, cp slowCheckpoint, want string) {
+		t.Helper()
+		b, _ := json.Marshal(cp)
+		if err := os.WriteFile(checkpointPath(dir, "users"), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("stream %q: err=%v", want, err)
+		}
+	}
+	streamReject(mismatchDir, slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: "mismatch", LastKey: []any{json.Number("1")}}, "fingerprint mismatch")
+	arityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(arityDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject(arityDir, slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1"), json.Number("2")}}, "key arity mismatch")
+	colDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(colDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject(colDir, slowCheckpoint{Table: "users", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"other"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "key columns mismatch")
+	mixDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mixDir, "users.ndjson.tmp"), []byte(`{"id":1,"name":"v1"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	streamReject(mixDir, slowCheckpoint{Table: "users", PKColumn: "id", Strategy: KeyStrategyPrimaryKey, KeyColumns: []string{"id"}, KeyFingerprint: desc.Fingerprint, LastKey: []any{json.Number("1")}}, "mixes legacy single-pk")
+}
+
+func (cp slowCheckpoint) withLegacy() slowCheckpoint {
+	cp.PKColumns = []string{"id"}
+	cp.LastPK = []any{json.Number("1")}
+	return cp
+}
+
+func loadSlowCheckpointFromData(data []byte) (*slowCheckpoint, error) {
+	dir, err := os.MkdirTemp("", "ckpt-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "test.ckpt.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return nil, err
+	}
+	return loadSlowCheckpoint(path)
 }

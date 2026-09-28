@@ -11,6 +11,7 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/runopts"
 	"github.com/VicenteOlmos/dolly/internal/schemacapture"
 )
 
@@ -53,23 +54,34 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 	if len(effectiveSchemas) == 0 {
 		effectiveSchemas = []string{"public"}
 	}
-	var opts []dump.Option
-	if draft.NoTransaction {
-		opts = append(opts, dump.WithoutTransaction())
+
+	cfg, err := config.LoadConfig(config.ResolveConfigPath())
+	if err != nil {
+		return err
 	}
+
+	overrides := runopts.DumpOverrides{NoTransaction: draft.NoTransaction}
+	opts, err := runopts.BuildDumpOptions(overrides, cfg)
+	if err != nil {
+		return err
+	}
+	if err := dump.ValidateWorkerPoolHeadroom(dump.InspectWorkers(opts...), workerPoolHeadroom(cfg)); err != nil {
+		return err
+	}
+
 	opts = append(opts, dump.WithSchemas(effectiveSchemas))
 	if onProgress != nil {
 		opts = append(opts, dump.WithProgress(onProgress))
 	}
-	if cfg, err := config.LoadConfig(config.ResolveConfigPath()); err == nil {
-		opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
-	}
+	opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
+	sanitized := cfg.Sanitization.Enabled
 	if seq, ok := parseDumpSeq(outputDir); ok {
 		opts = append(opts, dump.WithProvenance(dump.Provenance{
 			Seq:            seq,
 			BaseDir:        draft.OutputDir,
 			SourceDatabase: sourceDB,
 			Schemas:        append([]string(nil), effectiveSchemas...),
+			Sanitized:      &sanitized,
 		}))
 	}
 	if err := dump.Dump(ctx, db, outputDir, opts...); err != nil {
@@ -81,6 +93,14 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 		}
 	}
 	return nil
+}
+
+func workerPoolHeadroom(cfg *config.Config) int {
+	maxConns := cfg.DB.MaxOpenConns
+	if maxConns <= 0 {
+		maxConns = 5
+	}
+	return maxConns
 }
 
 func parseDumpSeq(outputDir string) (int, bool) {

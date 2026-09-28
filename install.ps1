@@ -36,6 +36,84 @@ function Add-DirToPathValue {
     return $Dir
 }
 
+
+function Test-ArchivePathRaw {
+    param([string]$Name)
+    if ([string]::IsNullOrEmpty($Name) -or $Name -eq ".") {
+        die "archive contains unexpected entry $Name"
+    }
+    if ($Name.StartsWith("/") -or $Name.StartsWith("\")) {
+        die "archive absolute path rejected: $Name"
+    }
+    if ($Name.Length -ge 2 -and $Name[1] -eq ':') {
+        die "archive absolute path rejected: $Name"
+    }
+    $slash = $Name -replace '\\', '/'
+    if ($slash -match '(^|/)\.\.(/|$)') {
+        die "archive path traversal rejected: $Name"
+    }
+}
+
+function Get-CleanArchiveName {
+    param([string]$Name)
+    $clean = $Name.TrimStart('.', '\', '/')
+    return ($clean -replace '\\', '/').TrimEnd('/')
+}
+
+function Test-ZipMemberName {
+    param([string]$RawName, [string]$WantName)
+    Test-ArchivePathRaw $RawName
+    $clean = Get-CleanArchiveName $RawName
+    if ([string]::IsNullOrEmpty($clean) -or $clean -eq ".") {
+        die "archive contains unexpected entry $RawName"
+    }
+    if ($clean -match '(^|/)\.\.(/|$)') {
+        die "archive path traversal rejected: $RawName"
+    }
+    if ($clean.Contains("/")) {
+        die "archive contains nested path $RawName"
+    }
+    if ($clean -cne $WantName) {
+        die "unexpected archive member $RawName"
+    }
+}
+
+function Extract-ValidatedZip {
+    param([string]$ArchivePath, [string]$ExtractDir, [string]$WantName)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $validEntries = @()
+        foreach ($entry in $zip.Entries) {
+            $entryName = $entry.FullName
+            if ($entryName.EndsWith("/")) {
+                die "archive selected entry $entryName is not a regular file"
+            }
+            Test-ZipMemberName $entryName $WantName
+            $attrs = $entry.ExternalAttributes
+            $unixMode = ($attrs -shr 16) -band 0xF000
+            $dosAttr = $attrs -band 0xFF
+            if ($unixMode -ne 0) {
+                if ($unixMode -ne 0x8000) {
+                    die "archive selected entry $entryName is not a regular file"
+                }
+            } elseif (($dosAttr -band 0x10) -ne 0) {
+                die "archive selected entry $entryName is not a regular file"
+            }
+            $validEntries += $entry
+        }
+        if ($validEntries.Count -ne 1) {
+            die "archive did not contain exactly one $WantName binary"
+        }
+        New-Item -ItemType Directory -Force $ExtractDir | Out-Null
+        $dest = Join-Path $ExtractDir $WantName
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($validEntries[0], $dest, $true)
+        return $dest
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 if ($DOLLY_REPO -notmatch '^.+/[^/]+$') {
     die "DOLLY_REPO must use GitHub owner/repo format, got: $DOLLY_REPO"
 }
@@ -143,11 +221,8 @@ if ($checksums_downloaded) {
 # --- install ---
 
 $extract_dir = Join-Path $tmpdir "extract"
-Expand-Archive $archive $extract_dir
-
-$binary = Get-ChildItem -Path $extract_dir -Recurse -File -Filter "dolly.exe" | Select-Object -First 1
-if (-not $binary) { die "archive did not contain a dolly.exe binary" }
-$binary_path = $binary.FullName
+$binary_path = Extract-ValidatedZip $archive $extract_dir "dolly.exe"
+if (-not (Test-Path $binary_path)) { die "archive did not contain a dolly.exe binary" }
 
 if (-not (Test-Path $DOLLY_INSTALL_DIR)) {
     New-Item -ItemType Directory -Force $DOLLY_INSTALL_DIR | Out-Null

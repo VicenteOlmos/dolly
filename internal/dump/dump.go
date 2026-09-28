@@ -12,6 +12,14 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
+// PreparedDumpPlan is the canonical per-table strategy plan passed to validators.
+type PreparedDumpPlan struct {
+	Strategies []TableStrategyRecord
+}
+
+// PlanValidator validates a prepared dump plan before metadata or table output.
+type PlanValidator func(PreparedDumpPlan) error
+
 // ProgressEvent reports table-granularity progress during Dump.
 type ProgressEvent struct {
 	Phase   string
@@ -38,6 +46,7 @@ type config struct {
 	chunkPolicy        *ChunkPolicy
 	chunkIgnored       []IgnoredFileLine
 	workers            int
+	planValidator      PlanValidator
 }
 
 type slowRetryConfig struct {
@@ -110,7 +119,8 @@ func WithoutTransaction() Option {
 
 // WithSlowConnection enables chunked keyset-paginated streaming for
 // slow or unstable connections. Forces WithoutTransaction internally.
-// Tables must have at least one primary-key column.
+// Each table uses its primary key, an eligible unique index, or normal
+// streaming with a non-resumable warning when no safe key exists.
 func WithSlowConnection() Option {
 	return func(c *config) {
 		c.withoutTransaction = true // ponytail: force no-tx; slow mode and global snapshot are incompatible
@@ -240,6 +250,16 @@ func WithWorkers(n int) Option {
 	}
 }
 
+// WithPlanValidator registers a callback invoked with the canonical strategy plan
+// after table selection and dispatch planning and before metadata or table output.
+// Serial dumps run validation inside the read-only transaction; no-transaction
+// resilient modes validate immediately after planning. A nil validator is a no-op.
+func WithPlanValidator(v PlanValidator) Option {
+	return func(c *config) {
+		c.planValidator = v
+	}
+}
+
 // InspectChunkPolicy returns the chunk policy captured from opts, or nil.
 func InspectChunkPolicy(opts ...Option) *ChunkPolicy {
 	var c config
@@ -267,12 +287,38 @@ func InspectTableSelection(opts ...Option) *SelectionPolicy {
 	return c.selection
 }
 
+// InspectPlanValidator returns the plan validator captured from opts, or nil.
+func InspectPlanValidator(opts ...Option) PlanValidator {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.planValidator
+}
+
+func InspectProvenance(opts ...Option) *Provenance {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	if c.provenance == nil {
+		return nil
+	}
+	cp := *c.provenance
+	cp.Schemas = append([]string(nil), c.provenance.Schemas...)
+	return &cp
+}
+
 // WithoutSequences skips sequence state capture during Dump.
 // Use in tests where pg_sequences cannot be queried (mock databases).
 func WithoutSequences() Option {
 	return func(c *config) {
 		c.skipSequences = true
 	}
+}
+
+func dumpSnapshotConsistent(cfg *config) bool {
+	return !cfg.slowConnection && !hasChunkPolicy(cfg)
 }
 
 func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
@@ -288,6 +334,7 @@ func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 		}
 	}
 	p.TotalRowEstimate = total
+	p.SnapshotConsistent = dumpSnapshotConsistent(cfg)
 	return &p
 }
 
@@ -366,7 +413,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		}
 	}
 
-	chunkSet, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)
+	chunkPlans, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)
 	if err != nil {
 		return err
 	}
@@ -383,28 +430,26 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	}
 
 	sorted := SortTables(tables)
-	if cfg.slowConnection || len(chunkSet) > 0 {
+	dispatchPlans := buildDispatchPlans(&cfg, sorted, chunkPlans)
+	records := BuildStrategyRecords(sorted, dispatchPlans)
+	if cfg.planValidator != nil {
+		if err := cfg.planValidator(PreparedDumpPlan{Strategies: copyStrategyRecords(records)}); err != nil {
+			return err
+		}
+	}
+	if cfg.provenance != nil && len(records) > 0 {
+		cfg.provenance.Strategies = copyStrategyRecords(records)
+	}
+	if hasResumableDispatch(dispatchPlans) {
 		if err := rejectAmbiguousLegacySlowArtifacts(outputDir, sorted); err != nil {
 			return err
 		}
 	}
-	if cfg.slowConnection {
-		for _, table := range sorted {
-			if _, err := primaryKeysColumns(table); err != nil {
-				return fmt.Errorf("slow-connection mode: %w", err)
-			}
-		}
-	}
 	assignDataFiles(sorted)
-
-	seqSchemas := cfg.schemas
-	if cfg.selection != nil && (len(cfg.selection.Includes) > 0 || len(cfg.selection.Excludes) > 0) {
-		seqSchemas = schemasFromTables(tables)
-	}
 
 	var sequences []SequenceState
 	if !cfg.skipSequences {
-		seqs, err := captureSequences(ctx, q, seqSchemas)
+		seqs, err := captureSequences(ctx, q, sorted)
 		if err != nil {
 			return fmt.Errorf("capture sequences: %w", err)
 		}
@@ -419,6 +464,10 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
+	if !dumpSnapshotConsistent(&cfg) {
+		fmt.Fprintf(os.Stderr, "warning: dump is not snapshot-consistent; chunk/slow mode reads tables outside a shared snapshot\n")
+	}
+
 	for i, table := range sorted {
 		emitProgress(&cfg, ProgressEvent{
 			Phase:   "table_start",
@@ -427,15 +476,22 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Total:   len(sorted),
 			Elapsed: time.Since(startedAt),
 		})
+		var n int64
 		var streamErr error
-		if usesResilientStreaming(&cfg, chunkSet, table) {
-			streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
+		plan, hasPlan := dispatchPlans[tableKey(table.Schema, table.Name)]
+		if hasPlan && plan.Resumable {
+			n, streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
 		} else {
-			streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
+			if hasPlan && plan.Strategy == KeyStrategyNormalStream {
+				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; using non-resumable normal streaming\n",
+					qualifiedName(table.Schema, table.Name))
+			}
+			n, streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
 		}
 		if streamErr != nil {
 			return streamErr
 		}
+		sorted[i].RowCount = rowCountPtr(n)
 		emitProgress(&cfg, ProgressEvent{
 			Phase:   "table_end",
 			Table:   table.Name,
@@ -443,6 +499,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Total:   len(sorted),
 			Elapsed: time.Since(startedAt),
 		})
+	}
+
+	metaPath, err = writeMetadata(outputDir, sorted, nil, cfg.schemas, sequences, provenanceForWrite(&cfg, sorted))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
 	}
 
 	if err := os.Rename(metaPath, filepath.Join(outputDir, "metadata.json")); err != nil {
@@ -462,6 +523,44 @@ func hasChunkPolicy(cfg *config) bool {
 	return cfg.chunkPolicy != nil && len(cfg.chunkPolicy.Requests) > 0
 }
 
+// buildDispatchPlans returns per-table streaming plans for serial dump dispatch.
+// Slow-connection mode plans every selected table; chunk-only mode plans requested tables.
+func buildDispatchPlans(cfg *config, tables []db.Table, chunkPlans map[string]KeyDescriptor) map[string]KeyDescriptor {
+	if cfg.slowConnection {
+		plans := make(map[string]KeyDescriptor, len(tables))
+		for _, table := range tables {
+			key := tableKey(table.Schema, table.Name)
+			plans[key] = SelectKeyDescriptor(table)
+		}
+		return plans
+	}
+	if hasChunkPolicy(cfg) {
+		return chunkPlans
+	}
+	return nil
+}
+
+func hasResumableDispatch(plans map[string]KeyDescriptor) bool {
+	for _, plan := range plans {
+		if plan.Resumable {
+			return true
+		}
+	}
+	return false
+}
+
+// executableChunkSet limits current keyset execution to the PK strategy that
+// streamTableSlow supports. Later wiring can promote unique-key plans safely.
+func executableChunkSet(plans map[string]KeyDescriptor) map[string]struct{} {
+	chunkSet := make(map[string]struct{}, len(plans))
+	for key, plan := range plans {
+		if plan.Strategy == KeyStrategyPrimaryKey {
+			chunkSet[key] = struct{}{}
+		}
+	}
+	return chunkSet
+}
+
 func usesResilientStreaming(cfg *config, chunkSet map[string]struct{}, table db.Table) bool {
 	if cfg.slowConnection {
 		return true
@@ -470,10 +569,35 @@ func usesResilientStreaming(cfg *config, chunkSet map[string]struct{}, table db.
 	return ok
 }
 
+func copyStrategyRecords(records []TableStrategyRecord) []TableStrategyRecord {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]TableStrategyRecord, len(records))
+	for i, rec := range records {
+		out[i] = TableStrategyRecord{
+			Table:       rec.Table,
+			Strategy:    rec.Strategy,
+			Resumable:   rec.Resumable,
+			Fingerprint: rec.Fingerprint,
+		}
+		if len(rec.KeyColumns) > 0 {
+			out[i].KeyColumns = append([]string(nil), rec.KeyColumns...)
+		}
+	}
+	return out
+}
+
 func validateDumpOptions(cfg *config) error {
 	workers := effectiveWorkers(cfg.workers)
 	if workers > maxParallelWorkers {
 		return fmt.Errorf("parallel dump workers must be between 1 and %d", maxParallelWorkers)
+	}
+	if workers > 1 && cfg.planValidator != nil {
+		return fmt.Errorf("parallel dump workers are incompatible with dump plan validation")
+	}
+	if cfg.subset != nil && cfg.planValidator != nil {
+		return fmt.Errorf("subset dump is incompatible with dump plan validation")
 	}
 	if workers > 1 && (cfg.slowConnection || hasChunkPolicy(cfg)) {
 		return fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")
@@ -487,24 +611,31 @@ func validateDumpOptions(cfg *config) error {
 	return nil
 }
 
-// captureSequences reads sequence last values for user schemas.
-func captureSequences(ctx context.Context, q querier, schemas []string) ([]SequenceState, error) {
-	query := `
-		SELECT schemaname, sequencename, last_value, start_value
-		FROM pg_sequences
-		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-		  AND schemaname NOT LIKE 'pg_temp_%'
-		  AND schemaname NOT LIKE 'pg_toast_%'`
-	var args []any
-	if len(schemas) > 0 {
-		placeholders := make([]string, len(schemas))
-		for i, s := range schemas {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-			args = append(args, s)
-		}
-		query += " AND schemaname IN (" + strings.Join(placeholders, ",") + ")"
+// captureSequences reads sequence last values for sequences owned by columns
+// on the given tables (pg_depend deptype a/i). Standalone sequences are omitted.
+func captureSequences(ctx context.Context, q querier, tables []db.Table) ([]SequenceState, error) {
+	if len(tables) == 0 {
+		return nil, nil
 	}
-	query += " ORDER BY schemaname, sequencename"
+	tablePredicates := make([]string, 0, len(tables))
+	args := make([]any, 0, len(tables)*2)
+	for i, tbl := range tables {
+		base := i*2 + 1
+		tablePredicates = append(tablePredicates, fmt.Sprintf("($%d,$%d)", base, base+1))
+		args = append(args, tbl.Schema, tbl.Name)
+	}
+	query := fmt.Sprintf(`
+		SELECT seq_ns.nspname, seq.relname, ps.last_value, ps.start_value
+		FROM pg_class seq
+		JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
+		JOIN pg_sequences ps ON ps.schemaname = seq_ns.nspname AND ps.sequencename = seq.relname
+		JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
+		JOIN pg_class tbl ON tbl.oid = dep.refobjid
+		JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
+		JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = dep.refobjsubid AND NOT a.attisdropped
+		WHERE seq.relkind = 'S'
+		  AND (tbl_ns.nspname, tbl.relname) IN (%s)
+		ORDER BY seq_ns.nspname, seq.relname`, strings.Join(tablePredicates, ", "))
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -607,9 +738,11 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 		if pkErr == nil {
 			orderCol = pkCol
 		}
-		if err := streamTableFiltered(ctx, q, table, outputDir, clauses, cfg.rowTransform, orderCol); err != nil {
+		n, err := streamTableFiltered(ctx, q, table, outputDir, clauses, cfg.rowTransform, orderCol)
+		if err != nil {
 			return err
 		}
+		included[i].RowCount = rowCountPtr(n)
 		emitProgress(cfg, ProgressEvent{
 			Phase:   "table_end",
 			Table:   table.Name,
@@ -617,6 +750,11 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 			Total:   len(included),
 			Elapsed: time.Since(startedAt),
 		})
+	}
+
+	metaPath, err = writeMetadata(outputDir, included, manifest, cfg.schemas, nil, provenanceForWrite(cfg, included))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
 	}
 
 	if err := os.Rename(metaPath, filepath.Join(outputDir, "metadata.json")); err != nil {
