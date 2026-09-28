@@ -840,6 +840,10 @@ func TestAppDumpRestoreFromHistoryTrustedSchema(t *testing.T) {
 
 	app = drainUpdate(app, keyPress("", tea.KeySpace, 0))
 	app = drainUpdate(app, keyPress("", tea.KeyEnter, 0))
+	if !app.modalOpen() {
+		t.Fatal("expected confirm modal for trusted schema.sql restore")
+	}
+	app = drainUpdate(app, keyPress("y", 'y', 0))
 	if !runner.trusted {
 		t.Fatal("selected history restore did not enable trusted schema replay")
 	}
@@ -897,8 +901,8 @@ func TestAppDumpRestoreSkipPolicyImmediate(t *testing.T) {
 	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, restoreRunner, nil, nil, nil, false)
 	app.db = conn
 	app.cfg = config.DefaultConfig()
-	app.cfg.Clone.Replace = false
-	app.cfg.Clone.RestoreOnConflict = "skip"
+	app.cfg.Restore.Replace = false
+	app.cfg.Restore.RestoreOnConflict = "skip"
 	app.screen = ScreenDump
 	app.dump.OutputDir = t.TempDir()
 	app.width = 80
@@ -949,7 +953,7 @@ func TestAppDumpRestoreDestructiveRequiresConfirm(t *testing.T) {
 	app.conn.User = "u"
 	app.conn.Password = "p"
 	app.cfg = config.DefaultConfig()
-	app.cfg.Clone.Replace = true
+	app.cfg.Restore.Replace = true
 	app.screen = ScreenDump
 	app.dump.OutputDir = t.TempDir()
 	app.width = 80
@@ -1012,7 +1016,7 @@ func TestAppDumpRestoreDestructiveCancel(t *testing.T) {
 	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, restoreRunner, nil, nil, nil, false)
 	app.db = conn
 	app.cfg = config.DefaultConfig()
-	app.cfg.Clone.Replace = true
+	app.cfg.Restore.Replace = true
 	app.screen = ScreenDump
 	app.dump.OutputDir = t.TempDir()
 	app.width = 80
@@ -1066,8 +1070,8 @@ func TestAppDumpRestoreUpsertRequiresConfirm(t *testing.T) {
 	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, restoreRunner, nil, nil, nil, false)
 	app.db = conn
 	app.cfg = config.DefaultConfig()
-	app.cfg.Clone.Replace = false
-	app.cfg.Clone.RestoreOnConflict = "upsert"
+	app.cfg.Restore.Replace = false
+	app.cfg.Restore.RestoreOnConflict = "upsert"
 	app.screen = ScreenDump
 	app.dump.OutputDir = t.TempDir()
 	app.width = 80

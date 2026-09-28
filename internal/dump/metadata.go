@@ -74,8 +74,9 @@ type Provenance struct {
 	TableCount       int                       `json:"table_count"`
 	TotalRowEstimate int64                     `json:"total_row_estimate,omitempty"`
 	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
-	ChunkTables      *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
-	Strategies       []TableStrategyRecord     `json:"strategies,omitempty"`
+	ChunkTables        *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
+	Strategies         []TableStrategyRecord     `json:"strategies,omitempty"`
+	SnapshotConsistent bool                      `json:"snapshot_consistent"`
 }
 
 // BuildStrategyRecords returns deterministic strategy provenance for explicitly
