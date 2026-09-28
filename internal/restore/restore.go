@@ -317,7 +317,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	if err := RestoreSequencesFromMetadata(ctx, seqQ, meta, schemaFilter); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
-	if err := SyncSequencesToData(ctx, seqQ, schemaFilter); err != nil {
+	if err := SyncSequencesToData(ctx, seqQ, meta.Tables); err != nil {
 		return fmt.Errorf("sync sequences to data: %w", err)
 	}
 
