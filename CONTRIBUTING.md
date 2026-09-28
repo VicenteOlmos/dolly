@@ -25,7 +25,7 @@ go build -buildvcs=false -o ./bin/dolly ./cmd/dolly
 
 ## Testing
 
-- **Unit tests**: `make test` (runs `go test -race -count=1 ./...`) — no Docker required. Optionally use `go test -short ./...` for a faster local pass when you do not need race detection.
+- **Unit tests**: `go test -short ./...` — no Docker required.
 - **Integration tests**: `make test-integration` — needs Docker and `DOLLY_TEST_PG_DSN`.
 - **TUI PTY smoke**: `make test-tui-pty-smoke` — opt-in Unix-only smoke that launches the real TUI in a terminal and quits it.
 - **Restore coverage**: `make test-cover-restore`.
