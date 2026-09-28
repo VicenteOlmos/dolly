@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -73,8 +74,9 @@ type Provenance struct {
 	TableCount       int                       `json:"table_count"`
 	TotalRowEstimate int64                     `json:"total_row_estimate,omitempty"`
 	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
-	ChunkTables      *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
-	Strategies       []TableStrategyRecord     `json:"strategies,omitempty"`
+	ChunkTables        *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
+	Strategies         []TableStrategyRecord     `json:"strategies,omitempty"`
+	SnapshotConsistent bool                      `json:"snapshot_consistent"`
 }
 
 // BuildStrategyRecords returns deterministic strategy provenance for explicitly
@@ -105,6 +107,39 @@ func tableStrategyRecord(plan KeyDescriptor) TableStrategyRecord {
 		rec.Fingerprint = plan.Fingerprint
 	}
 	return rec
+}
+
+func rowCountPtr(n int64) *int64 {
+	return &n
+}
+
+// countNDJSONRows counts exported rows by newline. Dump writers emit one JSON
+// object plus '\n' per row, including after the last row.
+func countNDJSONRows(path string) (int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	var n int64
+	buf := make([]byte, 32*1024)
+	for {
+		nr, err := f.Read(buf)
+		for _, b := range buf[:nr] {
+			if b == '\n' {
+				n++
+			}
+		}
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if nr == 0 {
+			return n, nil
+		}
+	}
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {

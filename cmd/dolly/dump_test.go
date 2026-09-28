@@ -730,13 +730,12 @@ func TestRunDumpRegisterFailureWarnsAndSucceeds(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A directory at the atomic temp path makes persist fail on every OS.
+	// Directory mode bits do not block creates on Windows, so chmod is not enough.
 	dollyDir := filepath.Join(workDir, ".dolly")
-	if err := os.Chmod(dollyDir, 0o555); err != nil {
+	if err := os.Mkdir(filepath.Join(dollyDir, "dump-history.json.tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = os.Chmod(dollyDir, 0o755)
-	})
 
 	args := []string{"--dsn", "postgres://h/db", "--output", outDir}
 	stderr := captureStderr(func() {

@@ -109,8 +109,8 @@ func TestNewAppFromConfigSectionEntryOverview(t *testing.T) {
 
 func TestConfigScreenHas28KnobsWithTUISection(t *testing.T) {
 	fields := buildConfigFields()
-	if len(fields) != 28 {
-		t.Fatalf("buildConfigFields() returned %d fields, want 28", len(fields))
+	if len(fields) != 30 {
+		t.Fatalf("buildConfigFields() returned %d fields, want 30", len(fields))
 	}
 
 	found := false

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 func writeFixtureDump(t *testing.T, dir string) {
@@ -145,7 +147,7 @@ func TestRestoreFullFlow(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "users").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
 			AddRow("public", "users", "id"))
 	mock.ExpectExec(`SELECT CASE WHEN m\.max_value IS NULL THEN NULL ELSE setval\(pg_get_serial_sequence\('"public"\."users"', 'id'\), m\.max_value, true\) END`).
@@ -240,6 +242,39 @@ func TestRestoreMissingSchemaDefaultRejectsBeforeSchemaApply(t *testing.T) {
 	}
 }
 
+func TestRestoreTrustedSchemaApplyFailureIsPrimary(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	origApply := restoreApplySchemaSQL
+	defer func() { restoreApplySchemaSQL = origApply }()
+	restoreApplySchemaSQL = func(context.Context, string, string) error {
+		return errors.New(`psql schema.sql: exit status 3 (stderr: ERROR:  schema "public" already exists)`)
+	}
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
+	err = Restore(context.Background(), sqlDB, dir, WithTrustedSchemaSQL(), WithoutTransaction())
+	if err == nil {
+		t.Fatal("expected schema apply error")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "apply schema.sql:") {
+		t.Fatalf("error = %q, want apply schema.sql as primary failure", msg)
+	}
+	if !strings.Contains(msg, `schema "public" already exists`) {
+		t.Fatalf("error = %q, want underlying apply cause", msg)
+	}
+	if strings.Contains(msg, "not found in target schema") {
+		t.Fatalf("error = %q, should not wrap missing-table validation", msg)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestoreMissingSchemaWithoutTransactionAppliesSchema(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureDump(t, dir)
@@ -312,7 +347,7 @@ func TestRestoreWithSchemasUsesINFilter(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "app"."orders"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("app").
+		WithArgs("app", "orders").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -389,7 +424,7 @@ func TestRestoreWithProgressCallbacks(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "alpha", "public", "beta").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -412,9 +447,7 @@ func TestRestoreWithProgressCallbacks(t *testing.T) {
 		if ev.Total != 2 {
 			t.Fatalf("event[%d] Total = %d, want 2", i, ev.Total)
 		}
-		if ev.Elapsed <= 0 {
-			t.Fatalf("event[%d] Elapsed = %v, want > 0", i, ev.Elapsed)
-		}
+		testutil.AssertElapsedPositive(t, ev.Elapsed, fmt.Sprintf("event[%d]", i))
 	}
 
 	// Verify monotonic Current: 1,1,2,2
@@ -458,7 +491,7 @@ func TestRestoreSilentByDefault(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "users").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -498,7 +531,7 @@ func TestRestoreWithoutProgressSilent(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "users").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -742,7 +775,7 @@ func TestRestoreSortsByForeignKey(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO "public"."items"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "categories", "public", "items").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -798,7 +831,7 @@ func TestRestoreReplaceTruncatesChildrenBeforeParents(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`TRUNCATE TABLE "public"\."categories", "public"\."items"`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "categories", "public", "items").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -869,7 +902,7 @@ func TestRestoreInvokesSequenceRestore(t *testing.T) {
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 99, true\)`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "users").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
@@ -972,7 +1005,7 @@ func TestRestoreSyncSequenceFailureRollsBackMainTransaction(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"\."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
-		WithArgs("public").
+		WithArgs("public", "users").
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
 			AddRow("public", "users", "id"))
 	mock.ExpectExec(`SELECT CASE WHEN m\.max_value IS NULL THEN NULL ELSE setval\(pg_get_serial_sequence`).WillReturnError(errors.New("setval denied"))
