@@ -99,13 +99,7 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 	if srcPw != "" && tgtPw != "" && srcPw != tgtPw {
 		return fmt.Errorf("source and target DSNs have different passwords: schema-replay pipe shares a single PGPASSWORD environment; use matching credentials or connect via ~/.pgpass")
 	}
-	srcArgs := []string{"--schema-only", "--no-owner", "--no-acl"}
-	if schemas := SchemasFromOptions(opts); len(schemas) > 0 {
-		for _, s := range schemas {
-			srcArgs = append(srcArgs, "--schema="+s)
-		}
-	}
-	srcArgs = append(srcArgs, srcCleanDSN)
+	srcArgs := schemaOnlyDumpArgs(srcCleanDSN, SchemasFromOptions(opts), opts.IncludePrivileges)
 	tgtArgs := []string{"-v", "ON_ERROR_STOP=1", tgtCleanDSN}
 	env := map[string]string{}
 	if srcPw != "" {
@@ -183,8 +177,10 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		Total:   totalSteps,
 		Elapsed: time.Since(startedAt),
 	})
-	if err := restoreFunc(ctx, tgtDB, dumpDir, opts.RestoreOpts...); err != nil {
-		return fmt.Errorf("restore: %w", err)
+	if err := applyTargetFidelity(ctx, srcDB, tgtDB, func() error {
+		return restoreFunc(ctx, tgtDB, dumpDir, opts.RestoreOpts...)
+	}); err != nil {
+		return err
 	}
 
 	return nil

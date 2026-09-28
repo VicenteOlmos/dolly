@@ -21,6 +21,15 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
+func init() {
+	applyTargetFidelity = func(_ context.Context, _, _ *sql.DB, restore func() error) error {
+		if err := restore(); err != nil {
+			return fmt.Errorf("restore: %w", err)
+		}
+		return nil
+	}
+}
+
 // mockCommandRunner records calls for verification.
 type mockCommandRunner struct {
 	runCalls    []runCall

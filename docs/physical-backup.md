@@ -95,8 +95,8 @@ Caveats: does not replicate DDL, sequences, or large objects by default. Require
 ## When to use other dolly built-in strategies
 
 - `template`: same-instance clones with no external tools.
-- `schema-replay`: dump/restore across instances when downtime is acceptable.
-- `logical-stream` (aliases: `copy-stream`, `streaming-copy`): streaming COPY for cases where `pg_dump` overhead is undesirable. Recommended for large single-database cross-server clones.
+- `schema-replay`: dump/restore across instances when downtime is acceptable. Disables user triggers while rows load, refreshes materialized views afterward, and omits owners and ACLs unless `--with-privileges` is set.
+- `logical-stream` (aliases: `copy-stream`, `streaming-copy`): streaming COPY for cases where `pg_dump` overhead is undesirable. Recommended for large single-database cross-server clones. Refuses when sanitization is enabled. `--with-privileges` keeps owners and ACLs when roles already exist.
 
 These built-ins are simpler but are not designed for multi-terabyte or 24/7 production loads.
 
@@ -105,6 +105,6 @@ These built-ins are simpler but are not designed for multi-terabyte or 24/7 prod
 | Strategy | Row sanitization | Why |
 |----------|-----------------|-----|
 | `schema-replay` | Yes — dump pipeline applies `SanitizeByPattern` to NDJSON rows | Dump engine has a logical row hook |
-| `logical-stream` | No (today) | pgx `COPY TO/FROM` bypasses the dump pipeline |
-| `template` | No | `CREATE DATABASE … TEMPLATE` is byte-level on source |
-| `physical-backup` | No — physically impossible | `pg_basebackup` copies the data directory; no logical row hook |
+| `logical-stream` | Refuses when enabled | pgx `COPY TO/FROM` has no row rewrite hook |
+| `template` | Refuses when enabled | `CREATE DATABASE … TEMPLATE` copies the source database as stored |
+| `physical-backup` | Refuses when enabled | `pg_basebackup` copies the data directory; no logical row hook |

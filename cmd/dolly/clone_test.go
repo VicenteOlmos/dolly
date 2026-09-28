@@ -1453,6 +1453,7 @@ func TestRunCloneExecuteStderrGuardrails(t *testing.T) {
 		targetURL  string
 		wantSubstr []string
 		wantAbsent []string
+		wantErr    string
 	}{
 		{
 			name: "unsanitized disabled sanitization",
@@ -1462,12 +1463,12 @@ func TestRunCloneExecuteStderrGuardrails(t *testing.T) {
 			wantSubstr: []string{"warning: clone will copy unsanitized"},
 		},
 		{
-			name: "unsanitized template strategy",
+			name: "sanitized template strategy rejected",
 			cfg: func(c *config.Config) {
 				c.Sanitization.Enabled = true
 			},
-			strategy:   "template",
-			wantSubstr: []string{"warning: clone will copy unsanitized"},
+			strategy: "template",
+			wantErr:  "sanitization cannot rewrite template clones",
 		},
 		{
 			name: "skip_create warning",
@@ -1504,11 +1505,19 @@ func TestRunCloneExecuteStderrGuardrails(t *testing.T) {
 			if strategy == "" {
 				strategy = "schema-replay"
 			}
+			var runErr error
 			stderr := captureStderr(func() {
-				if err := runCloneExecute(context.Background(), tt.flags, cfg, "postgres://u:p@h/src", "clone_x", tt.targetURL, nil, strategy); err != nil {
-					t.Fatalf("runCloneExecute: %v", err)
-				}
+				runErr = runCloneExecute(context.Background(), tt.flags, cfg, "postgres://u:p@h/src", "clone_x", tt.targetURL, nil, strategy)
 			})
+			if tt.wantErr != "" {
+				if runErr == nil || !strings.Contains(runErr.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", runErr, tt.wantErr)
+				}
+				return
+			}
+			if runErr != nil {
+				t.Fatalf("runCloneExecute: %v", runErr)
+			}
 			for _, sub := range tt.wantSubstr {
 				if !strings.Contains(stderr, sub) {
 					t.Fatalf("stderr = %q, want containing %q", stderr, sub)

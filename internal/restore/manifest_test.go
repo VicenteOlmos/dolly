@@ -12,13 +12,56 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
+func TestPartialStateTargetFromConninfo(t *testing.T) {
+	got := PartialStateTargetFromConninfo("postgres://user:secret@db.example:5433/app")
+	want := PartialStateTarget{Host: "db.example", Port: "5433", Database: "app"}
+	if !got.same(want) {
+		t.Fatalf("url target = %+v", got)
+	}
+	got = PartialStateTargetFromConninfo("host=db.example port=5432 dbname=app password=secret")
+	want = PartialStateTarget{Host: "db.example", Port: "5432", Database: "app"}
+	if !got.same(want) {
+		t.Fatalf("keyword target = %+v", got)
+	}
+	if !PartialStateTargetFromConninfo("").empty() {
+		t.Fatal("empty conninfo should have an empty target")
+	}
+	quoted := PartialStateTargetFromConninfo(`host='/tmp/pg one' dbname=app`)
+	if quoted.Host != "/tmp/pg one" || quoted.Database != "app" {
+		t.Fatalf("quoted target = %+v", quoted)
+	}
+	if PartialStateTargetFromConninfo("service=missing_service_name").same(PartialStateTargetFromConninfo("service=another_missing_service")) {
+		t.Fatal("unresolved services must not reuse state")
+	}
+	if !PartialStateTargetFromConninfo("host=a,b dbname=app").empty() {
+		t.Fatal("failover host must not reuse state")
+	}
+}
+
+func TestPartialStateTargetFromService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pg_service.conf")
+	if err := os.WriteFile(path, []byte("[one]\nhost=first.example\ndbname=app\n[two]\nhost=second.example\ndbname=app\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PGSERVICEFILE", path)
+	one := PartialStateTargetFromConninfo("service=one")
+	two := PartialStateTargetFromConninfo("service=two")
+	if one.empty() || two.empty() || one.same(two) {
+		t.Fatalf("services collapsed: one=%+v two=%+v", one, two)
+	}
+}
+
 func TestMergePartialStateManifestForRetry(t *testing.T) {
 	existing := PartialStateManifest{
 		Committed: []string{"public.users"},
 		Failed:    []PartialStateFailure{{Table: "public.posts", Error: "copy failed"}},
 		Pending:   nil,
 	}
-	got := mergePartialStateManifestForRetry(existing, []string{"public.posts", "public.users", "public.comments"})
+	target := PartialStateTarget{Host: "localhost", Port: "5432", Database: "db"}
+	got := mergePartialStateManifestForRetry(existing, []string{"public.posts", "public.users", "public.comments"}, target)
+	if !got.Target.same(target) {
+		t.Fatalf("target = %+v", got.Target)
+	}
 	if !reflect.DeepEqual(got.Committed, []string{"public.users"}) {
 		t.Fatalf("committed = %v", got.Committed)
 	}

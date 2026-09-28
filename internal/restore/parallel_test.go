@@ -392,6 +392,7 @@ func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
 	}
 
 	seeded := PartialStateManifest{
+		Target:    PartialStateTargetFromConninfo("postgres://localhost/db"),
 		Committed: []string{"public.users"},
 		Pending:   []string{"public.posts"},
 	}
@@ -469,6 +470,53 @@ func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before.Committed, got.Committed) {
 		t.Fatalf("retry overwrote committed evidence: before=%v after=%v", before.Committed, got.Committed)
+	}
+}
+
+func TestRunParallelRestore_differentTargetReloadsCommittedTables(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "state.json")
+	users := db.Table{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	meta := dump.Metadata{Schema: "public", Tables: []db.Table{users}}
+	dataPaths := []string{filepath.Join(dir, "users.ndjson")}
+	levels := []RestoreLevel{{Tables: []string{"public.users"}}}
+	seeded := PartialStateManifest{
+		Target:    PartialStateTarget{Host: "other", Port: "5432", Database: "other"},
+		Committed: []string{"public.users"},
+		Pending:   nil,
+	}
+	if err := WritePartialStateManifest(manifest, seeded); err != nil {
+		t.Fatal(err)
+	}
+
+	var loaded []string
+	orig := parallelLoadTableCopy
+	origSeq := parallelRestoreSequences
+	origSync := parallelSyncSequences
+	parallelLoadTableCopy = func(_ context.Context, _ string, table db.Table, _ string) error {
+		loaded = append(loaded, qualifiedLabel(table.Schema, table.Name))
+		return nil
+	}
+	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string) error { return nil }
+	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error { return nil }
+	defer func() {
+		parallelLoadTableCopy = orig
+		parallelRestoreSequences = origSeq
+		parallelSyncSequences = origSync
+	}()
+
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	cfg := parallelTestCfg(manifest, 2)
+	if err := runParallelRestore(context.Background(), &cfg, sqlDB, meta, dataPaths, levels, nil, 2, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded, []string{"public.users"}) {
+		t.Fatalf("loaded = %v, want reload on a different target", loaded)
 	}
 }
 

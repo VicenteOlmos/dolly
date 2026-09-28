@@ -202,13 +202,7 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 	if srcPw != "" && tgtPw != "" && srcPw != tgtPw {
 		return fmt.Errorf("source and target DSNs have different passwords: copy-stream pipe shares a single PGPASSWORD environment; use matching credentials or connect via ~/.pgpass")
 	}
-	srcArgs := []string{"--schema-only", "--no-owner", "--no-acl"}
-	if len(schemaNames) > 0 {
-		for _, s := range schemaNames {
-			srcArgs = append(srcArgs, "--schema="+s)
-		}
-	}
-	srcArgs = append(srcArgs, srcCleanDSN)
+	srcArgs := schemaOnlyDumpArgs(srcCleanDSN, schemaNames, opts.IncludePrivileges)
 	tgtArgs := []string{"-v", "ON_ERROR_STOP=1", tgtCleanDSN}
 	env := map[string]string{}
 	if srcPw != "" {

@@ -134,13 +134,13 @@ Dolly does not inspect your database size or network conditions, and it does not
 |---|---|---|---|
 | <!-- situation:safe-default --> Unsure / want the safest path | `dolly dump --dsn "$DB" --output ./dolly_dump` → `dolly restore --dsn "$TARGET_DB" --input ./dolly_dump/1` | One worker by default; restore stays transactional and atomic | Slower than parallel modes on large databases |
 | <!-- situation:small-database --> Small database, straightforward copy | `dolly dump --dsn "$DB" --output ./dolly_dump` | Full dump with minimal flags | Gets slower as data grows |
-| <!-- situation:large-stable --> Very large named tables where resumability matters more than speed | `dolly dump ... --chunk-table public.large_table --workers 1` | PK or eligible unique-key plans use resumable keyset chunks | Tables without a safe key use a warned, non-resumable normal stream |
-| <!-- situation:large-unreliable --> Large data, slow or unreliable link | `dolly dump ... --slow-connection --workers 1` | Safe per-table keys get checkpoints; no-safe-key tables still complete | Fallback tables are not resumable; mode is non-transactional and incompatible with subset and parallel dump |
+| <!-- situation:large-stable --> Very large named tables where resumability matters more than speed | `dolly dump ... --chunk-table public.large_table --workers 1` | PK or eligible unique-key plans use resumable keyset chunks | Tables without a safe key resume with `ctid`; VACUUM or updates can skip or duplicate rows on retry |
+| <!-- situation:large-unreliable --> Large data, slow or unreliable link | `dolly dump ... --slow-connection --workers 1` | Safe per-table keys get checkpoints; tables without a safe key resume with `ctid` | `ctid` resume can skip or duplicate rows after VACUUM or updates; mode is non-transactional and incompatible with subset and parallel dump |
 | <!-- situation:maximum-dump-speed --> Large database, stable connection, maximum dump throughput | `dolly dump ... --workers "$WORKERS"` | Shared consistent snapshot across parallel table workers | Tune empirically within 1–16; needs `max_open_conns >= workers+1`; excludes slow/chunk/subset/`--no-transaction` |
 | <!-- situation:maximum-restore-speed --> Maximum restore throughput | **ADVANCED — NON-ATOMIC** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Parallel table restore after acknowledging partial-state risk | No atomic rollback; `on-conflict` must be `error`; cannot use `--replace`, `--trust-schema-sql`, skip, or upsert |
 | <!-- situation:representative-sample --> Dev/test sample, not a full copy | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Recent-root selection plus FK closure | Not statistically representative; closure may exceed the target percent |
-| <!-- situation:same-instance-clone --> Fastest clone on the same instance | `dolly clone --strategy template` | Template database copy on one PostgreSQL server | Source must have no active connections; unsanitized |
-| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Unsanitized; not a physical cluster copy |
+| <!-- situation:same-instance-clone --> Fastest clone on the same instance | `dolly clone --strategy template` | Template database copy on one PostgreSQL server | Source must have no active connections; refuses when sanitization is enabled |
+| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Refuses when sanitization is enabled; not a physical cluster copy |
 
 `$WORKERS`, `$PERCENT`, and `$ROW_CAP` are operator-chosen values—Dolly does not set them automatically.
 
@@ -153,7 +153,7 @@ See `dolly dump --help`, `dolly restore --help`, and `dolly clone --help` for fl
 | If you need… | Use | Do not use when |
 |---|---|---|
 | An exact table subset | `--include-table` / `--exclude-table` (or selector files) | You need FK-closure percent sampling (`--percent` / `--seed-file`) |
-| Resumable export of large named tables | `--chunk-table` with `workers=1` | The table lacks a safe PK/unique key and you require resume, or you need parallel dump workers |
+| Resumable export of large named tables | `--chunk-table` with `workers=1` | You need resume that stays correct across VACUUM or updates and the table has no safe key, or you need parallel dump workers |
 | A consistent parallel export | `--workers N` (shared snapshot) | `--no-transaction`, chunk/slow modes, or subset policies |
 | Faster acknowledged restore | `--workers N` with `--no-transaction --yes --ack-partial-state` | You need atomic rollback, `--replace`, skip/upsert, or `--trust-schema-sql` |
 | Atomic rollback on restore failure | Default serial restore (`workers=1`) | You need FK-level concurrency |
@@ -176,7 +176,7 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 
 Run `dolly <command> --help` for command-specific flags.
 
-**TUI and CLI restore differ:** the TUI restores from Dolly dump history. To restore an arbitrary directory, use `dolly restore --input <dir>`.
+**TUI and CLI restore:** the TUI history section restores the selected dump, or a directory you type there (`p` to edit the path). `dolly restore --input <dir>` remains the scripted path.
 
 When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility, including `CREATE SCHEMA IF NOT EXISTS` so `--trust-schema-sql` can replay into a fresh database that already has `public`. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
 
@@ -234,7 +234,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump \
 
 **Result/artifacts** numbered `{output}/{n}/` with per-table NDJSON, `metadata.json` chunk provenance, transient checkpoint files under the run directory during export, and final metadata published only after completion.
 
-**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key completes through a qualified, non-resumable normal-stream fallback and creates no checkpoint. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
+**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key resumes with `ctid` and warns that VACUUM or updates can skip or duplicate rows. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
 
 ### Shared-snapshot parallel dump
 
@@ -263,7 +263,7 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 \
 
 **Result/artifacts** tables restore by FK dependency level with bounded workers; sequences synchronize after all table data commits. On full success, `.dolly-restore-partial-state.json` is removed from the input directory.
 
-**Constraint/warning** non-atomic: each table commits independently; no global rollback. `--workers` (or `restore.workers`, default `1`, max `16`) requires `--no-transaction`, `--yes`, `--ack-partial-state`, conflict policy `error` (default), and a resolvable DSN. Rejects `--replace`, `--trust-schema-sql`, and skip/upsert. Manifest defaults to `{input_dir}/.dolly-restore-partial-state.json` (override with `--partial-state-file` or `restore.partial_state_file`); retained on failure for inspection. Acknowledgement is CLI-only and never stored in config. Not available from TUI history without these CLI flags.
+**Constraint/warning** non-atomic: each table commits independently; no global rollback. `--workers` (or `restore.workers`, default `1`, max `16`) requires `--no-transaction`, `--yes`, `--ack-partial-state`, conflict policy `error` (default), and a resolvable DSN. Rejects `--replace`, `--trust-schema-sql`, and skip/upsert. Manifest defaults to `{input_dir}/.dolly-restore-partial-state.json` (override with `--partial-state-file` or `restore.partial_state_file`); retained on failure for inspection. The manifest records host, port, and database. A later restore of the same dump to a different database loads every table again. Acknowledgement is CLI-only and never stored in config. TUI history restore asks for confirmation before a non-atomic parallel run when `restore.workers` is greater than 1, and can restore a typed dump directory as well as a history entry.
 
 ### Safe end-to-end combinations
 
@@ -311,15 +311,15 @@ Serial `--no-transaction` mode can leave partial progress if it fails mid-way. P
 ### Clone strategies
 
 <!-- readme:fidelity:schema-replay -->
-Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and excludes owners, **ACL**s, and **cluster-global** roles and tablespaces. **Materialized-view** contents are **not cloned** (definitions only). Cloned **triggers may fire** during restore.
+Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and refreshes materialized views after the data load. Materialized-view contents are **not cloned** as a separate copy; they are refreshed from the restored tables. User triggers are disabled while rows load; cloned **triggers may fire** after they are re-enabled. Owners and **ACL**s are omitted unless you pass `--with-privileges` (the target must already have those roles). **Cluster-global** roles and tablespaces are not created. `template`, `logical-stream`, and `physical-backup` refuse to run when sanitization is enabled.
 <!-- /readme:fidelity:schema-replay -->
 
 | Strategy | When | Sanitization |
 |---|---|---|
 | `schema-replay` | Default cross-server or development clone | Supported |
-| `template` | Same PostgreSQL instance; fastest | No |
-| `logical-stream` | Large cross-server logical copy | No |
-| `physical-backup` | Whole cluster directory copy | No |
+| `template` | Same PostgreSQL instance; fastest | Refuses when enabled |
+| `logical-stream` | Large cross-server logical copy | Refuses when enabled |
+| `physical-backup` | Whole cluster directory copy | Refuses when enabled |
 
 `physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory rather than one database. Read [physical backup](docs/physical-backup.md) before using it.
 
@@ -332,7 +332,7 @@ Treat Dolly like a database administration tool:
 - `restore --replace` truncates target tables before insert.
 - `restore --no-transaction --yes` can leave partial table state.
 - Sanitization is pattern-based and only applies to `dump` and `schema-replay`; it is not a compliance guarantee.
-- `template`, `logical-stream`, and `physical-backup` copy unsanitized row data.
+- `template`, `logical-stream`, and `physical-backup` refuse when sanitization is enabled. With sanitization off they copy unsanitized row data.
 
 Before using production or production-like data, use a least-privilege role, keep DSNs and dumps out of Git, confirm destructive targets are disposable, validate sanitization manually, and rehearse in staging. See [security](docs/security.md) and [physical backup](docs/physical-backup.md).
 

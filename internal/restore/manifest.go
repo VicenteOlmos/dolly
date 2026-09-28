@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/connections"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
@@ -28,9 +29,43 @@ type PartialStateFailure struct {
 	Error string `json:"error,omitempty"`
 }
 
+// PartialStateTarget identifies a restore destination without credentials.
+type PartialStateTarget struct {
+	Host     string `json:"host,omitempty"`
+	Port     string `json:"port,omitempty"`
+	Database string `json:"database,omitempty"`
+}
+
+func (t PartialStateTarget) empty() bool {
+	return t.Host == "" && t.Port == "" && t.Database == ""
+}
+
+func (t PartialStateTarget) same(other PartialStateTarget) bool {
+	return !t.empty() && !other.empty() && t.Host == other.Host && t.Port == other.Port && t.Database == other.Database
+}
+
+// PartialStateTargetFromConninfo resolves the same connection settings as the
+// COPY driver. Ambiguous destinations cannot safely reuse committed state.
+func PartialStateTargetFromConninfo(conninfo string) PartialStateTarget {
+	if strings.TrimSpace(conninfo) == "" {
+		return PartialStateTarget{}
+	}
+	cfg, err := pgconn.ParseConfig(conninfo)
+	if err != nil || cfg.Database == "" || cfg.Host == "" {
+		return PartialStateTarget{}
+	}
+	for _, fallback := range cfg.Fallbacks {
+		if fallback.Host != cfg.Host || fallback.Port != cfg.Port {
+			return PartialStateTarget{}
+		}
+	}
+	return PartialStateTarget{Host: cfg.Host, Port: fmt.Sprint(cfg.Port), Database: cfg.Database}
+}
+
 // PartialStateManifest records committed, failed, and pending qualified tables.
-// It never stores DSNs, passwords, or other credentials.
+// It never stores connection strings, passwords, or other credentials.
 type PartialStateManifest struct {
+	Target    PartialStateTarget    `json:"target,omitempty"`
 	Committed []string              `json:"committed"`
 	Failed    []PartialStateFailure `json:"failed,omitempty"`
 	Pending   []string              `json:"pending"`
@@ -70,7 +105,7 @@ func ValidatePartialStatePath(path string) error {
 
 // mergePartialStateManifestForRetry carries forward committed tables from a prior
 // partial manifest and re-pends every other table in the current restore scope.
-func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels []string) PartialStateManifest {
+func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels []string, target PartialStateTarget) PartialStateManifest {
 	scope := make(map[string]struct{}, len(allLabels))
 	for _, label := range allLabels {
 		scope[label] = struct{}{}
@@ -94,6 +129,7 @@ func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels 
 		}
 	}
 	return PartialStateManifest{
+		Target:    target,
 		Committed: normalizeQualifiedList(retained),
 		Failed:    nil,
 		Pending:   pending,

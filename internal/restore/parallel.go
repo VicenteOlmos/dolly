@@ -101,9 +101,10 @@ func buildParallelTableMaps(tables []db.Table, dataPaths []string) (map[string]d
 	return byLabel, paths, labels
 }
 
-func initParallelRestoreManifest(path string, allLabels []string) (PartialStateManifest, error) {
+func initParallelRestoreManifest(path string, allLabels []string, target PartialStateTarget) (PartialStateManifest, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		m := NewPartialStateManifest(allLabels)
+		m.Target = target
 		if err := parallelWriteManifest(path, m); err != nil {
 			return PartialStateManifest{}, fmt.Errorf("write initial partial state: %w", err)
 		}
@@ -115,7 +116,16 @@ func initParallelRestoreManifest(path string, allLabels []string) (PartialStateM
 	if err != nil {
 		return PartialStateManifest{}, fmt.Errorf("load partial state manifest: %w", err)
 	}
-	return mergePartialStateManifestForRetry(existing, allLabels), nil
+	if !existing.Target.same(target) {
+		fmt.Fprintf(os.Stderr, "warning: partial-state manifest target does not match this restore; loading every table\n")
+		m := NewPartialStateManifest(allLabels)
+		m.Target = target
+		if err := parallelWriteManifest(path, m); err != nil {
+			return PartialStateManifest{}, fmt.Errorf("rewrite partial state for new target: %w", err)
+		}
+		return m, nil
+	}
+	return mergePartialStateManifestForRetry(existing, allLabels, target), nil
 }
 
 func isLabelCommitted(m *PartialStateManifest, label string) bool {
@@ -155,7 +165,7 @@ func runParallelRestore(
 	defer cancel()
 
 	byLabel, pathsByLabel, allLabels := buildParallelTableMaps(meta.Tables, dataPaths)
-	manifest, err := initParallelRestoreManifest(cfg.partialStatePath, allLabels)
+	manifest, err := initParallelRestoreManifest(cfg.partialStatePath, allLabels, PartialStateTargetFromConninfo(cfg.dsn))
 	if err != nil {
 		return err
 	}

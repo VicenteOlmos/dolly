@@ -46,6 +46,21 @@ type Options struct {
 	PermissionCache PermissionCacheConfig
 	// MaxOpenConns limits sql.DB pool size for this run. Zero or negative uses 5.
 	MaxOpenConns int
+	// IncludePrivileges keeps owners and ACLs in schema replay. The target must
+	// already have the referenced roles. Default omits both.
+	IncludePrivileges bool
+}
+
+func schemaOnlyDumpArgs(cleanDSN string, schemas []string, includePrivileges bool) []string {
+	args := []string{"--schema-only"}
+	if !includePrivileges {
+		args = append(args, "--no-owner", "--no-acl")
+	}
+	for _, schema := range schemas {
+		args = append(args, "--schema="+schema)
+	}
+	args = append(args, cleanDSN)
+	return args
 }
 
 // CloneName replaces "{db}" in template with sourceDB.

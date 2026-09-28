@@ -127,3 +127,27 @@ func TestRenderDumpHistoryLinesCursorHighlight(t *testing.T) {
 		}
 	}
 }
+
+func TestDumpScreenRestoreUsesTypedDirectory(t *testing.T) {
+	d := &dumpScreen{draft: &DumpDraft{History: DumpHistoryState{
+		Entries: []DumpHistoryEntry{{Path: "/history/1"}},
+	}}, restoreDir: "  /tmp/other-dump  "}
+	cmd := d.requestRestore()
+	if cmd == nil {
+		t.Fatal("expected restore command")
+	}
+	msg, ok := cmd().(restoreConfirmRequestedMsg)
+	if !ok {
+		t.Fatalf("msg = %T", cmd())
+	}
+	if msg.inputDir != "/tmp/other-dump" {
+		t.Fatalf("inputDir = %q", msg.inputDir)
+	}
+
+	d.restoreDir = ""
+	cmd = d.requestRestore()
+	msg = cmd().(restoreConfirmRequestedMsg)
+	if msg.inputDir != "/history/1" {
+		t.Fatalf("history inputDir = %q", msg.inputDir)
+	}
+}

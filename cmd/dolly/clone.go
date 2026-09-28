@@ -26,13 +26,14 @@ import (
 )
 
 type cloneFlags struct {
-	FastForward bool
-	Strategy    string
-	TargetDir   string
-	Connection  string
-	Schemas     []string
-	Yes         bool
-	JSON        bool
+	FastForward       bool
+	Strategy          string
+	TargetDir         string
+	Connection        string
+	Schemas           []string
+	Yes               bool
+	JSON              bool
+	IncludePrivileges bool
 }
 
 func cloneFlagSet(flags *cloneFlags, schemasRaw *string) *flag.FlagSet {
@@ -43,6 +44,7 @@ func cloneFlagSet(flags *cloneFlags, schemasRaw *string) *flag.FlagSet {
 	fs.StringVar(&flags.TargetDir, "target-dir", "", "target data directory for physical-backup clone (pg_basebackup -D)")
 	fs.StringVar(&flags.Connection, "connection", "", "saved connection profile name (requires save_connections in config.jsonc)")
 	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive operations (required with -ff when clone.replace=true)")
+	fs.BoolVar(&flags.IncludePrivileges, "with-privileges", false, "schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	if schemasRaw != nil {
 		fs.StringVar(schemasRaw, "schemas", "", "comma-separated source schema names")
@@ -411,7 +413,10 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		targetDir = flags.TargetDir
 	}
 
-	if !cfg.Sanitization.Enabled || strategy == "template" || strategy == "logical-stream" || strategy == "physical-backup" {
+	if cfg.Sanitization.Enabled && (strategy == "template" || strategy == "logical-stream" || strategy == "physical-backup") {
+		return fmt.Errorf("sanitization cannot rewrite %s clones; use schema-replay or disable sanitization", strategy)
+	}
+	if !cfg.Sanitization.Enabled {
 		fmt.Fprintf(os.Stderr, "warning: clone will copy unsanitized data (strategy=%s, sanitization=%v)\n", strategy, cfg.Sanitization.Enabled)
 	}
 	if cfg.Clone.SkipCreate {
@@ -419,17 +424,18 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 	}
 
 	opts := clone.Options{
-		SourceDSN:       sourceDSN,
-		CloneName:       cloneName,
-		TargetDSN:       targetURL,
-		TargetDir:       targetDir,
-		SkipCreate:      cfg.Clone.SkipCreate,
-		DumpDir:         cfg.Clone.DumpDir,
-		DumpOpts:        dumpOpts,
-		RestoreOpts:     restoreOpts,
-		Strategy:        strategy,
-		PermissionCache: permCache,
-		MaxOpenConns:    maxConns,
+		SourceDSN:         sourceDSN,
+		CloneName:         cloneName,
+		TargetDSN:         targetURL,
+		TargetDir:         targetDir,
+		SkipCreate:        cfg.Clone.SkipCreate,
+		DumpDir:           cfg.Clone.DumpDir,
+		DumpOpts:          dumpOpts,
+		RestoreOpts:       restoreOpts,
+		Strategy:          strategy,
+		PermissionCache:   permCache,
+		MaxOpenConns:      maxConns,
+		IncludePrivileges: flags.IncludePrivileges,
 		ProgressEvent: func(ev clone.ProgressEvent) {
 			if flags.JSON {
 				return

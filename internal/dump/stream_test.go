@@ -401,8 +401,8 @@ func TestStreamTableSlowSinglePK(t *testing.T) {
 	}
 }
 
-func TestStreamTableSlowNoPKError(t *testing.T) {
-	sqlDB, _, err := sqlmock.New()
+func TestStreamTableSlowNoPKUsesCTID(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,13 +415,22 @@ func TestStreamTableSlowNoPKError(t *testing.T) {
 			{Name: "id", DataType: "integer"},
 		},
 	}
+	mock.ExpectQuery(`SELECT "id", ctid FROM "public"\."no_pk_table" ORDER BY ctid LIMIT 1000`).
+		WithoutArgs().
+		WillReturnRows(sqlmock.NewRows([]string{"id", "ctid"}).AddRow(1, "(0,1)"))
 
-	err = streamTableSlowDefault(context.Background(), sqlDB, table, t.TempDir(), nil)
-	if err == nil {
-		t.Fatal("expected error for table without primary key")
+	dir := t.TempDir()
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "no resumable key") {
-		t.Fatalf("error missing no-resumable-key context: %v", err)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(readTableNDJSON(t, dir, "no_pk_table")); got != `{"id":1}` {
+		t.Fatalf("ndjson = %s", got)
+	}
+	if _, err := os.Stat(slowCheckpointPath(dir, table)); !os.IsNotExist(err) {
+		t.Fatal("successful stream should remove the ctid checkpoint")
 	}
 }
 
@@ -564,8 +573,8 @@ func TestStreamTableSlowCompositeUniqueIndex(t *testing.T) {
 	}
 }
 
-func TestStreamTableSlowNormalStreamRejected(t *testing.T) {
-	sqlDB, _, err := sqlmock.New()
+func TestStreamTableSlowNullableUniqueUsesCTID(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,9 +589,66 @@ func TestStreamTableSlowNormalStreamRejected(t *testing.T) {
 			KeyColumns: []db.UniqueIndexColumn{{Name: "code", Position: 1, Attnum: 1, OpclassOID: 1978, IsNullable: true}},
 		}},
 	}
-	err = streamTableSlowDefault(context.Background(), sqlDB, table, t.TempDir(), nil)
-	if err == nil || !strings.Contains(err.Error(), "no resumable key") {
-		t.Fatalf("err = %v", err)
+	if got := SelectKeyDescriptor(table).Strategy; got != KeyStrategyNormalStream {
+		t.Fatalf("descriptor = %s, want normal_stream before promotion", got)
+	}
+	mock.ExpectQuery(`SELECT "code", ctid FROM "public"\."unsafe" ORDER BY ctid LIMIT 1000`).
+		WithoutArgs().
+		WillReturnRows(sqlmock.NewRows([]string{"code", "ctid"}).AddRow("a", "(0,1)"))
+
+	dir := t.TempDir()
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(readTableNDJSON(t, dir, "unsafe")); got != `{"code":"a"}` {
+		t.Fatalf("ndjson = %s", got)
+	}
+}
+
+func TestStreamTableSlowCTIDResume(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	table := db.Table{
+		Schema: "public",
+		Name:   "heap_only",
+		Columns: []db.Column{
+			{Name: "note", DataType: "text", OrdinalPosition: 1},
+		},
+	}
+	desc := promoteNoKeyPlan(SelectKeyDescriptor(table))
+	dir := t.TempDir()
+	tmpPath := tableDataPath(dir, table) + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(`{"note":"one"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ckpt, _ := json.Marshal(slowCheckpoint{
+		Schema: "public", Table: "heap_only", Strategy: KeyStrategyCTID, KeyColumns: []string{"ctid"},
+		KeyFingerprint: desc.Fingerprint, LastKey: []any{"(0,1)"},
+	})
+	if err := os.WriteFile(slowCheckpointPath(dir, table), ckpt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	mock.ExpectQuery(`SELECT "note", ctid FROM "public"\."heap_only" WHERE \(ctid\) > \(\$1\) ORDER BY ctid LIMIT 1000`).
+		WithArgs("(0,1)").
+		WillReturnRows(sqlmock.NewRows([]string{"note", "ctid"}).AddRow("two", "(0,2)"))
+
+	if err := streamTableSlowDefault(context.Background(), sqlDB, table, dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(strings.TrimSpace(readTableNDJSON(t, dir, "heap_only")), "\n")
+	if len(got) != 2 || got[0] != `{"note":"one"}` || got[1] != `{"note":"two"}` {
+		t.Fatalf("output = %v", got)
 	}
 }
 

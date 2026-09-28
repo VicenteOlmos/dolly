@@ -170,6 +170,8 @@ func printCloneUsage() {
 	fmt.Fprintln(os.Stderr, "        comma-separated source schema names (overrides clone.schemas config)")
 	fmt.Fprintln(os.Stderr, "  --yes")
 	fmt.Fprintln(os.Stderr, "        confirm destructive operations (required with -ff when clone.replace=true)")
+	fmt.Fprintln(os.Stderr, "  --with-privileges")
+	fmt.Fprintln(os.Stderr, "        schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)")
 	fmt.Fprintln(os.Stderr, "  --json")
 	fmt.Fprintln(os.Stderr, "        emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	fmt.Fprintln(os.Stderr, "")
@@ -184,8 +186,8 @@ func printCloneUsage() {
 	fmt.Fprintln(os.Stderr, "physical-backup runs pg_basebackup to create a physical replica data directory.")
 	fmt.Fprintln(os.Stderr, "Use --target-dir (or clone.target_dir with -ff) for an empty or non-existent path.")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Note: sanitization applies to schema-replay dump paths only; logical-stream")
-	fmt.Fprintln(os.Stderr, "and template strategies do not redact row data.")
+	fmt.Fprintln(os.Stderr, "Note: sanitization applies to schema-replay dumps. template, logical-stream,")
+	fmt.Fprintln(os.Stderr, "and physical-backup refuse to run when sanitization is enabled.")
 }
 
 func printVersionUsage() {

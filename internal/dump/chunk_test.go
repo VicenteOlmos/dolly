@@ -74,15 +74,15 @@ func TestPlanChunkStreaming(t *testing.T) {
 			wantChunked:    []string{"public.events"},
 		},
 		{
-			name: "no safe key receives normal stream fallback",
+			name: "no safe key receives ctid resume plan",
 			tables: []db.Table{{Schema: "public", Name: "heap_only", Columns: []db.Column{
 				{Name: "id", OrdinalPosition: 1},
 			}}},
 			requests:       []SelectorEntry{{Table: QualifiedTable{Schema: "public", Name: "heap_only"}}},
-			wantStrategies: map[string]KeyStrategy{tableKey("public", "heap_only"): KeyStrategyNormalStream},
-			wantResumable:  map[string]bool{tableKey("public", "heap_only"): false},
+			wantStrategies: map[string]KeyStrategy{tableKey("public", "heap_only"): KeyStrategyCTID},
+			wantResumable:  map[string]bool{tableKey("public", "heap_only"): true},
 			wantRequested:  []string{"public.heap_only"},
-			wantFallback:   []string{"public.heap_only"},
+			wantChunked:    []string{"public.heap_only"},
 		},
 		{
 			name: "provenance is qualified and deterministic",
@@ -102,18 +102,17 @@ func TestPlanChunkStreaming(t *testing.T) {
 			wantStrategies: map[string]KeyStrategy{
 				tableKey("public", "zeta"):   KeyStrategyPrimaryKey,
 				tableKey("public", "beta"):   KeyStrategyPrimaryKey,
-				tableKey("private", "alpha"): KeyStrategyNormalStream,
-				tableKey("public", "heap"):   KeyStrategyNormalStream,
+				tableKey("private", "alpha"): KeyStrategyCTID,
+				tableKey("public", "heap"):   KeyStrategyCTID,
 			},
 			wantResumable: map[string]bool{
 				tableKey("public", "zeta"):   true,
 				tableKey("public", "beta"):   true,
-				tableKey("private", "alpha"): false,
-				tableKey("public", "heap"):   false,
+				tableKey("private", "alpha"): true,
+				tableKey("public", "heap"):   true,
 			},
 			wantRequested: []string{"private.alpha", "public.beta", "public.heap", "public.zeta", "public.zeta"},
-			wantChunked:   []string{"public.beta", "public.zeta"},
-			wantFallback:  []string{"private.alpha", "public.heap"},
+			wantChunked:   []string{"private.alpha", "public.beta", "public.heap", "public.zeta"},
 		},
 	}
 
