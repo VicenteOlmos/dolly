@@ -28,6 +28,13 @@ func TestIntegrationCapture(t *testing.T) {
 	if !strings.Contains(string(schema), "CREATE TABLE public.tbl_a") {
 		t.Fatalf("captured schema missing public.tbl_a:\n%s", schema)
 	}
+	if strings.Contains(string(schema), "CREATE SCHEMA public;") {
+		t.Fatalf("captured schema still has bare CREATE SCHEMA public:\n%s", schema)
+	}
+	if strings.Contains(strings.ToLower(string(schema)), "create schema") &&
+		!strings.Contains(string(schema), "CREATE SCHEMA IF NOT EXISTS") {
+		t.Fatalf("captured CREATE SCHEMA missing IF NOT EXISTS:\n%s", schema)
+	}
 }
 
 func TestIntegrationCaptureSelectedSchemas(t *testing.T) {

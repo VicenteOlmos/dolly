@@ -2,6 +2,7 @@ package connections
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -444,7 +445,7 @@ func TestFileStoreLockFileCreatedAndReleased(t *testing.T) {
 	f.Close()
 }
 
-func TestOpenStorePlaintextLoadsWithoutKeyWhenEncryptDefaulted(t *testing.T) {
+func TestFileStorePlaintextRejectedWhenEncryptEnabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".dolly.connections.yaml")
 	content := `connections:
@@ -458,20 +459,64 @@ func TestOpenStorePlaintextLoadsWithoutKeyWhenEncryptDefaulted(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv(allowPlaintextEnvVar, "")
 
-	// Ensure no encryption key — this MUST still load plaintext transparently.
-	t.Setenv("DOLLY_CONNECTIONS_KEY", "")
+	store, err := NewFileStore(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Get("prod")
+	if !errors.Is(err, ErrPlaintextStore) {
+		t.Fatalf("expected ErrPlaintextStore, got %v", err)
+	}
+}
 
-	store, err := NewFileStore(path, true) // encrypt=true simulates defaulted-true
+func TestFileStorePlaintextLoadsWithAllowEnvAndWarns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".dolly.connections.yaml")
+	content := `connections:
+- name: prod
+  host: db.example.com
+  port: "5432"
+  database: app
+  user: app
+  password: secret
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(allowPlaintextEnvVar, "1")
+
+	store, err := NewFileStore(path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	conn, err := store.Get("prod")
+	stderr := captureStderr(t, func() {
+		conn, err := store.Get("prod")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if conn.Host != "db.example.com" || conn.Password != "secret" {
+			t.Fatalf("got host=%q password=%q", conn.Host, conn.Password)
+		}
+	})
+	if !strings.Contains(stderr, "plaintext") || !strings.Contains(stderr, "re-encrypted") {
+		t.Fatalf("expected plaintext upgrade warning on stderr, got: %q", stderr)
+	}
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("plaintext store must load when encrypt is true (upgrade compat): %v", err)
+		t.Fatal(err)
 	}
-	if conn.Host != "db.example.com" || conn.Password != "secret" {
-		t.Fatalf("got host=%q password=%q, want db.example.com/secret", conn.Host, conn.Password)
-	}
+	old := os.Stderr
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	return string(out)
 }

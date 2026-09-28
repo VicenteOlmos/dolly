@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/update"
 )
@@ -412,31 +413,94 @@ type updateTestConfig struct {
 }
 
 func runUpdateWithClient(args []string, client update.HTTPDoer, cfg updateTestConfig) error {
-	flags, err := parseUpdateFlags(args)
-	if errors.Is(err, errHelp) {
-		return nil
-	}
+	return runUpdateWithContext(context.Background(), args, &updateRunInject{
+		http:             client,
+		installedVersion: cfg.installedVersion,
+		targetPath:       cfg.targetPath,
+	})
+}
+
+func TestRunUpdateContextCancel(t *testing.T) {
+	assetName, err := update.CurrentAsset()
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
-	installedVersion := cfg.installedVersion
-	if installedVersion == "" {
-		installedVersion = version
+	tag := "v0.3.2"
+
+	downloadStarted := make(chan struct{})
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rec := httptestRecorder()
+		switch {
+		case strings.Contains(req.URL.Path, "/releases/latest"):
+			_ = json.NewEncoder(rec).Encode(map[string]any{
+				"tag_name":   tag,
+				"draft":      false,
+				"prerelease": false,
+				"assets": []map[string]any{
+					{"name": assetName, "browser_download_url": "https://github.com/VicenteOlmos/dolly/releases/download/" + tag + "/" + assetName},
+					{"name": "checksums.txt", "browser_download_url": "https://github.com/VicenteOlmos/dolly/releases/download/" + tag + "/checksums.txt"},
+				},
+			})
+		case strings.HasSuffix(req.URL.Path, "/checksums.txt"):
+			select {
+			case downloadStarted <- struct{}{}:
+			default:
+			}
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		case strings.HasSuffix(req.URL.Path, "/"+assetName):
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		default:
+			rec.WriteHeader(http.StatusNotFound)
+		}
+		return rec.Result(), nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	oldStderr := os.Stderr
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
 	}
-	opts := update.Options{
-		HTTP:             client,
-		InstalledVersion: installedVersion,
-		CheckOnly:        flags.check,
-		TargetPath:       cfg.targetPath,
+	os.Stderr = stderrW
+
+	var runErr error
+	done := make(chan struct{})
+	go func() {
+		runErr = runUpdateWithContext(ctx, []string{"--check"}, &updateRunInject{
+			http:             client,
+			installedVersion: "0.3.1",
+		})
+		close(done)
+	}()
+
+	select {
+	case <-downloadStarted:
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("download did not start")
 	}
-	result, runErr := update.Run(context.Background(), opts)
-	if runErr != nil && result == nil {
-		result = &update.Result{OK: false, Command: "update", Status: update.StatusFailed, Error: runErr.Error()}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runUpdate did not return promptly after cancel")
 	}
-	if flags.json {
-		return emitUpdateJSON(result, runErr)
+
+	stderrW.Close()
+	os.Stderr = oldStderr
+	var stderr bytes.Buffer
+	_, _ = io.Copy(&stderr, stderrR)
+
+	if !errors.Is(runErr, errTextHandled) {
+		t.Fatalf("err = %v, want errTextHandled", runErr)
 	}
-	return emitUpdateText(result, runErr)
+	if !strings.Contains(stderr.String(), "context canceled") {
+		t.Fatalf("stderr = %q, want context canceled", stderr.String())
+	}
 }
 
 func TestDispatchUpdateTextFailureSingleStderrLine(t *testing.T) {

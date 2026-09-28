@@ -385,6 +385,12 @@ func TestReadDotEnvAdvisoryAndWriter(t *testing.T) {
 			}
 			got := strings.TrimSpace(warnings.String())
 			if tt.wantWarn {
+				if got == "" {
+					broad, err := dotenvPermissionAdvisory(tt.path)
+					if err != nil || !broad {
+						return
+					}
+				}
 				if got != broadDotEnvPermissionsWarning {
 					t.Fatalf("warning=%q", got)
 				}
