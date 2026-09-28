@@ -30,6 +30,9 @@ type dumpScreen struct {
 	hasSession       func() bool
 	nav              SectionNav
 	pathCursor       int
+	restoreDir       string
+	restoreDirCursor int
+	restoreDirFocus  bool
 	logTailOffset    int
 	fileListOffset   int
 	spinnerFrame     *int
@@ -153,18 +156,31 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	if d.nav.InInside() && k.Code == tea.KeyEscape {
+		if d.nav.Section == dumpSectionHistory && d.restoreDirFocus {
+			d.restoreDirFocus = false
+			return nil
+		}
 		d.nav.Exit()
 		return nil
 	}
 
 	if d.nav.InInside() && d.nav.Section == dumpSectionHistory {
-		if k.Code == tea.KeySpace {
+		if !d.restoreDirFocus && k.String() == "p" {
+			d.restoreDirFocus = true
+			return nil
+		}
+		if d.restoreDirFocus && handleFieldCursorKey(k, &d.restoreDir, &d.restoreDirCursor) {
+			return nil
+		}
+		if k.Code == tea.KeySpace && !d.restoreDirFocus {
 			d.trustedSchemaSQL = !d.trustedSchemaSQL
 			return nil
 		}
 		switch k.String() {
 		case "r":
-			return d.requestRestore()
+			if !d.restoreDirFocus {
+				return d.requestRestore()
+			}
 		}
 		switch k.Code {
 		case tea.KeyEnter:
@@ -239,13 +255,18 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (d *dumpScreen) requestRestore() tea.Cmd {
-	if sel := d.draft.History.Selected(); sel != nil {
-		dir := sel.Path
-		trusted := d.trustedSchemaSQL
-		d.trustedSchemaSQL = false
-		return func() tea.Msg { return restoreConfirmRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted} }
+	dir := strings.TrimSpace(d.restoreDir)
+	if dir == "" {
+		if sel := d.draft.History.Selected(); sel != nil {
+			dir = sel.Path
+		}
 	}
-	return nil
+	if dir == "" {
+		return nil
+	}
+	trusted := d.trustedSchemaSQL
+	d.trustedSchemaSQL = false
+	return func() tea.Msg { return restoreConfirmRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted} }
 }
 
 func (d *dumpScreen) onFieldCursorNavigation() bool {
@@ -370,8 +391,14 @@ func (d *dumpScreen) pathSectionLines() []string {
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
-	hint := "(↑/↓ move · Space trust schema.sql · Enter/r restore · Esc back)"
+	hint := "(p path · ↑/↓ move · Space trust schema.sql · Enter/r restore · Esc back)"
 	lines = append(lines, label+" "+StyleMuted.Render(hint))
+	pathLabel := "Restore directory:"
+	pathVal := renderEditableField(d.restoreDir, d.restoreDirCursor, false, d.restoreDirFocus)
+	if pathVal == "" {
+		pathVal = StyleMuted.Render("(empty — use the selected history dump)")
+	}
+	lines = append(lines, StyleAccent.Render(pathLabel)+" "+pathVal)
 	trusted := "[ ]"
 	if d.trustedSchemaSQL {
 		trusted = "[x]"
