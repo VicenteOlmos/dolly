@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 func writeFixtureDump(t *testing.T, dir string) {
@@ -445,9 +447,7 @@ func TestRestoreWithProgressCallbacks(t *testing.T) {
 		if ev.Total != 2 {
 			t.Fatalf("event[%d] Total = %d, want 2", i, ev.Total)
 		}
-		if ev.Elapsed <= 0 {
-			t.Fatalf("event[%d] Elapsed = %v, want > 0", i, ev.Elapsed)
-		}
+		testutil.AssertElapsedPositive(t, ev.Elapsed, fmt.Sprintf("event[%d]", i))
 	}
 
 	// Verify monotonic Current: 1,1,2,2

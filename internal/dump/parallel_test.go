@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -647,6 +648,9 @@ func TestParallelDumpCancelPreservesPriorArtifacts(t *testing.T) {
 }
 
 func TestParallelDumpCleanupSIGKILLPreservesDestination(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGKILL child cleanup test is Unix-focused")
+	}
 	if os.Getenv("DOLLY_PARALLEL_CLEANUP_SIGKILL_CHILD") == "1" {
 		parallelDumpCleanupSIGKILLChild(t)
 		return

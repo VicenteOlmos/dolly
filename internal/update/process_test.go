@@ -2,15 +2,49 @@ package update
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestMain(m *testing.M) {
+	if msg := os.Getenv("DOLLY_UPDATE_TEST_PRINT"); msg != "" {
+		fmt.Println(msg)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func writeRunnableCopy(t *testing.T, dst string) {
+	t.Helper()
+	srcPath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.Open(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWaitForPIDExitAlreadyGone(t *testing.T) {
 	if err := defaultWaitForPIDExit(9999999, time.Second); err != nil {
@@ -254,8 +288,9 @@ func TestHelperUpdatedTargetRemainsUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := filepath.Join(dir, candidateBaseName)
-	newContent := []byte("#!/bin/sh\necho helper-usable\n")
-	if err := os.WriteFile(candidate, newContent, 0o755); err != nil {
+	if runtime.GOOS == "windows" {
+		writeRunnableCopy(t, candidate)
+	} else if err := os.WriteFile(candidate, []byte("#!/bin/sh\necho helper-usable\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	newSHA, newSize, err := fileDigest(candidate)
@@ -296,7 +331,11 @@ func TestHelperUpdatedTargetRemainsUsable(t *testing.T) {
 	if err := RunHelper(manifestFile, capability); err != nil {
 		t.Fatalf("RunHelper: %v", err)
 	}
-	out, err := exec.Command(target).Output()
+	cmd := exec.Command(target)
+	if runtime.GOOS == "windows" {
+		cmd.Env = append(os.Environ(), "DOLLY_UPDATE_TEST_PRINT=helper-usable")
+	}
+	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("execute updated target: %v", err)
 	}

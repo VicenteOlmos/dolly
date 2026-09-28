@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,6 +39,7 @@ func printUpdateUsage() {
 
 func updateFlagSet(flags *updateFlags) *flag.FlagSet {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	fs.BoolVar(&flags.check, "check", false, "discover and verify without replacing")
 	fs.BoolVar(&flags.json, "json", false, "emit JSON result")
 	return fs

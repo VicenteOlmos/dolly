@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 func TestDumpFullFlow(t *testing.T) {
@@ -567,9 +568,7 @@ func TestDumpWithProgressCallbacks(t *testing.T) {
 	if events[0].Current != 1 || events[0].Total != 1 {
 		t.Fatalf("first event Current=%d Total=%d, want 1/1", events[0].Current, events[0].Total)
 	}
-	if events[0].Elapsed <= 0 {
-		t.Fatalf("first event Elapsed = %v, want > 0", events[0].Elapsed)
-	}
+	testutil.AssertElapsedPositive(t, events[0].Elapsed, "first event")
 	if events[1].Phase != "table_end" || events[1].Table != "users" {
 		t.Fatalf("second event = %+v, want table_end users", events[1])
 	}
@@ -642,9 +641,7 @@ func TestDumpWithProgressCallbacksMultiTable(t *testing.T) {
 		if ev.Current != wantCurrent {
 			t.Fatalf("event[%d] Current = %d, want %d", i, ev.Current, wantCurrent)
 		}
-		if ev.Elapsed <= 0 {
-			t.Fatalf("event[%d] Elapsed = %v, want > 0", i, ev.Elapsed)
-		}
+		testutil.AssertElapsedPositive(t, ev.Elapsed, fmt.Sprintf("event[%d]", i))
 	}
 
 	// Verify phase sequence
