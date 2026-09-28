@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,9 +29,69 @@ type PartialStateFailure struct {
 	Error string `json:"error,omitempty"`
 }
 
+// PartialStateTarget identifies a restore destination without credentials.
+type PartialStateTarget struct {
+	Host     string `json:"host,omitempty"`
+	Port     string `json:"port,omitempty"`
+	Database string `json:"database,omitempty"`
+}
+
+func (t PartialStateTarget) empty() bool {
+	return t.Host == "" && t.Port == "" && t.Database == ""
+}
+
+func (t PartialStateTarget) same(other PartialStateTarget) bool {
+	return t.Host == other.Host && t.Port == other.Port && t.Database == other.Database
+}
+
+// PartialStateTargetFromConninfo reads host, port, and database from a PostgreSQL
+// URL or keyword connection string. Passwords and users are ignored.
+func PartialStateTargetFromConninfo(conninfo string) PartialStateTarget {
+	conninfo = strings.TrimSpace(conninfo)
+	if conninfo == "" {
+		return PartialStateTarget{}
+	}
+	if strings.Contains(conninfo, "://") {
+		u, err := url.Parse(conninfo)
+		if err != nil {
+			return PartialStateTarget{}
+		}
+		port := u.Port()
+		if port == "" {
+			port = "5432"
+		}
+		return PartialStateTarget{
+			Host:     u.Hostname(),
+			Port:     port,
+			Database: strings.TrimPrefix(u.Path, "/"),
+		}
+	}
+	fields := map[string]string{}
+	for _, part := range strings.Fields(conninfo) {
+		key, val, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		fields[strings.ToLower(key)] = strings.Trim(val, `"'`)
+	}
+	port := fields["port"]
+	if port == "" {
+		port = "5432"
+	}
+	dbName := fields["dbname"]
+	if dbName == "" {
+		dbName = fields["database"]
+	}
+	if fields["host"] == "" && dbName == "" {
+		return PartialStateTarget{}
+	}
+	return PartialStateTarget{Host: fields["host"], Port: port, Database: dbName}
+}
+
 // PartialStateManifest records committed, failed, and pending qualified tables.
-// It never stores DSNs, passwords, or other credentials.
+// It never stores connection strings, passwords, or other credentials.
 type PartialStateManifest struct {
+	Target    PartialStateTarget    `json:"target,omitempty"`
 	Committed []string              `json:"committed"`
 	Failed    []PartialStateFailure `json:"failed,omitempty"`
 	Pending   []string              `json:"pending"`
@@ -70,7 +131,7 @@ func ValidatePartialStatePath(path string) error {
 
 // mergePartialStateManifestForRetry carries forward committed tables from a prior
 // partial manifest and re-pends every other table in the current restore scope.
-func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels []string) PartialStateManifest {
+func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels []string, target PartialStateTarget) PartialStateManifest {
 	scope := make(map[string]struct{}, len(allLabels))
 	for _, label := range allLabels {
 		scope[label] = struct{}{}
@@ -94,6 +155,7 @@ func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels 
 		}
 	}
 	return PartialStateManifest{
+		Target:    target,
 		Committed: normalizeQualifiedList(retained),
 		Failed:    nil,
 		Pending:   pending,

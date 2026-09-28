@@ -12,13 +12,33 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
+func TestPartialStateTargetFromConninfo(t *testing.T) {
+	got := PartialStateTargetFromConninfo("postgres://user:secret@db.example:5433/app")
+	want := PartialStateTarget{Host: "db.example", Port: "5433", Database: "app"}
+	if !got.same(want) {
+		t.Fatalf("url target = %+v", got)
+	}
+	got = PartialStateTargetFromConninfo("host=db.example port=5432 dbname=app password=secret")
+	want = PartialStateTarget{Host: "db.example", Port: "5432", Database: "app"}
+	if !got.same(want) {
+		t.Fatalf("keyword target = %+v", got)
+	}
+	if !PartialStateTargetFromConninfo("").empty() {
+		t.Fatal("empty conninfo should have an empty target")
+	}
+}
+
 func TestMergePartialStateManifestForRetry(t *testing.T) {
 	existing := PartialStateManifest{
 		Committed: []string{"public.users"},
 		Failed:    []PartialStateFailure{{Table: "public.posts", Error: "copy failed"}},
 		Pending:   nil,
 	}
-	got := mergePartialStateManifestForRetry(existing, []string{"public.posts", "public.users", "public.comments"})
+	target := PartialStateTarget{Host: "localhost", Port: "5432", Database: "db"}
+	got := mergePartialStateManifestForRetry(existing, []string{"public.posts", "public.users", "public.comments"}, target)
+	if !got.Target.same(target) {
+		t.Fatalf("target = %+v", got.Target)
+	}
 	if !reflect.DeepEqual(got.Committed, []string{"public.users"}) {
 		t.Fatalf("committed = %v", got.Committed)
 	}
