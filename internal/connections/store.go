@@ -13,10 +13,13 @@ import (
 )
 
 var (
-	ErrDuplicateName = errors.New("connection name already exists")
-	ErrNotFound      = errors.New("connection not found")
-	ErrEncryptKey    = errors.New("DOLLY_CONNECTIONS_KEY required when connections.encrypt is true")
+	ErrDuplicateName  = errors.New("connection name already exists")
+	ErrNotFound       = errors.New("connection not found")
+	ErrEncryptKey     = errors.New("DOLLY_CONNECTIONS_KEY required when connections.encrypt is true")
+	ErrPlaintextStore = errors.New("connections store is plaintext but encryption is enabled; set DOLLY_CONNECTIONS_ALLOW_PLAINTEXT=1 to load and re-encrypt on save")
 )
+
+const allowPlaintextEnvVar = "DOLLY_CONNECTIONS_ALLOW_PLAINTEXT"
 
 // Connection is a saved PostgreSQL profile.
 type Connection struct {
@@ -287,8 +290,10 @@ func (s *FileStore) load() (*fileDocument, error) {
 			return nil, err
 		}
 	} else if s.encrypt {
-		// ponytail: transparently load plaintext store so upgrades don't
-		// break existing files. persist() will re-encrypt on next save.
+		if os.Getenv(allowPlaintextEnvVar) != "1" {
+			return nil, ErrPlaintextStore
+		}
+		fmt.Fprintf(os.Stderr, "connections store %s is plaintext and will be re-encrypted on the next save\n", s.path)
 	}
 	var doc fileDocument
 	if err := yaml.Unmarshal(plain, &doc); err != nil {

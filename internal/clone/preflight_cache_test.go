@@ -19,6 +19,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -172,9 +173,7 @@ func TestPermissionCacheStoreAndHit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf("cache dir mode = %o, want 0700", info.Mode().Perm())
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o700, "cache dir mode")
 
 	got, hit, err := lookupPermissionCache(cfg, key, now.Add(30*time.Minute))
 	if err != nil || !hit {
@@ -267,9 +266,7 @@ func TestPermissionCacheSecureExistingCacheRead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o600 {
-			t.Fatalf("mode = %o, want 0600", info.Mode().Perm())
-		}
+		testutil.AssertFilePerm(t, info.Mode(), 0o600, "mode")
 	})
 
 	t.Run("tighten error beats parse error", func(t *testing.T) {

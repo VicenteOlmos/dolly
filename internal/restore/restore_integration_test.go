@@ -18,6 +18,7 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 	"github.com/VicenteOlmos/dolly/internal/testutil/pgintegration"
 )
 
@@ -1056,9 +1057,7 @@ func TestIntegrationParallelRestorePartialFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manifest missing: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("manifest mode = %o, want 0600", info.Mode().Perm())
-	}
+	testutil.AssertFilePerm(t, info.Mode(), 0o600, "manifest mode")
 
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {

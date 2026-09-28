@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 func TestMergePartialStateManifestForRetry(t *testing.T) {
@@ -204,9 +206,7 @@ func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != want {
-		t.Fatalf("file mode = %o, want %o", info.Mode().Perm(), want)
-	}
+	testutil.AssertFilePerm(t, info.Mode(), want, "file mode")
 }
 
 func assertDirMode(t *testing.T, path string, want os.FileMode) {
@@ -215,7 +215,5 @@ func assertDirMode(t *testing.T, path string, want os.FileMode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != want {
-		t.Fatalf("dir mode = %o, want %o", info.Mode().Perm(), want)
-	}
+	testutil.AssertFilePerm(t, info.Mode(), want, "dir mode")
 }

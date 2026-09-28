@@ -17,6 +17,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/VicenteOlmos/dolly/internal/db"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -1566,6 +1567,9 @@ func TestStreamTableSlowResumeCheckpointSaveFailurePreservesPriorRows(t *testing
 	data, err := os.ReadFile(tmpPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if testutil.NormalizeNewlines(string(data)) != testutil.NormalizeNewlines(string(priorData)) {
+		t.Fatalf("temp file content changed after checkpoint save failure")
 	}
 	gotLines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(gotLines) != 500 {

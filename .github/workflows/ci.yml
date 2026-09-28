@@ -65,8 +65,8 @@ jobs:
         run: go test -race -count=1 -run '^(TestEnsureOwnerOnly|TestLoadConfigTightens|TestLoadDotEnv.*Tightens|TestLoadDotEnv.*FailClosed|TestSaveConfigFailClosed)' ./internal/config
 
       - if: runner.os == 'Windows'
-        name: Compile remaining tests on Windows
-        run: go test -race -run '^$' ./...
+        name: Run full unit test suite on Windows
+        run: go test -count=1 ./...
 
       - run: go build -buildvcs=false ./cmd/dolly
 
