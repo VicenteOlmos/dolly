@@ -247,6 +247,84 @@ func TestRunCancelAfterDownloadDoesNotReplace(t *testing.T) {
 	}
 }
 
+func TestRunCancelAfterStageRemovesCandidate(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("#!/bin/sh\necho newer\n")
+	archive := buildCurrentArchive(t, content)
+	checksums := []byte(checksumLine(assetName, archive))
+	dir := t.TempDir()
+	target := writeFakeBinary(t, dir, "dolly", 0o755)
+	before := fileSHA256(t, target)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prev := stageReady
+	t.Cleanup(func() { stageReady = prev })
+	stageReady = cancel
+
+	_, err = Run(ctx, Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run err = %v, want context.Canceled", err)
+	}
+	if after := fileSHA256(t, target); after != before {
+		t.Fatal("target replaced after cancellation")
+	}
+	if _, statErr := os.Stat(candidatePath(dir)); !os.IsNotExist(statErr) {
+		t.Fatalf("staged candidate left behind: %v", statErr)
+	}
+
+	stageReady = nil
+	result, err := Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if err != nil {
+		t.Fatalf("retry Run: %v", err)
+	}
+	if result.Status != StatusUpdated && result.Status != StatusDeferred {
+		t.Fatalf("retry status = %s, want updated or deferred", result.Status)
+	}
+}
+
+func TestRunDigestFailureRemovesCandidate(t *testing.T) {
+	assetName, err := CurrentAsset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := buildCurrentArchive(t, []byte("#!/bin/sh\necho newer\n"))
+	checksums := []byte(checksumLine(assetName, archive))
+	dir := t.TempDir()
+	target := writeFakeBinary(t, dir, "dolly", 0o755)
+
+	prev := stageReady
+	t.Cleanup(func() { stageReady = prev })
+	stageReady = func() {
+		if err := os.Remove(target); err != nil {
+			t.Errorf("remove target: %v", err)
+		}
+	}
+
+	_, err = Run(context.Background(), Options{
+		HTTP:             mockReleaseClient(t, assetName, archive, checksums, "v0.3.2"),
+		InstalledVersion: "0.3.1",
+		TargetPath:       target,
+	})
+	if err == nil {
+		t.Fatal("expected digest failure after the target disappeared")
+	}
+	if _, statErr := os.Stat(candidatePath(dir)); !os.IsNotExist(statErr) {
+		t.Fatalf("staged candidate left behind: %v", statErr)
+	}
+}
+
 func TestValidateReleaseAssetURL(t *testing.T) {
 	repo := "VicenteOlmos/dolly"
 	tag := "v0.3.2"

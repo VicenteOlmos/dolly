@@ -42,6 +42,10 @@ type Options struct {
 	Now              func() time.Time
 }
 
+// stageReady runs after the candidate file is written and before it replaces
+// the installed binary. Tests cancel the context from here. Nil in production.
+var stageReady func()
+
 // Run discovers, compares, downloads, verifies, and optionally replaces the executable.
 func Run(ctx context.Context, opts Options) (*Result, error) {
 	repo := opts.Repo
@@ -142,11 +146,21 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}, nil
 	}
 
+	if stageReady != nil {
+		stageReady()
+	}
+	if err := ctx.Err(); err != nil {
+		_ = os.Remove(stagedPath)
+		return failedResult("%v", err), err
+	}
+
 	oldSHA, oldSize, err := fileDigest(target)
 	if err != nil {
+		_ = os.Remove(stagedPath)
 		return failedResult("%v", err), err
 	}
 	if err := ctx.Err(); err != nil {
+		_ = os.Remove(stagedPath)
 		return failedResult("%v", err), err
 	}
 
