@@ -143,7 +143,7 @@ func validateCheckpointDescriptor(cp *slowCheckpoint, descriptor KeyDescriptor) 
 		if cp.Strategy == "" {
 			return fmt.Errorf("checkpoint strategy required")
 		}
-		if cp.Strategy != KeyStrategyPrimaryKey && cp.Strategy != KeyStrategyUniqueIndex {
+		if cp.Strategy != KeyStrategyPrimaryKey && cp.Strategy != KeyStrategyUniqueIndex && cp.Strategy != KeyStrategyCTID {
 			return fmt.Errorf("checkpoint unknown strategy")
 		}
 		if cp.KeyFingerprint == "" {
@@ -299,6 +299,18 @@ func validateSlowCheckpointTemp(tmpPath string, cp *slowCheckpoint) error {
 	lastKey := cp.lastKeyValues()
 	if len(keyCols) != len(lastKey) {
 		return fmt.Errorf("validate checkpoint temp for table %q: key column count mismatch", cp.Table)
+	}
+	if cp.Strategy == KeyStrategyCTID {
+		// ctid is a system column and is not stored in NDJSON, so the last
+		// row cannot confirm it. A valid last row plus one stored tid is
+		// enough to resume. VACUUM or updates can still skip or duplicate rows.
+		if len(keyCols) != 1 || keyCols[0] != "ctid" {
+			return fmt.Errorf("validate checkpoint temp for table %q: ctid checkpoint must store one ctid", cp.Table)
+		}
+		if _, err := checkpointAsString(lastKey[0]); err != nil {
+			return fmt.Errorf("validate checkpoint temp for table %q: checkpoint ctid: %w", cp.Table, err)
+		}
+		return nil
 	}
 	for i, col := range keyCols {
 		v, ok := row[col]
@@ -646,9 +658,9 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		return n, nil
 	}
 
-	descriptor := SelectKeyDescriptor(table)
+	descriptor := promoteNoKeyPlan(SelectKeyDescriptor(table))
 	switch descriptor.Strategy {
-	case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex:
+	case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex, KeyStrategyCTID:
 	default:
 		return 0, fmt.Errorf("slow-connection mode: table %q has no resumable key", table.Name)
 	}
@@ -662,7 +674,14 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	keyIndices := make([]int, len(keyCols))
 	keyIdents := make([]string, len(keyCols))
 	keyTypes := make([]string, len(keyCols))
+	ctidResume := descriptor.Strategy == KeyStrategyCTID
 	for j, keyCol := range keyCols {
+		if ctidResume && keyCol == "ctid" {
+			keyIdents[j] = "ctid"
+			keyIndices[j] = len(table.Columns)
+			keyTypes[j] = "tid"
+			continue
+		}
 		keyIdents[j] = pgx.Identifier{keyCol}.Sanitize()
 		found := false
 		for i, c := range table.Columns {
@@ -681,6 +700,10 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
 	keyOrder := strings.Join(keyIdents, ", ")
 	colList := strings.Join(cols, ", ")
+	selectList := colList
+	if ctidResume {
+		selectList = colList + ", ctid"
+	}
 
 	colNames := make([]string, len(table.Columns))
 	for i, c := range table.Columns {
@@ -778,14 +801,14 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 		var args []any
 		if lastKey == nil {
 			query = fmt.Sprintf("SELECT %s FROM %s ORDER BY %s LIMIT %d",
-				colList, tableIdent, keyOrder, chunkSize)
+				selectList, tableIdent, keyOrder, chunkSize)
 		} else {
 			placeholders := make([]string, len(lastKey))
 			for i := range lastKey {
 				placeholders[i] = fmt.Sprintf("$%d", i+1)
 			}
 			query = fmt.Sprintf("SELECT %s FROM %s WHERE (%s) > (%s) ORDER BY %s LIMIT %d",
-				colList, tableIdent, keyOrder, strings.Join(placeholders, ", "), keyOrder, chunkSize)
+				selectList, tableIdent, keyOrder, strings.Join(placeholders, ", "), keyOrder, chunkSize)
 			args = lastKey
 		}
 
@@ -834,7 +857,10 @@ func streamTableSlow(ctx context.Context, q querier, table db.Table, dir string,
 				var chunkLast []any
 				for rows.Next() {
 					values := make([]any, len(table.Columns))
-					valuePtrs := make([]any, len(table.Columns))
+					if ctidResume {
+						values = make([]any, len(table.Columns)+1)
+					}
+					valuePtrs := make([]any, len(values))
 					for i := range values {
 						valuePtrs[i] = &values[i]
 					}

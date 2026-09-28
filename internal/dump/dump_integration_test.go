@@ -551,11 +551,11 @@ func TestIntegrationDumpChunkTableNoSafeKeyFallsBackToNormalStream(t *testing.T)
 		t.Fatal("expected chunk_tables provenance")
 	}
 	chunkProv := meta.Provenance.ChunkTables
-	if len(chunkProv.Chunked) != 0 {
-		t.Fatalf("chunked = %v, want none for no-safe-key table", chunkProv.Chunked)
+	if len(chunkProv.Chunked) != 1 || chunkProv.Chunked[0] != qualified {
+		t.Fatalf("chunked = %v, want [%s]", chunkProv.Chunked, qualified)
 	}
-	if len(chunkProv.Fallback) != 1 || chunkProv.Fallback[0] != qualified {
-		t.Fatalf("fallback = %v, want [%s]", chunkProv.Fallback, qualified)
+	if len(chunkProv.Fallback) != 0 {
+		t.Fatalf("fallback = %v, want none for ctid resume", chunkProv.Fallback)
 	}
 
 	lines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, tableName)))
@@ -883,7 +883,7 @@ func TestIntegrationDumpSlowMixedSchemaStrategies(t *testing.T) {
 		}
 	})
 	fallbackQualified := schema + ".fallback_logs"
-	wantWarn := snapshotInconsistentWarning + "\n" + "warning: table \"" + fallbackQualified + "\" has no safe key; using non-resumable normal streaming"
+	wantWarn := snapshotInconsistentWarning + "\n" + "warning: table \"" + fallbackQualified + "\" has no safe key; resuming with ctid (VACUUM or updates can skip or duplicate rows)"
 	if strings.TrimSpace(stderr) != strings.TrimSpace(wantWarn) {
 		t.Fatalf("stderr = %q, want exactly %q", stderr, wantWarn)
 	}
@@ -894,8 +894,8 @@ func TestIntegrationDumpSlowMixedSchemaStrategies(t *testing.T) {
 	}
 	assertStrategyRecords(t, meta.Provenance.Strategies,
 		[]string{schema + ".fallback_logs", schema + ".pk_items", schema + ".uq_codes"},
-		[]KeyStrategy{KeyStrategyNormalStream, KeyStrategyPrimaryKey, KeyStrategyUniqueIndex},
-		[]bool{false, true, true},
+		[]KeyStrategy{KeyStrategyCTID, KeyStrategyPrimaryKey, KeyStrategyUniqueIndex},
+		[]bool{true, true, true},
 	)
 
 	pkLines, err := readNDJSONLines(tableDataPath(dir, metadataTable(t, meta, "pk_items")))

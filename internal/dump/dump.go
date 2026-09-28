@@ -120,8 +120,8 @@ func WithoutTransaction() Option {
 
 // WithSlowConnection enables chunked keyset-paginated streaming for
 // slow or unstable connections. Forces WithoutTransaction internally.
-// Each table uses its primary key, an eligible unique index, or normal
-// streaming with a non-resumable warning when no safe key exists.
+// Each table uses its primary key, an eligible unique index, or ctid
+// resume when no safe key exists. ctid can move after VACUUM or updates.
 func WithSlowConnection() Option {
 	return func(c *config) {
 		c.withoutTransaction = true // ponytail: force no-tx; slow mode and global snapshot are incompatible
@@ -486,12 +486,12 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		var streamErr error
 		plan, hasPlan := dispatchPlans[tableKey(table.Schema, table.Name)]
 		if hasPlan && plan.Resumable {
-			n, streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
-		} else {
-			if hasPlan && plan.Strategy == KeyStrategyNormalStream {
-				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; using non-resumable normal streaming\n",
+			if plan.Strategy == KeyStrategyCTID {
+				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; resuming with ctid (VACUUM or updates can skip or duplicate rows)\n",
 					qualifiedName(table.Schema, table.Name))
 			}
+			n, streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
+		} else {
 			n, streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
 		}
 		if streamErr != nil {
@@ -536,7 +536,7 @@ func buildDispatchPlans(cfg *config, tables []db.Table, chunkPlans map[string]Ke
 		plans := make(map[string]KeyDescriptor, len(tables))
 		for _, table := range tables {
 			key := tableKey(table.Schema, table.Name)
-			plans[key] = SelectKeyDescriptor(table)
+			plans[key] = promoteNoKeyPlan(SelectKeyDescriptor(table))
 		}
 		return plans
 	}

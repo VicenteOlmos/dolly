@@ -1684,7 +1684,7 @@ func assertFallbackWarningsInOrder(t *testing.T, stderr string, qualified ...str
 	t.Helper()
 	var want []string
 	for _, q := range qualified {
-		want = append(want, "warning: table \""+q+"\" has no safe key; using non-resumable normal streaming")
+		want = append(want, "warning: table \""+q+"\" has no safe key; resuming with ctid (VACUUM or updates can skip or duplicate rows)")
 	}
 	pos := 0
 	for _, line := range want {
@@ -1712,9 +1712,9 @@ func TestDumpSlowMixedDispatchAndWarnings(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+		WillReturnRows(sqlmock.NewRows([]string{"note", "ctid"}).AddRow("n", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+		WillReturnRows(sqlmock.NewRows([]string{"body", "ctid"}).AddRow("b", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
@@ -1756,8 +1756,8 @@ func TestDumpSlowMixedDispatchAndWarnings(t *testing.T) {
 	}
 	assertStrategyRecords(t, meta.Provenance.Strategies,
 		[]string{"public.events", "public.logs", "public.notes", "public.users"},
-		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyNormalStream, KeyStrategyNormalStream, KeyStrategyPrimaryKey},
-		[]bool{true, false, false, true},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyCTID, KeyStrategyCTID, KeyStrategyPrimaryKey},
+		[]bool{true, true, true, true},
 	)
 	for _, name := range []string{"logs", "notes", "events"} {
 		if _, err := os.Stat(slowCheckpointPath(dir, db.Table{Schema: "public", Name: name})); err == nil {
@@ -1852,9 +1852,9 @@ func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+		WillReturnRows(sqlmock.NewRows([]string{"note", "ctid"}).AddRow("n", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+		WillReturnRows(sqlmock.NewRows([]string{"body", "ctid"}).AddRow("b", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
@@ -1881,8 +1881,8 @@ func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
 	}
 	assertStrategyRecords(t, meta.Provenance.Strategies,
 		[]string{"public.events", "public.logs", "public.notes", "public.users"},
-		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyNormalStream, KeyStrategyNormalStream, KeyStrategyPrimaryKey},
-		[]bool{true, false, false, true},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyCTID, KeyStrategyCTID, KeyStrategyPrimaryKey},
+		[]bool{true, true, true, true},
 	)
 	if len(meta.Provenance.ChunkTables.Chunked) != 1 || meta.Provenance.ChunkTables.Chunked[0] != "public.users" {
 		t.Fatalf("chunked = %v", meta.Provenance.ChunkTables.Chunked)
@@ -1916,7 +1916,7 @@ func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
 	emptyUniqueIndexMock(mock)
 
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+		WillReturnRows(sqlmock.NewRows([]string{"note", "ctid"}).AddRow("n", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .*").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
@@ -1946,8 +1946,8 @@ func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
 	}
 	assertStrategyRecords(t, meta.Provenance.Strategies,
 		[]string{"public.logs"},
-		[]KeyStrategy{KeyStrategyNormalStream},
-		[]bool{false},
+		[]KeyStrategy{KeyStrategyCTID},
+		[]bool{true},
 	)
 }
 
@@ -1988,7 +1988,7 @@ func TestDumpLegacyArtifactGuardBehavior(t *testing.T) {
 		}
 	})
 
-	t.Run("fallback_chunk_skips_guard", func(t *testing.T) {
+	t.Run("ctid_chunk_hits_guard", func(t *testing.T) {
 		sqlDB, mock, err := sqlmock.New()
 		if err != nil {
 			t.Fatal(err)
@@ -2016,23 +2016,15 @@ func TestDumpLegacyArtifactGuardBehavior(t *testing.T) {
 		mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public", "tenant").WillReturnRows(fksRows)
 		emptyUniqueIndexMock(mock)
 
-		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
-		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
-		mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
-
-		stderr := captureStderr(func() {
-			err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
-				WithSchemas([]string{"public", "tenant"}),
-				WithChunkTables([]QualifiedTable{{Schema: "public", Name: "logs"}}))
-		})
-		if err != nil {
-			t.Fatal(err)
+		err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+			WithSchemas([]string{"public", "tenant"}),
+			WithChunkTables([]QualifiedTable{{Schema: "public", Name: "logs"}}))
+		if err == nil || !strings.Contains(err.Error(), "ambiguous legacy slow artifact") {
+			t.Fatalf("err = %v, want ambiguous legacy rejection because ctid chunking is resumable", err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)
 		}
-		stderr = assertSnapshotInconsistentWarningFirst(t, stderr)
-		assertFallbackWarningsInOrder(t, stderr, "public.logs")
 	})
 }
 
@@ -2105,9 +2097,9 @@ func TestDumpPlanValidatorSeesCanonicalStrategies(t *testing.T) {
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+		WillReturnRows(sqlmock.NewRows([]string{"note", "ctid"}).AddRow("n", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+		WillReturnRows(sqlmock.NewRows([]string{"body", "ctid"}).AddRow("b", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 
@@ -2131,8 +2123,8 @@ func TestDumpPlanValidatorSeesCanonicalStrategies(t *testing.T) {
 
 	assertStrategyRecords(t, seen.Strategies,
 		[]string{"public.events", "public.logs", "public.notes", "public.users"},
-		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyNormalStream, KeyStrategyNormalStream, KeyStrategyPrimaryKey},
-		[]bool{true, false, false, true},
+		[]KeyStrategy{KeyStrategyUniqueIndex, KeyStrategyCTID, KeyStrategyCTID, KeyStrategyPrimaryKey},
+		[]bool{true, true, true, true},
 	)
 
 	meta, err := ReadMetadata(dir)
@@ -2276,9 +2268,9 @@ func TestDumpPlanValidatorDefensiveCopy(t *testing.T) {
 		WithoutArgs().
 		WillReturnRows(sqlmock.NewRows([]string{"code"}).AddRow("a"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"note"}).AddRow("n"))
+		WillReturnRows(sqlmock.NewRows([]string{"note", "ctid"}).AddRow("n", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .*").
-		WillReturnRows(sqlmock.NewRows([]string{"body"}).AddRow("b"))
+		WillReturnRows(sqlmock.NewRows([]string{"body", "ctid"}).AddRow("b", "(0,1)"))
 	mock.ExpectQuery("SELECT .* FROM .* ORDER BY .* LIMIT").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
 

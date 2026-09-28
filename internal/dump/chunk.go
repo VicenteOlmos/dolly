@@ -83,11 +83,11 @@ func PlanChunkStreaming(tables []db.Table, policy *ChunkPolicy, ignored []Ignore
 		if !ok {
 			return nil, prov, fmt.Errorf("%w: chunk table %q not found in selected tables", ErrChunkPolicy, req.Table.Normalized())
 		}
-		plan := SelectKeyDescriptor(table)
+		plan := promoteNoKeyPlan(SelectKeyDescriptor(table))
 		plans[key] = plan
 		qualified := qualifiedName(table.Schema, table.Name)
 		switch plan.Strategy {
-		case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex:
+		case KeyStrategyPrimaryKey, KeyStrategyUniqueIndex, KeyStrategyCTID:
 			prov.Chunked = append(prov.Chunked, qualified)
 		case KeyStrategyNormalStream:
 			prov.Fallback = append(prov.Fallback, qualified)

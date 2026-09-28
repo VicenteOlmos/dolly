@@ -15,6 +15,7 @@ type KeyStrategy string
 const (
 	KeyStrategyPrimaryKey   KeyStrategy = "primary_key"
 	KeyStrategyUniqueIndex  KeyStrategy = "unique_index"
+	KeyStrategyCTID         KeyStrategy = "ctid"
 	KeyStrategyNormalStream KeyStrategy = "normal_stream"
 )
 
@@ -60,6 +61,25 @@ func (d KeyDescriptor) ColumnNames() []string {
 		names[i] = d.Columns[i].Name
 	}
 	return names
+}
+
+// promoteNoKeyPlan turns a normal-stream plan into a ctid resume plan.
+// VACUUM or updates can move ctids, so a retry may skip or duplicate rows.
+func promoteNoKeyPlan(plan KeyDescriptor) KeyDescriptor {
+	if plan.Strategy != KeyStrategyNormalStream {
+		return plan
+	}
+	return ctidKeyDescriptor(plan.TableSchema, plan.TableName)
+}
+
+func ctidKeyDescriptor(schema, name string) KeyDescriptor {
+	return fingerprintDescriptor(KeyDescriptor{
+		Strategy:    KeyStrategyCTID,
+		TableSchema: schema,
+		TableName:   name,
+		Columns:     []KeyColumn{{Name: "ctid", Position: 1, NotNull: true}},
+		Resumable:   true,
+	})
 }
 
 // SelectKeyDescriptor chooses PK, then the shortest safe unique key, or fallback.
