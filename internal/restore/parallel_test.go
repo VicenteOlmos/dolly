@@ -191,7 +191,7 @@ func TestRunParallelRestore_levelOrderingAndWorkerCap(t *testing.T) {
 		return nil
 	}
 	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string) error { return nil }
-	parallelSyncSequences = func(context.Context, execQuerier, []string) error { return nil }
+	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error { return nil }
 	defer func() {
 		parallelLoadTableCopy = orig
 		parallelRestoreSequences = origSeq
@@ -391,7 +391,7 @@ func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
 		t.Fatal("sequence restore must not run after retry failure")
 		return nil
 	}
-	parallelSyncSequences = func(context.Context, execQuerier, []string) error {
+	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error {
 		seqRestoreCalled.Store(true)
 		t.Fatal("sequence sync must not run after retry failure")
 		return nil
@@ -468,7 +468,7 @@ func TestRunParallelRestore_dottedIdentifiers(t *testing.T) {
 		return nil
 	}
 	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string) error { return nil }
-	parallelSyncSequences = func(context.Context, execQuerier, []string) error { return nil }
+	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error { return nil }
 	defer func() {
 		parallelLoadTableCopy = orig
 		parallelRestoreSequences = origSeq
@@ -506,7 +506,7 @@ func TestRestoreSerialWorkersUnchanged(t *testing.T) {
 	emptyUniqueIndexMock(mock)
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "public"."users"`).WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
+	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).WithArgs("public", "users").WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
 	mock.ExpectCommit()
 
 	var events []ProgressEvent

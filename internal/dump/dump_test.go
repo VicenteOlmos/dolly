@@ -853,7 +853,8 @@ func TestDumpCapturesSequences(t *testing.T) {
 
 	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
 		AddRow("public", "users_id_seq", 42, 1)
-	mock.ExpectQuery(`SELECT schemaname, sequencename`).
+	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
+		WithArgs("public", "users").
 		WillReturnRows(seqsRows)
 
 	streamRows := sqlmock.NewRows([]string{"id"}).
@@ -880,6 +881,63 @@ func TestDumpCapturesSequences(t *testing.T) {
 	}
 	if meta.Sequences[0].Name != "users_id_seq" {
 		t.Fatalf("Sequences[0].Name = %q, want users_id_seq", meta.Sequences[0].Name)
+	}
+}
+
+func TestDumpCaptureSequencesScopesToSelectedTables(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1)).
+		AddRow("public", "orders", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)[\s\S]*ORDER BY t\.table_schema, t\.table_name`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true).
+		AddRow("public", "orders", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
+
+	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
+		AddRow("public", "users_id_seq", 10, 1)
+	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
+		WithArgs("public", "users").
+		WillReturnRows(seqsRows)
+
+	streamRows := sqlmock.NewRows([]string{"id"}).AddRow(1)
+	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
+
+	mock.ExpectCommit()
+
+	policy := SelectionPolicy{
+		Includes: []SelectorEntry{{Table: QualifiedTable{Schema: "public", Name: "users"}}},
+	}
+	if err := Dump(context.Background(), sqlDB, dir, WithTableSelection(policy, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Sequences) != 1 || meta.Sequences[0].Name != "users_id_seq" {
+		t.Fatalf("sequences = %+v, want only users_id_seq", meta.Sequences)
 	}
 }
 
@@ -1386,7 +1444,8 @@ func TestDumpCaptureSequencesQueryErrorFailsClosed(t *testing.T) {
 	emptyUniqueIndexMock(mock)
 
 	// pg_sequences query fails (e.g. unreadable system view)
-	mock.ExpectQuery(`SELECT schemaname, sequencename`).
+	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
+		WithArgs("public", "users").
 		WillReturnError(fmt.Errorf("simulated pg_sequences failure"))
 
 	mock.ExpectRollback()
@@ -1440,8 +1499,8 @@ func TestDumpCaptureSequencesScopeErrorFailsClosed(t *testing.T) {
 	// pg_sequences returns a sequence from a schema outside cfg.schemas (public)
 	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
 		AddRow("secret", "token_seq", 42, 1)
-	mock.ExpectQuery(`SELECT schemaname, sequencename`).
-		WithArgs("public").
+	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
+		WithArgs("public", "users").
 		WillReturnRows(seqsRows)
 
 	mock.ExpectRollback()

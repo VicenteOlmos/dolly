@@ -300,7 +300,7 @@ func runParallelRestore(
 	if err := parallelRestoreSequences(ctx, seqQ, meta, schemaFilter); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
-	if err := parallelSyncSequences(ctx, seqQ, schemaFilter); err != nil {
+	if err := parallelSyncSequences(ctx, seqQ, meta.Tables); err != nil {
 		return fmt.Errorf("sync sequences to data: %w", err)
 	}
 	if err := parallelRemoveManifest(cfg.partialStatePath); err != nil {
