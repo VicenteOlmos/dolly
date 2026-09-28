@@ -1277,15 +1277,19 @@ func TestIntegrationParallelRestoreRetryRetainsCommittedManifest(t *testing.T) {
 	corruptParallelRestoreChildData(t, dir)
 	truncateParallelRestoreTables(t, conn, ctx)
 
+	dsn := os.Getenv(pgintegration.EnvDSN)
+	target := PartialStateTargetFromConninfo(dsn)
+	if target.empty() {
+		t.Fatal("integration DSN did not resolve a restore target")
+	}
 	manifestPath := filepath.Join(dir, "parallel-retry-state.json")
 	if err := WritePartialStateManifest(manifestPath, PartialStateManifest{
+		Target:    target,
 		Committed: []string{"public.dolly_par_restore_parent"},
 		Pending:   []string{"public.dolly_par_restore_child", "public.dolly_par_restore_grandchild"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	dsn := os.Getenv(pgintegration.EnvDSN)
 	err := Restore(ctx, conn, dir, parallelRestoreOpts(dsn, manifestPath, 2, "public")...)
 	waitIntegrationDBIdle(conn, 2*time.Second)
 	if err == nil {
@@ -1295,6 +1299,9 @@ func TestIntegrationParallelRestoreRetryRetainsCommittedManifest(t *testing.T) {
 	manifest, err := LoadPartialStateManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !manifest.Target.same(target) {
+		t.Fatalf("target = %+v, want %+v", manifest.Target, target)
 	}
 	if len(manifest.Committed) != 1 || manifest.Committed[0] != "public.dolly_par_restore_parent" {
 		t.Fatalf("committed = %v, want retained seeded parent", manifest.Committed)
