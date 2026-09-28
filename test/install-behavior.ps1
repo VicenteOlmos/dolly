@@ -131,6 +131,87 @@ if ((Get-Content (Join-Path $Env:DOLLY_INSTALL_DIR "dolly.exe") -Raw).Trim() -ne
 }
 Write-Host "PASS checksum-mismatch: fails with DOLLY_ALLOW_UNVERIFIED=1 when checksums.txt is corrupt" -ForegroundColor Green
 
+
+function New-MockFromArchive {
+    param($MockDir, $ArchiveSrc)
+    New-Item -ItemType Directory -Force $MockDir | Out-Null
+    Copy-Item $ArchiveSrc (Join-Path $MockDir "dolly_windows_x86_64.zip")
+}
+
+function Invoke-InstallExpectFailure {
+    param($MockDir)
+    $Env:DOLLY_REPO              = "test/test"
+    $Env:DOLLY_INSTALL_DIR       = Join-Path $tmpdir "install_dir_archive"
+    $Env:DOLLY_MOCK_DOWNLOAD_DIR = $MockDir
+    $Env:DOLLY_VERSION           = "latest"
+    $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
+    try { & $install_ps1 2>&1 | Out-Null; return 0 } catch { return 1 }
+}
+
+function Invoke-InstallExpectSuccess {
+    param($MockDir)
+    $Env:DOLLY_REPO              = "test/test"
+    $Env:DOLLY_INSTALL_DIR       = Join-Path $tmpdir "install_dir_valid"
+    $Env:DOLLY_MOCK_DOWNLOAD_DIR = $MockDir
+    $Env:DOLLY_VERSION           = "latest"
+    $Env:DOLLY_ALLOW_UNVERIFIED  = "1"
+    try { & $install_ps1 2>&1 | Out-Null; return 0 } catch { return 1 }
+}
+
+$mock_valid = Join-Path $tmpdir "mock_valid_root"
+New-MockFromArchive $mock_valid $asset_zip
+if ((Invoke-InstallExpectSuccess $mock_valid) -ne 0) {
+    Write-Host "FAIL valid root dolly.exe: expected success" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+if (-not (Test-Path (Join-Path $Env:DOLLY_INSTALL_DIR "dolly.exe"))) {
+    Write-Host "FAIL valid root dolly.exe: binary not installed" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+Write-Host "PASS valid root dolly.exe: installs from release-style archive" -ForegroundColor Green
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+function New-ZipWithEntryName {
+    param([string]$Path, [string]$EntryName, [string]$ContentPath)
+    if (Test-Path $Path) { Remove-Item -Force $Path }
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+    try {
+        $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $entry = $zip.CreateEntry($EntryName)
+            $in = [System.IO.File]::OpenRead($ContentPath)
+            try {
+                $out = $entry.Open()
+                try { $in.CopyTo($out) } finally { $out.Dispose() }
+            } finally { $in.Dispose() }
+        } finally { $zip.Dispose() }
+    } finally { $fs.Dispose() }
+}
+
+$traversal_zip = Join-Path $tmpdir "traversal.zip"
+New-ZipWithEntryName $traversal_zip "../dolly.exe" $fake_exe
+$mock_traversal = Join-Path $tmpdir "mock_traversal"
+New-MockFromArchive $mock_traversal $traversal_zip
+if ((Invoke-InstallExpectFailure $mock_traversal) -eq 0) {
+    Write-Host "FAIL traversal archive: expected failure" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+Write-Host "PASS traversal archive: rejects ../dolly.exe member" -ForegroundColor Green
+
+$nested_zip = Join-Path $tmpdir "nested.zip"
+New-ZipWithEntryName $nested_zip "subdir/dolly.exe" $fake_exe
+$mock_nested = Join-Path $tmpdir "mock_nested"
+New-MockFromArchive $mock_nested $nested_zip
+if ((Invoke-InstallExpectFailure $mock_nested) -eq 0) {
+    Write-Host "FAIL nested archive: expected failure" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+Write-Host "PASS nested archive: rejects subdir/dolly.exe member" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "All install.ps1 behavior tests passed." -ForegroundColor Green
 [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")

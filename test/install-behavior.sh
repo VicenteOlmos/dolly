@@ -108,5 +108,43 @@ if [ "$(cat "$tmpdir/install_dir/dolly")" != "old binary" ]; then
 fi
 pass "corrupt checksum leaves existing target unchanged"
 
+
+make_mock_from_archive() {
+	mock_dir="$1"
+	archive_src="$2"
+	mkdir -p "$mock_dir"
+	cp "$archive_src" "$mock_dir/$asset_name"
+}
+
+make_mock_from_archive "$tmpdir/mock_valid_root" "$tmpdir/$asset_name"
+if ! run_install "$tmpdir/mock_valid_root" "DOLLY_ALLOW_UNVERIFIED=1"; then
+	fail_test "valid root dolly: expected success with DOLLY_ALLOW_UNVERIFIED=1"
+fi
+if [ ! -x "$tmpdir/install_dir/dolly" ]; then
+	fail_test "valid root dolly: binary not installed"
+fi
+pass "valid root dolly: installs from release-style archive"
+
+traversal_archive="$tmpdir/traversal.tar.gz"
+printf '#!/bin/sh\necho pwned\n' > "$tmpdir/payload"
+chmod +x "$tmpdir/payload"
+tar -czf "$traversal_archive" -C "$tmpdir" --transform='s,payload,../dolly,' payload
+make_mock_from_archive "$tmpdir/mock_traversal" "$traversal_archive"
+if run_install "$tmpdir/mock_traversal" "DOLLY_ALLOW_UNVERIFIED=1"; then
+	fail_test "traversal archive: expected failure"
+fi
+pass "traversal archive: rejects ../dolly member"
+
+nested_archive="$tmpdir/nested.tar.gz"
+mkdir -p "$tmpdir/nested-root/subdir"
+echo '#!/bin/sh' > "$tmpdir/nested-root/subdir/dolly"
+chmod +x "$tmpdir/nested-root/subdir/dolly"
+tar -czf "$nested_archive" -C "$tmpdir/nested-root" subdir/dolly
+make_mock_from_archive "$tmpdir/mock_nested" "$nested_archive"
+if run_install "$tmpdir/mock_nested" "DOLLY_ALLOW_UNVERIFIED=1"; then
+	fail_test "nested archive: expected failure"
+fi
+pass "nested archive: rejects subdir/dolly member"
+
 echo ""
 printf '%s\n' "All install.sh behavior tests passed."

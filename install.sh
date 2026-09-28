@@ -92,6 +92,101 @@ esac
 
 need_cmd tar
 
+
+clean_archive_name() {
+	name="$1"
+	name="${name#./}"
+	name="${name%/}"
+	printf '%s' "$name"
+}
+
+validate_archive_path_raw() {
+	name="$1"
+	case "$name" in
+		""|".")
+			die "archive contains unexpected entry $name"
+			;;
+	esac
+	case "$name" in
+		/*)
+			die "archive absolute path rejected: $name"
+			;;
+	esac
+	case "$name" in
+		..|../*|*/..|*/../*)
+			die "archive path traversal rejected: $name"
+			;;
+	esac
+}
+
+validate_tar_member_name() {
+	raw_name="$1"
+	want_name="$2"
+	validate_archive_path_raw "$raw_name"
+	clean="$(clean_archive_name "$raw_name")"
+	case "$clean" in
+		""|".")
+			die "archive contains unexpected entry $raw_name"
+			;;
+	esac
+	case "$clean" in
+		..|../*|*/..|*/../*)
+			die "archive path traversal rejected: $raw_name"
+			;;
+	esac
+	case "$clean" in
+		*/*)
+			die "archive contains nested path $raw_name"
+			;;
+	esac
+	if [ "$clean" != "$want_name" ]; then
+		die "unexpected archive member $raw_name"
+	fi
+}
+
+extract_validated_tar() {
+	archive="$1"
+	extract_dir="$2"
+	want_name="dolly"
+	found=0
+
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		type="$(printf '%s' "$line" | cut -c1)"
+		name="$(printf '%s' "$line" | awk '{
+			for (i = 6; i <= NF; i++) {
+				if (i > 6) {
+					printf " "
+				}
+				printf "%s", $i
+			}
+		}')"
+		case "$name" in
+			*" -> "*)
+				name="${name%% -> *}"
+				;;
+		esac
+		validate_tar_member_name "$name" "$want_name"
+		case "$type" in
+			-)
+				;;
+			*)
+				die "archive selected entry $name is not a regular file"
+				;;
+		esac
+		found=$((found + 1))
+	done <<EOF
+$(tar -tvf "$archive")
+EOF
+
+	if [ "$found" -ne 1 ]; then
+		die "archive did not contain exactly one $want_name binary"
+	fi
+
+	mkdir -p "$extract_dir"
+	tar -xzf "$archive" -C "$extract_dir" "$want_name"
+}
+
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/dolly-install.XXXXXX")"
 trap cleanup EXIT INT HUP TERM
 
@@ -120,12 +215,16 @@ if download "$base_url/checksums.txt" "$checksums"; then
 			( cd "$tmpdir" && printf '%s  %s\n' "$expected_sha" "$asset_name" | sha256sum -c - )
 		elif command -v shasum >/dev/null 2>&1; then
 			( cd "$tmpdir" && printf '%s  %s\n' "$expected_sha" "$asset_name" | shasum -a 256 -c - )
+		elif command -v openssl >/dev/null 2>&1; then
+			actual_sha="$(openssl dgst -sha256 "$archive" | awk '{ print $NF }' | tr '[:upper:]' '[:lower:]')"
+			expected_lower="$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')"
+			[ "$actual_sha" = "$expected_lower" ] || die "checksum mismatch for $asset_name"
 		elif [ "$DOLLY_VERSION" != "latest" ]; then
-			die "checksum verification required for tagged release but sha256sum or shasum is not available"
+			die "checksum verification required for tagged release but sha256sum, shasum, or openssl is not available"
 		elif [ "${DOLLY_ALLOW_UNVERIFIED:-}" = "1" ]; then
-			warn "checksums.txt was found but sha256sum or shasum is required to verify; skipping checksum verification (DOLLY_ALLOW_UNVERIFIED=1)"
+			warn "checksums.txt was found but sha256sum, shasum, or openssl is required to verify; skipping checksum verification (DOLLY_ALLOW_UNVERIFIED=1)"
 		else
-			die "checksum verification required: sha256sum or shasum is not available (set DOLLY_ALLOW_UNVERIFIED=1 to skip)"
+			die "checksum verification required: sha256sum, shasum, or openssl is not available (set DOLLY_ALLOW_UNVERIFIED=1 to skip)"
 		fi
 	elif [ "$DOLLY_VERSION" != "latest" ]; then
 		die "checksum verification required for tagged release but $asset_name is not listed in checksums.txt"
@@ -143,11 +242,9 @@ else
 fi
 
 extract_dir="$tmpdir/extract"
-mkdir -p "$extract_dir"
-tar -xzf "$archive" -C "$extract_dir"
-
-binary_path="$(find "$extract_dir" -type f -name dolly | head -n 1)"
-[ -n "$binary_path" ] || die "archive did not contain a dolly binary"
+extract_validated_tar "$archive" "$extract_dir"
+binary_path="$extract_dir/dolly"
+[ -f "$binary_path" ] || die "archive did not contain a dolly binary"
 chmod 755 "$binary_path"
 
 target="$DOLLY_INSTALL_DIR/dolly"
