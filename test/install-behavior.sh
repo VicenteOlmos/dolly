@@ -128,7 +128,11 @@ pass "valid root dolly: installs from release-style archive"
 traversal_archive="$tmpdir/traversal.tar.gz"
 printf '#!/bin/sh\necho pwned\n' > "$tmpdir/payload"
 chmod +x "$tmpdir/payload"
-tar -czf "$traversal_archive" -C "$tmpdir" --transform='s,payload,../dolly,' payload
+if tar --version 2>/dev/null | grep -q 'GNU tar'; then
+	tar -czf "$traversal_archive" -C "$tmpdir" --transform='s,payload,../dolly,' payload
+else
+	tar -czf "$traversal_archive" -C "$tmpdir" -s ',payload,../dolly,' payload
+fi
 make_mock_from_archive "$tmpdir/mock_traversal" "$traversal_archive"
 if run_install "$tmpdir/mock_traversal" "DOLLY_ALLOW_UNVERIFIED=1"; then
 	fail_test "traversal archive: expected failure"

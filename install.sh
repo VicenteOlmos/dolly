@@ -153,13 +153,15 @@ extract_validated_tar() {
 	while IFS= read -r line; do
 		[ -n "$line" ] || continue
 		type="$(printf '%s' "$line" | cut -c1)"
+		# GNU tar: mode owner/group size date time name (name at field 6).
+		# BSD tar: mode links owner group size month day time name (name at field 9).
 		name="$(printf '%s' "$line" | awk '{
-			for (i = 6; i <= NF; i++) {
-				if (i > 6) {
-					printf " "
-				}
-				printf "%s", $i
+			start = ($2 ~ /^[0-9]+$/) ? 9 : 6
+			name = ""
+			for (i = start; i <= NF; i++) {
+				name = (name == "" ? $i : name " " $i)
 			}
+			print name
 		}')"
 		case "$name" in
 			*" -> "*)

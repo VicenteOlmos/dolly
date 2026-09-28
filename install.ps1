@@ -90,11 +90,14 @@ function Extract-ValidatedZip {
                 die "archive selected entry $entryName is not a regular file"
             }
             Test-ZipMemberName $entryName $WantName
-            $unixMode = ($entry.ExternalAttributes -shr 16) -band 0xF000
-            if ($unixMode -eq 0xA000) {
-                die "archive contains symlink $entryName"
-            }
-            if ($unixMode -eq 0x4000) {
+            $attrs = $entry.ExternalAttributes
+            $unixMode = ($attrs -shr 16) -band 0xF000
+            $dosAttr = $attrs -band 0xFF
+            if ($unixMode -ne 0) {
+                if ($unixMode -ne 0x8000) {
+                    die "archive selected entry $entryName is not a regular file"
+                }
+            } elseif (($dosAttr -band 0x10) -ne 0) {
                 die "archive selected entry $entryName is not a regular file"
             }
             $validEntries += $entry

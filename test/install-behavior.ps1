@@ -212,6 +212,35 @@ if ((Invoke-InstallExpectFailure $mock_nested) -eq 0) {
 }
 Write-Host "PASS nested archive: rejects subdir/dolly.exe member" -ForegroundColor Green
 
+function New-ZipWithDosDirectoryAttribute {
+    param([string]$Path, [string]$ContentPath)
+    if (Test-Path $Path) { Remove-Item -Force $Path }
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::CreateNew)
+    try {
+        $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $entry = $zip.CreateEntry("dolly.exe")
+            $entry.ExternalAttributes = 0x10
+            $in = [System.IO.File]::OpenRead($ContentPath)
+            try {
+                $out = $entry.Open()
+                try { $in.CopyTo($out) } finally { $out.Dispose() }
+            } finally { $in.Dispose() }
+        } finally { $zip.Dispose() }
+    } finally { $fs.Dispose() }
+}
+
+$dos_dir_zip = Join-Path $tmpdir "dos-dir.zip"
+New-ZipWithDosDirectoryAttribute $dos_dir_zip $fake_exe
+$mock_dos_dir = Join-Path $tmpdir "mock_dos_dir"
+New-MockFromArchive $mock_dos_dir $dos_dir_zip
+if ((Invoke-InstallExpectFailure $mock_dos_dir) -eq 0) {
+    Write-Host "FAIL dos directory attribute: expected failure" -ForegroundColor Red
+    [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
+    exit 1
+}
+Write-Host "PASS dos directory attribute: rejects dolly.exe marked as a directory" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "All install.ps1 behavior tests passed." -ForegroundColor Green
 [Environment]::SetEnvironmentVariable("Path", $original_user_path, "User")
