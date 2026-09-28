@@ -3,6 +3,7 @@ package restore
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
@@ -109,6 +110,12 @@ func TestBuildRestoreLevels_cycleDeterministic(t *testing.T) {
 		want := []string{"public.a", "public.b"}
 		if !reflect.DeepEqual(cycle.Tables, want) {
 			t.Fatalf("cycle tables = %v, want %v", cycle.Tables, want)
+		}
+		if strings.Contains(err.Error(), "workers=1") {
+			t.Fatalf("cycle error recommends workers=1: %v", err)
+		}
+		if !strings.Contains(err.Error(), "break the cycle") {
+			t.Fatalf("cycle error = %v", err)
 		}
 	}
 	_, err := BuildRestoreLevels([]db.Table{

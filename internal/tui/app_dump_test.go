@@ -1134,3 +1134,16 @@ func TestAppDumpRestoreFromHistoryMsg(t *testing.T) {
 		t.Fatalf("statusMsg = %q, want restore complete", stripANSIForGolden(app.statusMsg))
 	}
 }
+
+func TestRestoreNeedsConfirmParallelWorkers(t *testing.T) {
+	app := &App{cfg: config.DefaultConfig()}
+	needs, msg := app.restoreNeedsConfirm(false)
+	if needs {
+		t.Fatalf("serial restore confirm = %v %q", needs, msg)
+	}
+	app.cfg.Restore.Workers = 4
+	needs, msg = app.restoreNeedsConfirm(false)
+	if !needs || !strings.Contains(msg, "non-atomic parallel restore") {
+		t.Fatalf("parallel confirm = %v %q", needs, msg)
+	}
+}

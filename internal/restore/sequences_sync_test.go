@@ -78,3 +78,33 @@ func TestSyncSequencesToDataSkipsSerialOnAbsentTable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSyncSequencesToDataBatchesTableLookups(t *testing.T) {
+	old := sequenceSyncBatch
+	sequenceSyncBatch = 1
+	t.Cleanup(func() { sequenceSyncBatch = old })
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	tables := []db.Table{
+		{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id"}}},
+		{Schema: "public", Name: "orders", Columns: []db.Column{{Name: "id"}}},
+	}
+	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
+		WithArgs("public", "users").
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).AddRow("public", "users", "id"))
+	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
+		WithArgs("public", "orders").
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).AddRow("public", "orders", "id"))
+	mock.ExpectExec(`pg_get_serial_sequence\('"public"\."users"', 'id'\)`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`pg_get_serial_sequence\('"public"\."orders"', 'id'\)`).WillReturnResult(sqlmock.NewResult(1, 1))
+	if err := SyncSequencesToData(context.Background(), sqlDB, tables); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

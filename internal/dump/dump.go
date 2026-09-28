@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -318,7 +319,14 @@ func WithoutSequences() Option {
 }
 
 func dumpSnapshotConsistent(cfg *config) bool {
-	return !cfg.slowConnection && !hasChunkPolicy(cfg)
+	return !cfg.slowConnection && !hasChunkPolicy(cfg) && !cfg.withoutTransaction
+}
+
+func warnSnapshotInconsistent(cfg *config) {
+	if dumpSnapshotConsistent(cfg) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: dump is not snapshot-consistent; tables are read outside a shared snapshot\n")
 }
 
 func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
@@ -464,9 +472,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
-	if !dumpSnapshotConsistent(&cfg) {
-		fmt.Fprintf(os.Stderr, "warning: dump is not snapshot-consistent; chunk/slow mode reads tables outside a shared snapshot\n")
-	}
+	warnSnapshotInconsistent(&cfg)
 
 	for i, table := range sorted {
 		emitProgress(&cfg, ProgressEvent{
@@ -611,19 +617,47 @@ func validateDumpOptions(cfg *config) error {
 	return nil
 }
 
+// maxSequenceTablesPerQuery keeps two bind parameters per table under
+// PostgreSQL's 65535-parameter limit.
+const maxSequenceTablesPerQuery = 16000
+
+// sequenceLookupBatch is the table count per captureSequences query.
+// Tests shrink it to prove lookups are split.
+var sequenceLookupBatch = maxSequenceTablesPerQuery
+
 // captureSequences reads sequence last values for sequences owned by columns
 // on the given tables (pg_depend deptype a/i). Standalone sequences are omitted.
 func captureSequences(ctx context.Context, q querier, tables []db.Table) ([]SequenceState, error) {
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	tablePredicates := make([]string, 0, len(tables))
-	args := make([]any, 0, len(tables)*2)
-	for i, tbl := range tables {
-		base := i*2 + 1
-		tablePredicates = append(tablePredicates, fmt.Sprintf("($%d,$%d)", base, base+1))
-		args = append(args, tbl.Schema, tbl.Name)
+	batchSize := sequenceLookupBatch
+	if batchSize < 1 {
+		batchSize = maxSequenceTablesPerQuery
 	}
+	var seqs []SequenceState
+	for start := 0; start < len(tables); start += batchSize {
+		end := start + batchSize
+		if end > len(tables) {
+			end = len(tables)
+		}
+		batch, err := captureSequenceBatch(ctx, q, tables[start:end])
+		if err != nil {
+			return nil, err
+		}
+		seqs = append(seqs, batch...)
+	}
+	sort.Slice(seqs, func(i, j int) bool {
+		if seqs[i].Schema != seqs[j].Schema {
+			return seqs[i].Schema < seqs[j].Schema
+		}
+		return seqs[i].Name < seqs[j].Name
+	})
+	return seqs, nil
+}
+
+func captureSequenceBatch(ctx context.Context, q querier, tables []db.Table) ([]SequenceState, error) {
+	predicates, args := tableTuplePredicates(tables)
 	query := fmt.Sprintf(`
 		SELECT seq_ns.nspname, seq.relname, ps.last_value, ps.start_value
 		FROM pg_class seq
@@ -635,7 +669,7 @@ func captureSequences(ctx context.Context, q querier, tables []db.Table) ([]Sequ
 		JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = dep.refobjsubid AND NOT a.attisdropped
 		WHERE seq.relkind = 'S'
 		  AND (tbl_ns.nspname, tbl.relname) IN (%s)
-		ORDER BY seq_ns.nspname, seq.relname`, strings.Join(tablePredicates, ", "))
+		ORDER BY seq_ns.nspname, seq.relname`, predicates)
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -667,6 +701,17 @@ func captureSequences(ctx context.Context, q querier, tables []db.Table) ([]Sequ
 		return nil, fmt.Errorf("list sequences: %w", err)
 	}
 	return seqs, nil
+}
+
+func tableTuplePredicates(tables []db.Table) (string, []any) {
+	predicates := make([]string, len(tables))
+	args := make([]any, 0, len(tables)*2)
+	for i, tbl := range tables {
+		base := i*2 + 1
+		predicates[i] = fmt.Sprintf("($%d,$%d)", base, base+1)
+		args = append(args, tbl.Schema, tbl.Name)
+	}
+	return strings.Join(predicates, ", "), args
 }
 
 func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, outputDir string, cfg *config) error {
@@ -707,6 +752,7 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 	if err != nil {
 		return fmt.Errorf("write metadata: %w", err)
 	}
+	warnSnapshotInconsistent(cfg)
 
 	for i, table := range included {
 		emitProgress(cfg, ProgressEvent{
