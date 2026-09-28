@@ -46,3 +46,14 @@ func TestOpenStoreEncryptFailsClosed(t *testing.T) {
 		t.Fatalf("expected ErrEncryptKey, got %v", err)
 	}
 }
+
+func TestOpenStoreDefaultEncryptRequiresKey(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.SaveConnections = true
+	// Connections.Encrypt left false; OpenStore defaults encrypt to true.
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "")
+	_, err := OpenStore(cfg, filepath.Join(t.TempDir()))
+	if err != ErrEncryptKey {
+		t.Fatalf("expected ErrEncryptKey when default encrypt is on, got %v", err)
+	}
+}

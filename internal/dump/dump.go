@@ -317,6 +317,10 @@ func WithoutSequences() Option {
 	}
 }
 
+func dumpSnapshotConsistent(cfg *config) bool {
+	return !cfg.slowConnection && !hasChunkPolicy(cfg)
+}
+
 func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 	if cfg.provenance == nil {
 		return nil
@@ -330,6 +334,7 @@ func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 		}
 	}
 	p.TotalRowEstimate = total
+	p.SnapshotConsistent = dumpSnapshotConsistent(cfg)
 	return &p
 }
 
@@ -442,14 +447,9 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	}
 	assignDataFiles(sorted)
 
-	seqSchemas := cfg.schemas
-	if cfg.selection != nil && (len(cfg.selection.Includes) > 0 || len(cfg.selection.Excludes) > 0) {
-		seqSchemas = schemasFromTables(tables)
-	}
-
 	var sequences []SequenceState
 	if !cfg.skipSequences {
-		seqs, err := captureSequences(ctx, q, seqSchemas)
+		seqs, err := captureSequences(ctx, q, sorted)
 		if err != nil {
 			return fmt.Errorf("capture sequences: %w", err)
 		}
@@ -464,6 +464,10 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		return fmt.Errorf("write metadata: %w", err)
 	}
 
+	if !dumpSnapshotConsistent(&cfg) {
+		fmt.Fprintf(os.Stderr, "warning: dump is not snapshot-consistent; chunk/slow mode reads tables outside a shared snapshot\n")
+	}
+
 	for i, table := range sorted {
 		emitProgress(&cfg, ProgressEvent{
 			Phase:   "table_start",
@@ -472,20 +476,22 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Total:   len(sorted),
 			Elapsed: time.Since(startedAt),
 		})
+		var n int64
 		var streamErr error
 		plan, hasPlan := dispatchPlans[tableKey(table.Schema, table.Name)]
 		if hasPlan && plan.Resumable {
-			streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
+			n, streamErr = streamTableSlow(ctx, q, table, outputDir, cfg.rowTransform, cfg.slowRetry, cfg.slowChunkSize)
 		} else {
 			if hasPlan && plan.Strategy == KeyStrategyNormalStream {
 				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; using non-resumable normal streaming\n",
 					qualifiedName(table.Schema, table.Name))
 			}
-			streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
+			n, streamErr = streamTable(ctx, q, table, outputDir, cfg.rowTransform)
 		}
 		if streamErr != nil {
 			return streamErr
 		}
+		sorted[i].RowCount = rowCountPtr(n)
 		emitProgress(&cfg, ProgressEvent{
 			Phase:   "table_end",
 			Table:   table.Name,
@@ -493,6 +499,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			Total:   len(sorted),
 			Elapsed: time.Since(startedAt),
 		})
+	}
+
+	metaPath, err = writeMetadata(outputDir, sorted, nil, cfg.schemas, sequences, provenanceForWrite(&cfg, sorted))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
 	}
 
 	if err := os.Rename(metaPath, filepath.Join(outputDir, "metadata.json")); err != nil {
@@ -600,24 +611,31 @@ func validateDumpOptions(cfg *config) error {
 	return nil
 }
 
-// captureSequences reads sequence last values for user schemas.
-func captureSequences(ctx context.Context, q querier, schemas []string) ([]SequenceState, error) {
-	query := `
-		SELECT schemaname, sequencename, last_value, start_value
-		FROM pg_sequences
-		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-		  AND schemaname NOT LIKE 'pg_temp_%'
-		  AND schemaname NOT LIKE 'pg_toast_%'`
-	var args []any
-	if len(schemas) > 0 {
-		placeholders := make([]string, len(schemas))
-		for i, s := range schemas {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-			args = append(args, s)
-		}
-		query += " AND schemaname IN (" + strings.Join(placeholders, ",") + ")"
+// captureSequences reads sequence last values for sequences owned by columns
+// on the given tables (pg_depend deptype a/i). Standalone sequences are omitted.
+func captureSequences(ctx context.Context, q querier, tables []db.Table) ([]SequenceState, error) {
+	if len(tables) == 0 {
+		return nil, nil
 	}
-	query += " ORDER BY schemaname, sequencename"
+	tablePredicates := make([]string, 0, len(tables))
+	args := make([]any, 0, len(tables)*2)
+	for i, tbl := range tables {
+		base := i*2 + 1
+		tablePredicates = append(tablePredicates, fmt.Sprintf("($%d,$%d)", base, base+1))
+		args = append(args, tbl.Schema, tbl.Name)
+	}
+	query := fmt.Sprintf(`
+		SELECT seq_ns.nspname, seq.relname, ps.last_value, ps.start_value
+		FROM pg_class seq
+		JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
+		JOIN pg_sequences ps ON ps.schemaname = seq_ns.nspname AND ps.sequencename = seq.relname
+		JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
+		JOIN pg_class tbl ON tbl.oid = dep.refobjid
+		JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
+		JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = dep.refobjsubid AND NOT a.attisdropped
+		WHERE seq.relkind = 'S'
+		  AND (tbl_ns.nspname, tbl.relname) IN (%s)
+		ORDER BY seq_ns.nspname, seq.relname`, strings.Join(tablePredicates, ", "))
 
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -720,9 +738,11 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 		if pkErr == nil {
 			orderCol = pkCol
 		}
-		if err := streamTableFiltered(ctx, q, table, outputDir, clauses, cfg.rowTransform, orderCol); err != nil {
+		n, err := streamTableFiltered(ctx, q, table, outputDir, clauses, cfg.rowTransform, orderCol)
+		if err != nil {
 			return err
 		}
+		included[i].RowCount = rowCountPtr(n)
 		emitProgress(cfg, ProgressEvent{
 			Phase:   "table_end",
 			Table:   table.Name,
@@ -730,6 +750,11 @@ func dumpSubset(ctx context.Context, q querier, tx *sql.Tx, tables []db.Table, o
 			Total:   len(included),
 			Elapsed: time.Since(startedAt),
 		})
+	}
+
+	metaPath, err = writeMetadata(outputDir, included, manifest, cfg.schemas, nil, provenanceForWrite(cfg, included))
+	if err != nil {
+		return fmt.Errorf("write metadata: %w", err)
 	}
 
 	if err := os.Rename(metaPath, filepath.Join(outputDir, "metadata.json")); err != nil {

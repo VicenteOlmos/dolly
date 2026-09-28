@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 func TestStripJSONC(t *testing.T) {
@@ -189,9 +191,10 @@ func TestWriteConfigFileRenameFailurePreservesDestination(t *testing.T) {
 		t.Fatalf("destination = %q, %v; want old, nil", got, err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != wantMode {
-		t.Fatalf("destination mode = %v, %v; want %o, nil", info.Mode(), err, wantMode)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
 	}
+	testutil.AssertFilePerm(t, info.Mode(), wantMode, "destination mode")
 	staged, err := filepath.Glob(filepath.Join(dir, ".config.jsonc.tmp-*"))
 	if err != nil || len(staged) != 0 {
 		t.Fatalf("staged files = %v, %v; want none, nil", staged, err)

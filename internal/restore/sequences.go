@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
@@ -147,29 +148,32 @@ func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.Sequ
 	return true, nil
 }
 
-// SyncSequencesToData advances every serial/identity sequence on the target
-// database to the max value of its owning column. This is necessary when data
-// was loaded with explicit IDs (bypassing nextval), because pg_sequences
-// tracks nextval calls, not the actual max ID in the table.
-func SyncSequencesToData(ctx context.Context, q execQuerier, schemas []string) error {
-	if len(schemas) == 0 {
+// SyncSequencesToData advances serial/identity sequences for restored tables
+// to the max value of their owning columns.
+func SyncSequencesToData(ctx context.Context, q execQuerier, tables []db.Table) error {
+	if len(tables) == 0 {
 		return nil
 	}
-	placeholders := make([]string, len(schemas))
-	args := make([]any, len(schemas))
-	for i, s := range schemas {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = s
+	restoredColumns := make(map[string]bool)
+	tablePredicates := make([]string, 0, len(tables))
+	args := make([]any, 0, len(tables)*2)
+	for i, tbl := range tables {
+		base := i*2 + 1
+		tablePredicates = append(tablePredicates, fmt.Sprintf("($%d,$%d)", base, base+1))
+		args = append(args, tbl.Schema, tbl.Name)
+		for _, col := range tbl.Columns {
+			restoredColumns[tbl.Schema+"\x00"+tbl.Name+"\x00"+col.Name] = true
+		}
 	}
 	query := fmt.Sprintf(`
 		SELECT table_schema, table_name, column_name
 		FROM information_schema.columns
-		WHERE table_schema IN (%s)
+		WHERE (table_schema, table_name) IN (%s)
 		  AND (
 		    column_default LIKE 'nextval%%'
 		    OR identity_generation IS NOT NULL
 		  )
-		ORDER BY table_schema, table_name, ordinal_position`, strings.Join(placeholders, ", "))
+		ORDER BY table_schema, table_name, ordinal_position`, strings.Join(tablePredicates, ", "))
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("list serial columns: %w", err)
@@ -192,6 +196,9 @@ func SyncSequencesToData(ctx context.Context, q execQuerier, schemas []string) e
 	}
 
 	for _, c := range cols {
+		if !restoredColumns[c.schema+"\x00"+c.table+"\x00"+c.column] {
+			continue
+		}
 		qualifiedTable := quoteQualifiedTable(c.schema, c.table)
 		setvalSQL := fmt.Sprintf(
 			`SELECT CASE WHEN m.max_value IS NULL THEN NULL ELSE setval(pg_get_serial_sequence(%s, %s), m.max_value, true) END FROM (SELECT max(%s) AS max_value FROM %s) AS m`,

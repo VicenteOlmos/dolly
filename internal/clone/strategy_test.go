@@ -18,6 +18,7 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 	"github.com/VicenteOlmos/dolly/internal/restore"
+	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
 // mockCommandRunner records calls for verification.
@@ -803,9 +804,7 @@ func TestReplicationStrategyProgressEvent(t *testing.T) {
 	if events[0].Current != 1 || events[0].Total != 1 {
 		t.Fatalf("Current=%d Total=%d, want 1/1", events[0].Current, events[0].Total)
 	}
-	if events[0].Elapsed <= 0 {
-		t.Fatalf("Elapsed = %v, want > 0", events[0].Elapsed)
-	}
+	testutil.AssertElapsedPositive(t, events[0].Elapsed, "event")
 	// Second event is the completion message (same phase, same step index)
 	if events[1].Phase != "running_pg_basebackup" {
 		t.Fatalf("event[1] Phase = %q, want running_pg_basebackup", events[1].Phase)
@@ -2120,9 +2119,7 @@ func TestSchemaReplayStrategyProgressEventOrdering(t *testing.T) {
 	if events[0].Total != 4 {
 		t.Fatalf("event[0] Total = %d, want 4", events[0].Total)
 	}
-	if events[0].Elapsed <= 0 {
-		t.Fatalf("event[0] Elapsed = %v, want > 0", events[0].Elapsed)
-	}
+	testutil.AssertElapsedPositive(t, events[0].Elapsed, "event[0]")
 }
 
 func TestSchemaReplayStrategyProgressEventWithCreate(t *testing.T) {
