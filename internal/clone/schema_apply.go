@@ -25,6 +25,7 @@ type schemaColumn struct {
 	ordinalPosition int
 	generatedExpr   string
 	identityGen     string
+	identitySeq     *sequenceRow
 	collationSchema string
 	collationName   string
 }
@@ -175,6 +176,18 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		}
 		if err := mergeColumnCatalog(ctx, srcDB, schemas, schemaCols); err != nil {
 			return err
+		}
+		for i := range seqs {
+			s := &seqs[i]
+			if !s.identity {
+				continue
+			}
+			key := s.ownedSchema + "." + s.ownedTable
+			for j := range schemaCols[key] {
+				if schemaCols[key][j].name == s.ownedColumn {
+					schemaCols[key][j].identitySeq = s
+				}
+			}
 		}
 		uniqueMap, err := loadAllUniqueConstraints(ctx, srcDB, schemas)
 		if err != nil {
@@ -618,6 +631,9 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 					part += " DEFAULT " + c.defaultExpr.String
 				}
 			}
+			if c.identityGen != "" && c.identitySeq != nil {
+				part += " (SEQUENCE NAME " + quoteQualifiedTable(c.identitySeq.schema, c.identitySeq.name) + formatSequenceOptions(c.identitySeq.def) + ")"
+			}
 		}
 		if !c.nullable {
 			part += " NOT NULL"
@@ -716,7 +732,11 @@ func mergeColumnCatalog(ctx context.Context, q *sql.DB, schemas []string, cols m
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
 		SELECT n.nspname, c.relname, a.attname,
-		  pg_catalog.format_type(a.atttypid, a.atttypmod),
+		  CASE WHEN type_ns.nspname <> 'pg_catalog' THEN
+		    pg_catalog.quote_ident(type_ns.nspname) || '.' || pg_catalog.quote_ident(COALESCE(elem.typname, t.typname)) ||
+		    CASE WHEN a.atttypmod >= 0 THEN COALESCE(substring(pg_catalog.format_type(a.atttypid, a.atttypmod) from '[(][^)]*[)]'), '') ELSE '' END ||
+		    CASE WHEN elem.oid IS NOT NULL THEN repeat('[]', greatest(a.attndims, 1)) ELSE '' END
+		  ELSE pg_catalog.format_type(a.atttypid, a.atttypmod) END,
 		  CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' ELSE '' END,
 		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation THEN coll_ns.nspname ELSE '' END,
 		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation THEN coll.collname ELSE '' END
@@ -724,6 +744,8 @@ func mergeColumnCatalog(ctx context.Context, q *sql.DB, schemas []string, cols m
 		JOIN pg_class c ON c.oid = a.attrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		JOIN pg_type t ON t.oid = a.atttypid
+		LEFT JOIN pg_type elem ON elem.oid = t.typelem AND t.typlen = -1
+		JOIN pg_namespace type_ns ON type_ns.oid = t.typnamespace
 		LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
 		LEFT JOIN pg_namespace coll_ns ON coll_ns.oid = coll.collnamespace
 		WHERE a.attnum > 0 AND NOT a.attisdropped
@@ -819,14 +841,29 @@ func orderPartitionParentsFirst(tables []db.Table) []db.Table {
 	return order
 }
 
-func indexesForReplay(indexes []indexRow, _ []db.Table) []indexRow {
+func indexesForReplay(indexes []indexRow, tables []db.Table) []indexRow {
 	out := make([]indexRow, 0, len(indexes))
+	partitioned := make(map[string]bool, len(tables))
+	for _, table := range tables {
+		partitioned[table.Schema+"."+table.Name] = table.RelKind == "p"
+	}
 	for _, idx := range indexes {
 		if idx.inherited {
 			continue
 		}
+		if partitioned[idx.schema+"."+idx.table] {
+			idx.def = strings.Replace(idx.def, " ON ONLY ", " ON ", 1)
+		}
 		out = append(out, idx)
 	}
+	order := orderPartitionParentsFirst(tables)
+	rank := make(map[string]int, len(order))
+	for i, table := range order {
+		rank[table.Schema+"."+table.Name] = i
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return rank[out[i].schema+"."+out[i].table] < rank[out[j].schema+"."+out[j].table]
+	})
 	return out
 }
 

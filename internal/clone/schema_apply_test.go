@@ -24,8 +24,8 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
-	srcMock.ExpectQuery(`dep\.deptype = 'a'`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname"}))
+	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 }
 
 func expectLoadTableIntrospection(srcMock sqlmock.Sqlmock, colMeta, fks *sqlmock.Rows) {
@@ -356,8 +356,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
-	srcMock.ExpectQuery(`dep\.deptype = 'a'`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname"}))
+	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 
 	expectRoutineCatalog(srcMock)
 	srcMock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(
@@ -517,6 +517,71 @@ func TestIndexesForReplaySkipsPartitionChildren(t *testing.T) {
 	got = indexesForReplay(local, tables)
 	if len(got) != 1 || got[0].name != "events_2024_local_idx" {
 		t.Fatalf("local indexes = %+v", got)
+	}
+}
+
+func TestIndexesForReplayParentBeforeLocalLeaf(t *testing.T) {
+	indexes := []indexRow{
+		{schema: "app", table: "a_leaf", name: "a_local", def: "CREATE INDEX a_local"},
+		{schema: "app", table: "z_parent", name: "z_parent_idx", def: "CREATE INDEX z_parent_idx ON ONLY app.z_parent (m)"},
+		{schema: "app", table: "a_leaf", name: "a_inherited", inherited: true},
+	}
+	tables := []db.Table{
+		{Schema: "app", Name: "a_leaf", PartitionOf: "app.z_parent"},
+		{Schema: "app", Name: "z_parent", RelKind: "p"},
+	}
+	got := indexesForReplay(indexes, tables)
+	if len(got) != 2 || got[0].name != "z_parent_idx" || got[1].name != "a_local" {
+		t.Fatalf("index replay order = %+v", got)
+	}
+	if strings.Contains(got[0].def, " ON ONLY ") {
+		t.Fatalf("partition parent index not propagated: %s", got[0].def)
+	}
+}
+
+func TestIdentitySequenceDDL(t *testing.T) {
+	seq := sequenceRow{
+		schema: "app", name: "custom_id_seq", identity: true,
+		ownedSchema: "app", ownedTable: "items", ownedColumn: "id",
+		def: sequenceDef{increment: 5, minValue: 1, maxValue: 1000, startValue: 11, cache: 3},
+	}
+	dbMock, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbMock.Close()
+	if err := applySequences(context.Background(), dbMock, []sequenceRow{seq}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := formatCreateTable(db.Table{Schema: "app", Name: "items"}, []schemaColumn{{name: "id", sqlType: "bigint", identityGen: "ALWAYS", identitySeq: &seq}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME "app"."custom_id_seq" INCREMENT BY 5 MINVALUE 1 MAXVALUE 1000 START WITH 11 CACHE 3)`
+	if !strings.Contains(stmt, want) {
+		t.Fatalf("identity definition = %s, want %s", stmt, want)
+	}
+}
+
+func TestMergeColumnCatalogQualifiedTypes(t *testing.T) {
+	dbMock, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbMock.Close()
+	mock.ExpectQuery(`CASE WHEN type_ns\.nspname <> 'pg_catalog'`).WithArgs("app").WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "table", "column", "type", "identity", "coll_schema", "coll_name"}).
+			AddRow("app", "items", "mood", `"app"."mood"`, "", "", "").
+			AddRow("app", "items", "moods", `"app"."mood"[]`, "", "", ""))
+	cols := map[string][]schemaColumn{"app.items": {{name: "mood"}, {name: "moods"}}}
+	if err := mergeColumnCatalog(context.Background(), dbMock, []string{"app"}, cols); err != nil {
+		t.Fatal(err)
+	}
+	if cols["app.items"][0].sqlType != `"app"."mood"` || cols["app.items"][1].sqlType != `"app"."mood"[]` {
+		t.Fatalf("qualified types = %+v", cols["app.items"])
 	}
 }
 
