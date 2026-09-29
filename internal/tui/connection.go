@@ -516,6 +516,13 @@ func (c *connectionScreen) Update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 		} else if c.focus >= 0 && c.focus < len(c.fields) {
+			if k.Code == tea.KeySpace && c.fields[c.focus].label == "SSLMODE" {
+				*c.fields[c.focus].value = cycleSSLMode(*c.fields[c.focus].value)
+				if c.panel == connPanelFields {
+					c.clearProfilePreview()
+				}
+				return nil
+			}
 			v := c.fields[c.focus].value
 			cur := &c.fieldCursors[c.focus]
 			if handleFieldCursorKey(k, v, cur) {
@@ -527,6 +534,21 @@ func (c *connectionScreen) Update(msg tea.Msg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func cycleSSLMode(current string) string {
+	switch strings.TrimSpace(strings.ToLower(current)) {
+	case "disable":
+		return "require"
+	case "require":
+		return "verify-ca"
+	case "verify-ca":
+		return "verify-full"
+	case "verify-full":
+		return "disable"
+	default:
+		return "disable"
+	}
 }
 
 func (c *connectionScreen) connectFromDraft() tea.Cmd {
