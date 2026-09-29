@@ -141,3 +141,58 @@ func TestDumpOverridesFromDraftRetryBase(t *testing.T) {
 		t.Fatalf("retry = %d %v, want 2 1s", max, base)
 	}
 }
+
+func TestDumpOverridesHonorConfiguredChunkSelectors(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.ChunkTables = []string{"public.users"}
+	cfg.Dump.SlowChunkSize = 250
+	cfg.Dump.SlowRetryMax = 3
+	cfg.Dump.SlowRetryBase = "500ms"
+
+	for _, tc := range []struct {
+		name  string
+		draft DumpDraft
+		chunk int
+		max   int
+		base  time.Duration
+	}{
+		{"config", DumpDraft{}, 250, 3, 500 * time.Millisecond},
+		{"override", DumpDraft{ChunkSizeText: "100", RetryMaxText: "2", RetryBaseText: "1s"}, 100, 2, time.Second},
+		{"disable retries", DumpDraft{RetryMaxText: "0", ChunkSizeText: "100"}, 100, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, err := dumpOverridesFromDraft(tc.draft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts, err := runopts.BuildDumpOptions(o, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !dump.InspectSlowChunkSizeEquals(tc.chunk, opts...) {
+				t.Fatalf("chunk size != %d", tc.chunk)
+			}
+			max, base := dump.InspectSlowRetry(opts...)
+			if max != tc.max || base != tc.base {
+				t.Fatalf("retry = %d %v, want %d %v", max, base, tc.max, tc.base)
+			}
+		})
+	}
+}
+
+func TestDumpOverridesExplicitZeroRetriesSlowConnection(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.SlowRetryMax = 3
+	o, err := dumpOverridesFromDraft(DumpDraft{SlowConnection: true, RetryMaxText: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := runopts.BuildDumpOptions(o, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	max, _ := dump.InspectSlowRetry(opts...)
+	if max != 0 {
+		t.Fatalf("retry max = %d, want 0", max)
+	}
+}

@@ -263,9 +263,7 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 		}
 		switch k.Code {
 		case tea.KeyEnter:
-			if !d.restoreDirFocus {
-				return d.requestRestore()
-			}
+			return d.requestRestore()
 		}
 	}
 
@@ -747,7 +745,7 @@ func (d *dumpScreen) restoreReplaceLabel() string {
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
-	hint := "(Tab field · p path · ↑/↓ · Space/Enter edit · r restore · Esc back)"
+	hint := "(Tab field · p path · ↑/↓ · Space edit · Enter restore · Esc back)"
 	lines = append(lines, label+" "+StyleMuted.Render(hint))
 	pathLabel := "Restore directory:"
 	pathVal := renderEditableField(d.restoreDir, d.restoreDirCursor, false, d.restoreDirFocus)

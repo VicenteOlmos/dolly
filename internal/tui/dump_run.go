@@ -148,6 +148,7 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
 		ChunkSize:       chunkSize,
 		RetryMax:        retryMax,
+		RetryMaxSet:     strings.TrimSpace(draft.RetryMaxText) != "",
 		RetryBase:       retryBase,
 		Workers:         draft.Workers,
 		WorkersSet:      draft.WorkersSet,

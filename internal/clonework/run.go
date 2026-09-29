@@ -128,6 +128,9 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	if replace && policy != restore.ConflictError {
 		return errors.New("restore.replace cannot be combined with restore.on_conflict other than error")
 	}
+	if strategy != "schema-replay" && (replace || policy != restore.ConflictError) {
+		return fmt.Errorf("clone strategy %q does not support replace or on-conflict policies; use schema-replay", strategy)
+	}
 	if replace {
 		restoreOpts = append(restoreOpts, restore.WithReplace())
 	} else if policy != restore.ConflictError {

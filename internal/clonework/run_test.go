@@ -425,6 +425,48 @@ func TestRunCloneRestoreReplaceAndOnConflictOverrides(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnsupportedClonePolicies(t *testing.T) {
+	called := false
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	runInProcess = func(_ context.Context, _ clone.Options, _ func(clone.ProgressEvent)) error {
+		called = true
+		return nil
+	}
+	for _, strategy := range []string{"template", "logical-stream", "physical-backup"} {
+		for _, tc := range []struct {
+			name   string
+			params Params
+		}{
+			{"replace", Params{Replace: true, ReplaceSet: true}},
+			{"skip", Params{OnConflict: "skip"}},
+			{"upsert", Params{OnConflict: "upsert"}},
+		} {
+			t.Run(strategy+"/"+tc.name, func(t *testing.T) {
+				p := tc.params
+				p.SourceDSN = "postgres://u:p@h/src"
+				p.Schemas = []string{"public"}
+				p.Strategy = strategy
+				err := Run(context.Background(), p, nil)
+				if err == nil || !strings.Contains(err.Error(), "does not support") {
+					t.Fatalf("error = %v, want unsupported policy", err)
+				}
+				if called {
+					t.Fatal("clone runner called with unsupported policy")
+				}
+			})
+		}
+	}
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src", Schemas: []string{"public"}, Strategy: "template",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("default policies should allow template clone")
+	}
+}
+
 func TestRunDefaultMaxOpenConnsWhenUnset(t *testing.T) {
 	dir := t.TempDir()
 	oldWd, err := os.Getwd()
