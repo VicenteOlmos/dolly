@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
@@ -140,6 +141,56 @@ func TestCatalogReplayNormalAggregatePG16(t *testing.T) {
 	}
 	if got != 3 {
 		t.Fatalf("app.my_sum = %d, want 3", got)
+	}
+}
+
+func TestCatalogReplayIdentityTypesAndPartitionIndexesPG16(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	previous := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = previous })
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE TYPE app.mood AS ENUM ('happy', 'sad');
+		CREATE TABLE app.items (id bigint GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME app.items_custom_seq INCREMENT BY 2 START WITH 7), m app.mood, moods app.mood[]);
+		INSERT INTO app.items (m) VALUES ('happy'), ('sad');
+		CREATE TABLE app.z_parent (id integer, m app.mood) PARTITION BY RANGE (id);
+		CREATE TABLE app.a_leaf PARTITION OF app.z_parent FOR VALUES FROM (0) TO (10);
+		CREATE INDEX z_parent_m_idx ON app.z_parent (m);
+		CREATE INDEX a_local_m_idx ON app.a_leaf (m);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	// Force format_type to abbreviate app.mood on the source connection.
+	src.SetMaxOpenConns(1)
+	if _, err := src.ExecContext(ctx, `SET search_path TO app, public`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tgt.ExecContext(ctx, `INSERT INTO app.items (id, m) OVERRIDING SYSTEM VALUE VALUES (7, 'happy'), (9, 'sad')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreSequences(ctx, src, tgt, []string{"app"}); err != nil {
+		t.Fatal(err)
+	}
+	var id int
+	if err := tgt.QueryRowContext(ctx, `INSERT INTO app.items (m) VALUES ('happy') RETURNING id`).Scan(&id); err != nil || id != 11 {
+		t.Fatalf("next identity = %d, err = %v, want 11", id, err)
+	}
+	var local, inherited int
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE idx.relname = 'a_local_m_idx' AND inh.inhrelid IS NULL),
+		       count(*) FILTER (WHERE inh.inhrelid IS NOT NULL)
+		FROM pg_class idx
+		JOIN pg_index i ON i.indexrelid = idx.oid
+		JOIN pg_class tbl ON tbl.oid = i.indrelid
+		LEFT JOIN pg_inherits inh ON inh.inhrelid = idx.oid
+		WHERE tbl.oid = 'app.a_leaf'::regclass
+	`).Scan(&local, &inherited); err != nil || local != 1 || inherited != 1 {
+		t.Fatalf("leaf indexes: local = %d, inherited = %d, err = %v", local, inherited, err)
 	}
 }
 
