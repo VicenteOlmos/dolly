@@ -46,6 +46,7 @@ const (
 	modeFieldRetryBase
 	modeFieldIncludeTableFile
 	modeFieldExcludeTableFile
+	modeFieldChunkTableFile
 	modeFieldCount
 )
 

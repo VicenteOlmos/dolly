@@ -230,3 +230,13 @@ func TestDumpOverridesFromDraftExcludeTableFile(t *testing.T) {
 		t.Fatalf("ExcludeTableFiles = %v", overrides.ExcludeTableFiles)
 	}
 }
+
+func TestDumpOverridesFromDraftChunkTableFile(t *testing.T) {
+	overrides, err := dumpOverridesFromDraft(DumpDraft{ChunkTableFile: "tables/chunk.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overrides.ChunkTableFiles) != 1 || overrides.ChunkTableFiles[0] != "tables/chunk.txt" {
+		t.Fatalf("ChunkTableFiles = %v", overrides.ChunkTableFiles)
+	}
+}
