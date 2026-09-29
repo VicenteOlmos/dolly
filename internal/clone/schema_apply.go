@@ -27,13 +27,17 @@ type uniqueConstraint struct {
 // source introspection, without invoking pg_dump or psql subprocesses.
 //
 // Ordering mirrors pg_dump --schema-only where practical: extensions, types, sequences,
-// tables (with inline checks), foreign keys, indexes, views, comments, grants, RLS.
+// tables (with inline checks), foreign keys, indexes, functions, views (dependency
+// order), triggers, rules, comments, grants, and RLS.
 //
-// Limitations (prefer shell clone when required):
-//   - Triggers, rules, and exclusion constraints are not replayed.
-//   - Function/procedure bodies and operator classes are not replayed.
-//   - Deep view/function dependency graphs may need multiple manual passes.
+// Limitations (prefer pg_dump when it is on PATH):
+//   - Exclusion constraints and operator classes are not replayed.
+//   - Functions, triggers, and rules that belong to extensions are skipped.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
+	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
+}
+
+func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, includePrivileges bool) error {
 	if len(schemas) == 0 {
 		return fmt.Errorf("schemas are required")
 	}
@@ -131,11 +135,54 @@ func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas [
 		return err
 	}
 
+	routines, err := loadRoutines(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	routineDeps, err := loadRoutineDeps(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	routines, err = orderRoutines(routines, routineDeps)
+	if err != nil {
+		return err
+	}
+	routineDefs := make([]string, len(routines))
+	for i, routine := range routines {
+		routineDefs[i] = routine.def
+	}
+	if err := applySQLDefs(ctx, tgtDB, routineDefs, "function"); err != nil {
+		return err
+	}
+
 	views, err := loadViews(ctx, srcDB, schemas)
 	if err != nil {
 		return err
 	}
+	viewDeps, err := loadViewDeps(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	views, err = orderViews(views, viewDeps)
+	if err != nil {
+		return err
+	}
 	if err := applyViews(ctx, tgtDB, views); err != nil {
+		return err
+	}
+
+	triggers, err := loadTriggers(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applySQLDefs(ctx, tgtDB, triggers, "trigger"); err != nil {
+		return err
+	}
+	rules, err := loadRules(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applySQLDefs(ctx, tgtDB, rules, "rule"); err != nil {
 		return err
 	}
 
@@ -147,12 +194,14 @@ func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas [
 		return err
 	}
 
-	grants, err := loadGrants(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-	if err := applyGrants(ctx, tgtDB, grants); err != nil {
-		return err
+	if includePrivileges {
+		grants, err := loadGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyGrants(ctx, tgtDB, grants); err != nil {
+			return err
+		}
 	}
 
 	rlsTables, err := loadRLSTables(ctx, srcDB, schemas)

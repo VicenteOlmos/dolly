@@ -28,6 +28,9 @@ func init() {
 		}
 		return nil
 	}
+	schemaToolLookPath = func(file string) (string, error) {
+		return "/usr/bin/" + file, nil
+	}
 }
 
 // mockCommandRunner records calls for verification.
