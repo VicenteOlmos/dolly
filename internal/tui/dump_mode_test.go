@@ -115,7 +115,8 @@ func TestDumpModeSectionReachesRunner(t *testing.T) {
 	app = drainUpdate(app, keyPress("s", 's', 0))
 	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
 	app = drainUpdate(app, keyPress("k", 'k', 0))
-	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
+	app = drainUpdate(app, keyPress("", tea.KeyDown, 0)) // sanitize
+	app = drainUpdate(app, keyPress("", tea.KeyDown, 0)) // workers
 	app = drainUpdate(app, keyPress("", tea.KeyRight, 0))
 	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
 	app = drainUpdate(app, keyPress("2", '2', 0))
