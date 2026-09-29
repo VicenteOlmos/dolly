@@ -225,6 +225,11 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if constraint != wantConstraint {
 		t.Fatalf("constraint target = %q, want %q", constraint, wantConstraint)
 	}
+	domain := commentTarget("domain", "app", "email", "")
+	wantDomain := `DOMAIN "app"."email"`
+	if domain != wantDomain {
+		t.Fatalf("domain target = %q, want %q", domain, wantDomain)
+	}
 	idx := commentTarget("index", "app", "users_email_idx", "")
 	wantIdx := `INDEX "app"."users_email_idx"`
 	if idx != wantIdx {

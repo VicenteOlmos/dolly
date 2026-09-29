@@ -231,6 +231,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return "INDEX " + quoteQualifiedTable(schema, object)
 	case "constraint":
 		return "CONSTRAINT " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
+	case "domain":
+		return "DOMAIN " + quoteQualifiedType(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
