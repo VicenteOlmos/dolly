@@ -738,6 +738,65 @@ func applyColumnCompressionOverrides(ctx context.Context, tgtDB execer, rows []c
 	return nil
 }
 
+type tableFillfactorRow struct {
+	schema     string
+	table      string
+	fillfactor int
+}
+
+func loadTableFillfactors(ctx context.Context, q *sql.DB, schemas []string) ([]tableFillfactorRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, opt.option_value
+		FROM pg_class c
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL pg_catalog.pg_options_to_table(c.reloptions) opt
+		WHERE c.relkind IN ('r', 'p')
+		  AND c.reloptions IS NOT NULL
+		  AND opt.option_name = 'fillfactor'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list table fillfactors: %w", err)
+	}
+	defer rows.Close()
+
+	var out []tableFillfactorRow
+	for rows.Next() {
+		var row tableFillfactorRow
+		var value string
+		if err := rows.Scan(&row.schema, &row.table, &value); err != nil {
+			return nil, fmt.Errorf("scan table fillfactor: %w", err)
+		}
+		ff, err := parseFillfactorOption(value)
+		if err != nil {
+			continue
+		}
+		row.fillfactor = ff
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func parseFillfactorOption(value string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 10 || n > 100 {
+		return 0, fmt.Errorf("invalid fillfactor")
+	}
+	return n, nil
+}
+
+func applyTableFillfactors(ctx context.Context, tgtDB execer, rows []tableFillfactorRow) error {
+	for _, row := range rows {
+		stmt := formatAlterTableFillfactor(row.schema, row.table, row.fillfactor)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("fillfactor on %s.%s: %w", row.schema, row.table, err)
+		}
+	}
+	return nil
+}
+
 func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
