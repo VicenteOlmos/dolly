@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/VicenteOlmos/dolly/internal/dumphistory"
 )
 
@@ -149,5 +151,19 @@ func TestDumpScreenRestoreUsesTypedDirectory(t *testing.T) {
 	msg = cmd().(restoreConfirmRequestedMsg)
 	if msg.inputDir != "/history/1" {
 		t.Fatalf("history inputDir = %q", msg.inputDir)
+	}
+}
+
+func TestDumpScreenEnterRestoresFocusedPath(t *testing.T) {
+	status := DumpStatusIdle
+	d := &dumpScreen{draft: &DumpDraft{}, dumpStatus: &status, restoreDir: "/tmp/typed-dump", restoreDirFocus: true, nav: NewSectionNav(dumpSectionCount)}
+	d.nav.EnterInside(dumpSectionHistory)
+	cmd := d.Update(keyPress("", tea.KeyEnter, 0))
+	if cmd == nil {
+		t.Fatal("Enter while editing restore path should request restore")
+	}
+	msg, ok := cmd().(restoreConfirmRequestedMsg)
+	if !ok || msg.inputDir != "/tmp/typed-dump" {
+		t.Fatalf("restore message = %#v, want typed path", msg)
 	}
 }

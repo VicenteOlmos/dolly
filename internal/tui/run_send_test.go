@@ -379,7 +379,7 @@ func drainDumpWorker(runner DumpRunner, ctx context.Context) []tea.Msg {
 }
 
 func drainRestoreWorker(runner RestoreRunner, ctx context.Context) []tea.Msg {
-	cmd, ch, cancel := startRestoreCmd(runner, ctx, nil, "", nil, false, "")
+	cmd, ch, cancel := startRestoreCmd(runner, ctx, nil, "", nil, false, "", restoreHistoryOverrides{})
 	defer cancel()
 	return drainWithWait(cmd, ch, waitRestoreCmd)
 }
@@ -444,7 +444,7 @@ func TestExactlyOneTerminalOutcome(t *testing.T) {
 			},
 			cancel: func() []tea.Msg {
 				ctx, cancel := context.WithCancel(context.Background())
-				cmd, ch, workerCancel := startRestoreCmd(mockRestoreRunner{blockCtx: true}, ctx, nil, "", nil, false, "")
+				cmd, ch, workerCancel := startRestoreCmd(mockRestoreRunner{blockCtx: true}, ctx, nil, "", nil, false, "", restoreHistoryOverrides{})
 				defer workerCancel()
 				cancel()
 				return drainWithWait(cmd, ch, waitRestoreCmd)
@@ -515,7 +515,7 @@ func TestSaturatedWorkerTerminalOutcome(t *testing.T) {
 			return startDumpCmd(barrierDumpRunner{barrier: b}, ctx, nil, "", DumpDraft{}, nil, "", "")
 		},
 		"restore": func(ctx context.Context, b *saturateBarrier) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
-			return startRestoreCmd(barrierRestoreRunner{barrier: b}, ctx, nil, "", nil, false, "")
+			return startRestoreCmd(barrierRestoreRunner{barrier: b}, ctx, nil, "", nil, false, "", restoreHistoryOverrides{})
 		},
 		"clone": func(ctx context.Context, b *saturateBarrier) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
 			return startCloneCmd(barrierCloneRunner{barrier: b}, ctx, CloneDraft{}, nil)
@@ -590,12 +590,12 @@ func TestChannelWorkerNoGoroutineLeak(t *testing.T) {
 		},
 		"restore_cancel": {
 			start: func(ctx context.Context, _ *saturateBarrier) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
-				return startRestoreCmd(mockRestoreRunner{blockCtx: true}, ctx, nil, "", nil, false, "")
+				return startRestoreCmd(mockRestoreRunner{blockCtx: true}, ctx, nil, "", nil, false, "", restoreHistoryOverrides{})
 			},
 		},
 		"restore_saturated_cancel": {
 			start: func(ctx context.Context, b *saturateBarrier) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
-				return startRestoreCmd(barrierRestoreRunner{barrier: b}, ctx, nil, "", nil, false, "")
+				return startRestoreCmd(barrierRestoreRunner{barrier: b}, ctx, nil, "", nil, false, "", restoreHistoryOverrides{})
 			},
 		},
 		"clone_cancel": {

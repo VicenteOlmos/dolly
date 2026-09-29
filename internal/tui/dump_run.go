@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -120,6 +121,18 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	chunkSize, err := parseOptionalPositiveInt(draft.ChunkSizeText, "chunk size")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
+	retryMax, err := parseOptionalNonNegative(draft.RetryMaxText, "retry max")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
+	retryBase, err := parseDraftRetryBase(draft.RetryBaseText)
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
 	return runopts.DumpOverrides{
 		NoTransaction:   draft.NoTransaction,
 		SlowConnection:  draft.SlowConnection,
@@ -133,9 +146,40 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		MaxRowsPerTable: maxRowsPer,
 		IncludeTables:   splitChunkTables(draft.IncludeTables),
 		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
+		ChunkSize:       chunkSize,
+		RetryMax:        retryMax,
+		RetryMaxSet:     strings.TrimSpace(draft.RetryMaxText) != "",
+		RetryBase:       retryBase,
 		Workers:         draft.Workers,
 		WorkersSet:      draft.WorkersSet,
 	}, nil
+}
+
+func parseDraftRetryBase(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return "", fmt.Errorf("retry base must be a duration: %w", err)
+	}
+	if d <= 0 {
+		return "", fmt.Errorf("retry base must be positive")
+	}
+	return raw, nil
+}
+
+func parseOptionalPositiveInt(raw, label string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%s must be an integer >= 1", label)
+	}
+	return n, nil
 }
 
 func parseOptionalNonNegative(raw, label string) (int, error) {

@@ -17,6 +17,7 @@ type DumpOverrides struct {
 	SlowConnection    bool
 	ChunkSize         int
 	RetryMax          int
+	RetryMaxSet       bool
 	RetryBase         string
 	SeedFile          string
 	Percent           int
@@ -154,7 +155,7 @@ func BuildDumpOptions(o DumpOverrides, cfg *config.Config) ([]dump.Option, error
 	if o.RequireSafeKey {
 		opts = append(opts, dump.WithRequireSafeKey())
 	}
-	if o.SlowConnection || o.HasChunkSelectors() {
+	if EffectiveResilientDumpMode(o, cfg) {
 		if o.SlowConnection {
 			opts = append(opts, dump.WithSlowConnection())
 		}
@@ -174,7 +175,7 @@ func BuildDumpOptions(o DumpOverrides, cfg *config.Config) ([]dump.Option, error
 		opts = append(opts, dump.WithSlowChunkSize(chunkSize))
 
 		retryMax := o.RetryMax
-		if retryMax <= 0 && cfg.Dump.SlowRetryMax > 0 {
+		if retryMax <= 0 && !o.RetryMaxSet && cfg.Dump.SlowRetryMax > 0 {
 			retryMax = cfg.Dump.SlowRetryMax
 		}
 		if retryMax > 0 {
@@ -193,26 +194,6 @@ func BuildDumpOptions(o DumpOverrides, cfg *config.Config) ([]dump.Option, error
 				return nil, errors.New("slow-connection retry base must be positive when retry-max > 0")
 			}
 			opts = append(opts, dump.WithSlowRetry(retryMax, retryBase))
-		}
-	} else if ChunkPolicyConfigured(cfg) {
-		chunkSize := cfg.Dump.SlowChunkSize
-		if chunkSize <= 0 {
-			chunkSize = dump.DefaultSlowChunkSize
-		}
-		opts = append(opts, dump.WithSlowChunkSize(chunkSize))
-		if cfg.Dump.SlowRetryMax > 0 {
-			retryBaseStr := cfg.Dump.SlowRetryBase
-			if retryBaseStr == "" {
-				retryBaseStr = "500ms"
-			}
-			retryBase, err := time.ParseDuration(retryBaseStr)
-			if err != nil {
-				return nil, fmt.Errorf("parse retry base duration %q: %w", retryBaseStr, err)
-			}
-			if retryBase <= 0 {
-				return nil, errors.New("chunk retry base must be positive when slow_retry_max > 0")
-			}
-			opts = append(opts, dump.WithSlowRetry(cfg.Dump.SlowRetryMax, retryBase))
 		}
 	}
 

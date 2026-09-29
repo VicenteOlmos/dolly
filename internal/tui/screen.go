@@ -137,10 +137,16 @@ type DumpDraft struct {
 	MaxRowsPerTableText string
 	IncludeTables       string
 	ExcludeTables       string
+	ChunkSizeText       string
+	RetryMaxText        string
+	RetryBaseText       string
 	Workers             int
 	WorkersSet          bool
 	SchemaPicker        SchemaPickerState
 	History             DumpHistoryState
+	RestoreOnConflict   string
+	RestoreReplace      bool
+	RestoreReplaceSet   bool
 }
 
 // DumpHistoryEntry is one row in the dump history list.
@@ -199,6 +205,9 @@ type CloneDraft struct {
 	AnalyzeEnabled    bool
 	AnalyzeState      AnalyzeState
 	IncludePrivileges bool
+	Replace           bool
+	ReplaceSet        bool
+	OnConflict        string
 }
 
 // TargetSource selects where the clone target DSN comes from.
