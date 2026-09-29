@@ -264,6 +264,14 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if domain != wantDomain {
 		t.Fatalf("domain target = %q, want %q", domain, wantDomain)
 	}
+	if got := commentTarget("type", "app", "status_enum", ""); got != `TYPE "app"."status_enum"` {
+		t.Fatalf("type target = %q", got)
+	}
+	gotTypeComment := formatCommentOn("type", "app", "status_enum", "", "lifecycle")
+	wantTypeComment := `COMMENT ON TYPE "app"."status_enum" IS 'lifecycle'`
+	if gotTypeComment != wantTypeComment {
+		t.Fatalf("type comment = %q, want %q", gotTypeComment, wantTypeComment)
+	}
 	idx := commentTarget("index", "app", "users_email_idx", "")
 	wantIdx := `INDEX "app"."users_email_idx"`
 	if idx != wantIdx {

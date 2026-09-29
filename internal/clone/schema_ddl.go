@@ -287,6 +287,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return "CONSTRAINT " + quoteIdentifier(column) + " ON DOMAIN " + quoteQualifiedType(schema, object)
 	case "domain":
 		return "DOMAIN " + quoteQualifiedType(schema, object)
+	case "type":
+		return "TYPE " + quoteQualifiedType(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
