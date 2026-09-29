@@ -283,6 +283,7 @@ type sequenceRow struct {
 	ownedSchema string
 	ownedTable  string
 	ownedColumn string
+	identity    bool
 }
 
 func loadSequences(ctx context.Context, q *sql.DB, schemas []string) ([]sequenceRow, error) {
@@ -329,24 +330,26 @@ func loadSequences(ctx context.Context, q *sql.DB, schemas []string) ([]sequence
 			out[i].ownedSchema = o.schema
 			out[i].ownedTable = o.table
 			out[i].ownedColumn = o.column
+			out[i].identity = o.identity
 		}
 	}
 	return out, nil
 }
 
 type sequenceOwnership struct {
-	schema string
-	table  string
-	column string
+	schema   string
+	table    string
+	column   string
+	identity bool
 }
 
 func loadSequenceOwnership(ctx context.Context, q *sql.DB, schemas []string) (map[string]sequenceOwnership, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT seq_ns.nspname, seq.relname, tbl_ns.nspname, tbl.relname, a.attname
+		SELECT seq_ns.nspname, seq.relname, tbl_ns.nspname, tbl.relname, a.attname, dep.deptype = 'i'
 		FROM pg_class seq
 		INNER JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
-		INNER JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype = 'a'
+		INNER JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
 		INNER JOIN pg_class tbl ON tbl.oid = dep.refobjid
 		INNER JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
 		INNER JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = dep.refobjsubid AND NOT a.attisdropped
@@ -362,23 +365,27 @@ func loadSequenceOwnership(ctx context.Context, q *sql.DB, schemas []string) (ma
 	out := make(map[string]sequenceOwnership)
 	for rows.Next() {
 		var seqSchema, seqName, tblSchema, tblName, column string
-		if err := rows.Scan(&seqSchema, &seqName, &tblSchema, &tblName, &column); err != nil {
+		var identity bool
+		if err := rows.Scan(&seqSchema, &seqName, &tblSchema, &tblName, &column, &identity); err != nil {
 			return nil, fmt.Errorf("scan sequence ownership: %w", err)
 		}
-		out[seqSchema+"\x00"+seqName] = sequenceOwnership{schema: tblSchema, table: tblName, column: column}
+		out[seqSchema+"\x00"+seqName] = sequenceOwnership{schema: tblSchema, table: tblName, column: column, identity: identity}
 	}
 	return out, rows.Err()
 }
 
 func applySequences(ctx context.Context, tgtDB execer, seqs []sequenceRow) error {
 	for _, s := range seqs {
+		if s.identity {
+			continue
+		}
 		stmt := formatCreateSequence(s.schema, s.name, s.def)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create sequence %s.%s: %w", s.schema, s.name, err)
 		}
 	}
 	for _, s := range seqs {
-		if s.ownedSchema == "" || s.ownedTable == "" || s.ownedColumn == "" {
+		if s.identity || s.ownedSchema == "" || s.ownedTable == "" || s.ownedColumn == "" {
 			continue
 		}
 		stmt := formatAlterSequenceOwnedBy(s.schema, s.name, s.ownedSchema, s.ownedTable, s.ownedColumn)
@@ -462,16 +469,26 @@ func applyForeignKeyConstraints(ctx context.Context, tgtDB execer, schema, table
 }
 
 type indexRow struct {
-	schema string
-	table  string
-	name   string
-	def    string
+	schema    string
+	table     string
+	name      string
+	def       string
+	inherited bool
 }
 
 func loadIndexes(ctx context.Context, q *sql.DB, schemas []string) ([]indexRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT i.schemaname, i.tablename, i.indexname, i.indexdef
+		SELECT i.schemaname, i.tablename, i.indexname, i.indexdef,
+		  EXISTS (
+		    SELECT 1
+		    FROM pg_class ic
+		    JOIN pg_namespace idx_ns ON idx_ns.oid = ic.relnamespace
+		    JOIN pg_inherits inh ON inh.inhrelid = ic.oid
+		    WHERE ic.relkind = 'i'
+		      AND idx_ns.nspname = i.schemaname
+		      AND ic.relname = i.indexname
+		  ) AS inherited
 		FROM pg_indexes i
 		WHERE i.schemaname IN (%s)
 		  AND NOT EXISTS (
@@ -494,7 +511,7 @@ func loadIndexes(ctx context.Context, q *sql.DB, schemas []string) ([]indexRow, 
 	var out []indexRow
 	for rows.Next() {
 		var idx indexRow
-		if err := rows.Scan(&idx.schema, &idx.table, &idx.name, &idx.def); err != nil {
+		if err := rows.Scan(&idx.schema, &idx.table, &idx.name, &idx.def, &idx.inherited); err != nil {
 			return nil, fmt.Errorf("scan index: %w", err)
 		}
 		out = append(out, idx)

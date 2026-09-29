@@ -51,7 +51,11 @@ type compositeAttr struct {
 
 // formatCreateSequence emits CREATE SEQUENCE with catalog-derived options.
 func formatCreateSequence(schema, name string, seq sequenceDef) string {
-	stmt := fmt.Sprintf("CREATE SEQUENCE %s", quoteQualifiedTable(schema, name))
+	return fmt.Sprintf("CREATE SEQUENCE %s%s", quoteQualifiedTable(schema, name), formatSequenceOptions(seq))
+}
+
+func formatSequenceOptions(seq sequenceDef) string {
+	var stmt string
 	if seq.increment != 0 {
 		stmt += fmt.Sprintf(" INCREMENT BY %d", seq.increment)
 	}

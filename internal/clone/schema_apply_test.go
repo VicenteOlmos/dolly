@@ -26,8 +26,8 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
-	srcMock.ExpectQuery(`dep\.deptype = 'a'`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname"}))
+	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 }
 
 func expectLoadTableIntrospection(srcMock sqlmock.Sqlmock, colMeta, fks *sqlmock.Rows) {
@@ -62,6 +62,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 		WillReturnRows(allDDLCols)
 	srcMock.ExpectQuery(`is_generated = 'ALWAYS'`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "generation_expression"}))
+	srcMock.ExpectQuery(`format_type`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "format_type", "identity", "coll_schema", "coll_name"}))
 	// loadAllUniqueConstraints (1 query).
 	srcMock.ExpectQuery(`constraint_type = 'UNIQUE'[\s\S]*table_schema IN \(\$1`).
 		WillReturnRows(allUniques)
@@ -75,7 +77,7 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
-		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
+		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
@@ -366,15 +368,15 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
-	srcMock.ExpectQuery(`dep\.deptype = 'a'`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname"}))
+	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 
 	expectRoutineCatalog(srcMock)
 	srcMock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
 
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
-		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
+		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
@@ -431,13 +433,13 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "domain", "name", "def"}).AddRow("app", "positive", "valid", "CHECK (app.valid_value(VALUE))"))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
-	mock.ExpectQuery(`dep\.deptype = 'a'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column"}))
+	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
 	mock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
 	mock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	mock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(sqlmock.NewRows([]string{"oid", "name", "def"}).AddRow(1, "app.valid_value(integer)", "CREATE FUNCTION app.valid_value(integer) RETURNS boolean LANGUAGE sql AS 'SELECT true'"))
 	mock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(sqlmock.NewRows([]string{"oid", "ref"}))
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
-	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def"}))
+	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}))
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
 	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true))
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
@@ -514,6 +516,46 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 	}
 }
 
+func TestFormatCreateTableIdentityCollateUnlogged(t *testing.T) {
+	cols := []schemaColumn{
+		{name: "tags", sqlType: "integer[]", nullable: false},
+		{name: "id", sqlType: "bigint", identityGen: "BY DEFAULT", nullable: false},
+		{name: "label", sqlType: "text", collationSchema: "public", collationName: "und", nullable: true},
+	}
+	unloggedParent := db.Table{Schema: "public", Name: "cache", Unlogged: true}
+	got, err := formatCreateTable(unloggedParent, cols, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `"tags" integer[] NOT NULL`) {
+		t.Fatalf("array type: %s", got)
+	}
+	if !strings.Contains(got, `GENERATED BY DEFAULT AS IDENTITY`) {
+		t.Fatalf("identity: %s", got)
+	}
+	if !strings.Contains(got, `COLLATE "public"."und"`) {
+		t.Fatalf("collation: %s", got)
+	}
+	if !strings.HasPrefix(got, `CREATE UNLOGGED TABLE "public"."cache"`) {
+		t.Fatalf("unlogged parent: %s", got)
+	}
+
+	child := db.Table{
+		Schema:         "public",
+		Name:           "cache_p1",
+		PartitionOf:    "public.cache",
+		PartitionBound: "FOR VALUES IN ('a')",
+		Unlogged:       true,
+	}
+	got, err = formatCreateTable(child, cols[:1], nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "UNLOGGED") {
+		t.Fatalf("partition child must not repeat UNLOGGED: %s", got)
+	}
+}
+
 func TestOrderPartitionParentsFirst(t *testing.T) {
 	tables := []db.Table{
 		{Schema: "public", Name: "events_2024", PartitionOf: "public.events"},
@@ -527,13 +569,86 @@ func TestOrderPartitionParentsFirst(t *testing.T) {
 
 func TestIndexesForReplaySkipsPartitionChildren(t *testing.T) {
 	indexes := []indexRow{
-		{schema: "public", table: "events", name: "events_id_idx", def: "CREATE INDEX events_id_idx"},
+		{schema: "public", table: "events", name: "events_id_idx", def: "CREATE INDEX events_id_idx", inherited: true},
 		{schema: "public", table: "events_2024", name: "events_2024_id_idx", def: "CREATE INDEX events_2024_id_idx"},
 	}
 	tables := []db.Table{{Schema: "public", Name: "events_2024", PartitionOf: "public.events"}}
 	got := indexesForReplay(indexes, tables)
-	if len(got) != 1 || got[0].table != "events" {
+	if len(got) != 1 || got[0].table != "events_2024" {
 		t.Fatalf("indexes = %+v", got)
+	}
+	local := []indexRow{
+		{schema: "public", table: "events_2024", name: "events_2024_local_idx", def: "CREATE INDEX events_2024_local_idx"},
+		{schema: "public", table: "events_2024", name: "events_2024_inh_idx", def: "CREATE INDEX events_2024_inh_idx", inherited: true},
+	}
+	got = indexesForReplay(local, tables)
+	if len(got) != 1 || got[0].name != "events_2024_local_idx" {
+		t.Fatalf("local indexes = %+v", got)
+	}
+}
+
+func TestIndexesForReplayParentBeforeLocalLeaf(t *testing.T) {
+	indexes := []indexRow{
+		{schema: "app", table: "a_leaf", name: "a_local", def: "CREATE INDEX a_local"},
+		{schema: "app", table: "z_parent", name: "z_parent_idx", def: "CREATE INDEX z_parent_idx ON ONLY app.z_parent (m)"},
+		{schema: "app", table: "a_leaf", name: "a_inherited", inherited: true},
+	}
+	tables := []db.Table{
+		{Schema: "app", Name: "a_leaf", PartitionOf: "app.z_parent"},
+		{Schema: "app", Name: "z_parent", RelKind: "p"},
+	}
+	got := indexesForReplay(indexes, tables)
+	if len(got) != 2 || got[0].name != "z_parent_idx" || got[1].name != "a_local" {
+		t.Fatalf("index replay order = %+v", got)
+	}
+	if strings.Contains(got[0].def, " ON ONLY ") {
+		t.Fatalf("partition parent index not propagated: %s", got[0].def)
+	}
+}
+
+func TestIdentitySequenceDDL(t *testing.T) {
+	seq := sequenceRow{
+		schema: "app", name: "custom_id_seq", identity: true,
+		ownedSchema: "app", ownedTable: "items", ownedColumn: "id",
+		def: sequenceDef{increment: 5, minValue: 1, maxValue: 1000, startValue: 11, cache: 3},
+	}
+	dbMock, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbMock.Close()
+	if err := applySequences(context.Background(), dbMock, []sequenceRow{seq}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := formatCreateTable(db.Table{Schema: "app", Name: "items"}, []schemaColumn{{name: "id", sqlType: "bigint", identityGen: "ALWAYS", identitySeq: &seq}}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `GENERATED ALWAYS AS IDENTITY (SEQUENCE NAME "app"."custom_id_seq" INCREMENT BY 5 MINVALUE 1 MAXVALUE 1000 START WITH 11 CACHE 3)`
+	if !strings.Contains(stmt, want) {
+		t.Fatalf("identity definition = %s, want %s", stmt, want)
+	}
+}
+
+func TestMergeColumnCatalogQualifiedTypes(t *testing.T) {
+	dbMock, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbMock.Close()
+	mock.ExpectQuery(`CASE WHEN type_ns\.nspname <> 'pg_catalog'`).WithArgs("app").WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "table", "column", "type", "identity", "coll_schema", "coll_name"}).
+			AddRow("app", "items", "mood", `"app"."mood"`, "", "", "").
+			AddRow("app", "items", "moods", `"app"."mood"[]`, "", "", ""))
+	cols := map[string][]schemaColumn{"app.items": {{name: "mood"}, {name: "moods"}}}
+	if err := mergeColumnCatalog(context.Background(), dbMock, []string{"app"}, cols); err != nil {
+		t.Fatal(err)
+	}
+	if cols["app.items"][0].sqlType != `"app"."mood"` || cols["app.items"][1].sqlType != `"app"."mood"[]` {
+		t.Fatalf("qualified types = %+v", cols["app.items"])
 	}
 }
 

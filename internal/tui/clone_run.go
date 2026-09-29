@@ -52,6 +52,8 @@ type ObjectStat = dbanalyze.ObjectStat
 // analyzeSourceFunc is the test seam for the analyze preflight.
 var analyzeSourceFunc = dbanalyze.AnalyzeSource
 
+var cloneworkRun = clonework.Run
+
 // cloneName replaces "{db}" and initial "{n}" in template for TUI prefill.
 // This is a local copy of clone.CloneName plus default n=1 to avoid importing
 // the forbidden clone package for clone execution.
@@ -101,13 +103,16 @@ func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas 
 			})
 		}
 	}
-	return clonework.Run(ctx, clonework.Params{
+	return cloneworkRun(ctx, clonework.Params{
 		SourceDSN:         draft.SourceDSN,
 		CloneName:         draft.CloneName,
 		TargetDSN:         draft.TargetDSN,
 		Strategy:          draft.Strategy,
 		Schemas:           schemas,
 		IncludePrivileges: draft.IncludePrivileges,
+		Replace:           draft.Replace,
+		ReplaceSet:        draft.ReplaceSet,
+		OnConflict:        draft.OnConflict,
 	}, wrapped)
 }
 
