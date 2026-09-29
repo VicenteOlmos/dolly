@@ -56,6 +56,47 @@ func TestRunPropagatesSchemasToCloneOptions(t *testing.T) {
 	}
 }
 
+func TestRunSkipCreateUsesConfigWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"clone":{"skip_create":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error { got = opts; return nil }
+	if err := Run(context.Background(), Params{SourceDSN: "postgres://u:p@h/src", Schemas: []string{"public"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !got.SkipCreate {
+		t.Fatal("expected config skip_create=true")
+	}
+}
+
+func TestRunSkipCreateOverrideFromParams(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"clone":{"skip_create":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error { got = opts; return nil }
+	if err := Run(context.Background(), Params{
+		SourceDSN:     "postgres://u:p@h/src",
+		Schemas:       []string{"public"},
+		SkipCreate:    false,
+		SkipCreateSet: true,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.SkipCreate {
+		t.Fatal("expected SkipCreate=false from TUI override")
+	}
+}
+
 func TestRunPropagatesParamTargetDirOverride(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"clone":{"target_dir":"/data/from-config"}}`), 0o644); err != nil {

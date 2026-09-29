@@ -19,6 +19,7 @@ const (
 	cloneFieldReplace
 	cloneFieldOnConflict
 	cloneFieldTargetDir
+	cloneFieldSkipCreate
 	cloneFormFieldCount
 )
 
@@ -355,6 +356,10 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 			c.draft.OnConflict = cycleCloneOnConflict(c.draft.OnConflict)
 			return nil
 		}
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldSkipCreate {
+			c.toggleCloneSkipCreate()
+			return nil
+		}
 	}
 	if c.sectionActive(cloneSectionPicker) {
 		if c.draft.SchemaPicker.HandleActionKey(k) {
@@ -495,6 +500,7 @@ func (c *cloneScreen) formSection(hint string, width int) []string {
 	lines = append(lines, c.renderReplaceLine())
 	lines = append(lines, c.renderOnConflictLine())
 	lines = append(lines, c.fieldLine("Target directory:", c.draft.TargetDir, cloneFieldTargetDir, width))
+	lines = append(lines, c.renderSkipCreateLine())
 	return lines
 }
 
@@ -507,6 +513,46 @@ func cycleCloneOnConflict(current string) string {
 	default:
 		return "error"
 	}
+}
+
+func (c *cloneScreen) toggleCloneSkipCreate() {
+	if !c.draft.SkipCreateSet {
+		c.draft.SkipCreate = !c.draft.SkipCreate
+		c.draft.SkipCreateSet = true
+		return
+	}
+	c.draft.SkipCreate = !c.draft.SkipCreate
+}
+
+func (c *cloneScreen) cloneSkipCreateLabel() string {
+	if !c.draft.SkipCreateSet {
+		return "config"
+	}
+	if c.draft.SkipCreate {
+		return "on"
+	}
+	return "off"
+}
+
+func (c *cloneScreen) renderSkipCreateLine() string {
+	focused := c.sectionActive(cloneSectionForm) && c.formField == cloneFieldSkipCreate
+	if !c.draft.SkipCreateSet {
+		val := StyleMuted.Render("config")
+		if focused {
+			val = StyleAccent.Render("config")
+		}
+		return StyleMuted.Render("Skip create:") + " " + val
+	}
+	toggle := "[ ]"
+	if c.draft.SkipCreate {
+		toggle = "[✓]"
+	}
+	if focused {
+		toggle = StyleAccent.Render(toggle)
+	} else {
+		toggle = StyleBase.Render(toggle)
+	}
+	return StyleMuted.Render("Skip create:") + " " + toggle
 }
 
 func (c *cloneScreen) toggleCloneReplace() {

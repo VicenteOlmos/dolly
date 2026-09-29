@@ -212,6 +212,8 @@ type CloneDraft struct {
 	ReplaceSet        bool
 	OnConflict        string
 	TargetDir         string
+	SkipCreate        bool
+	SkipCreateSet     bool
 }
 
 // TargetSource selects where the clone target DSN comes from.
