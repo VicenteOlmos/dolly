@@ -158,6 +158,29 @@ func formatAlterTableReplicaIdentity(schema, table, ident, indexName string) (st
 	}
 }
 
+// formatAlterColumnStorage emits ALTER TABLE ... ALTER COLUMN ... SET STORAGE.
+func formatAlterColumnStorage(schema, table, column, storageCode string) (string, bool) {
+	var storage string
+	switch storageCode {
+	case "p":
+		storage = "PLAIN"
+	case "e":
+		storage = "EXTERNAL"
+	case "x":
+		storage = "EXTENDED"
+	case "m":
+		storage = "MAIN"
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(
+		"ALTER TABLE %s ALTER COLUMN %s SET STORAGE %s",
+		quoteQualifiedTable(schema, table),
+		quoteIdentifier(column),
+		storage,
+	), true
+}
+
 // formatCreateView emits CREATE [MATERIALIZED] VIEW.
 func formatCreateView(schema, name, definition string, materialized bool) string {
 	kind := "VIEW"

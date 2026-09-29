@@ -579,6 +579,56 @@ func applyReplicaIdentities(ctx context.Context, tgtDB execer, rows []replicaIde
 	return nil
 }
 
+type columnStorageRow struct {
+	schema  string
+	table   string
+	column  string
+	storage string
+}
+
+func loadColumnStorageOverrides(ctx context.Context, q *sql.DB, schemas []string) ([]columnStorageRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, a.attname, a.attstorage::text
+		FROM pg_attribute a
+		INNER JOIN pg_class c ON c.oid = a.attrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		INNER JOIN pg_type t ON t.oid = a.atttypid
+		WHERE a.attnum > 0 AND NOT a.attisdropped
+		  AND c.relkind IN ('r', 'p')
+		  AND a.attstorage <> t.typstorage
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, a.attnum`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list column storage overrides: %w", err)
+	}
+	defer rows.Close()
+
+	var out []columnStorageRow
+	for rows.Next() {
+		var row columnStorageRow
+		if err := rows.Scan(&row.schema, &row.table, &row.column, &row.storage); err != nil {
+			return nil, fmt.Errorf("scan column storage: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyColumnStorageOverrides(ctx context.Context, tgtDB execer, rows []columnStorageRow) error {
+	for _, row := range rows {
+		stmt, ok := formatAlterColumnStorage(row.schema, row.table, row.column, row.storage)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("column storage on %s.%s.%s: %w", row.schema, row.table, row.column, err)
+		}
+	}
+	return nil
+}
+
 func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`

@@ -238,6 +238,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	columnStorage, err := loadColumnStorageOverrides(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyColumnStorageOverrides(ctx, tgtDB, columnStorage); err != nil {
+		return err
+	}
+
 	indexes, err := loadIndexes(ctx, srcDB, schemas)
 	if err != nil {
 		return err

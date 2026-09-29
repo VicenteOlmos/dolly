@@ -168,6 +168,27 @@ func TestFormatAlterTableReplicaIdentity(t *testing.T) {
 	}
 }
 
+func TestFormatAlterColumnStorage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		code string
+		want string
+		ok   bool
+	}{
+		{"p", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE PLAIN`, true},
+		{"e", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE EXTERNAL`, true},
+		{"x", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE EXTENDED`, true},
+		{"m", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE MAIN`, true},
+		{"z", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := formatAlterColumnStorage("app", "docs", "body", tt.code)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("code=%q: got (%q, %v), want (%q, %v)", tt.code, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestFormatCreateView(t *testing.T) {
 	t.Parallel()
 	got := formatCreateView("app", "active_users", "SELECT id FROM users WHERE active", false)
