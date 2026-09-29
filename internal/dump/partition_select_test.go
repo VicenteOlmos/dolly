@@ -16,6 +16,17 @@ func partitionFixtureTables() []db.Table {
 	}
 }
 
+func nestedPartitionFixtureTables() []db.Table {
+	return []db.Table{
+		{Schema: "sales.eu", Name: "events", RelKind: "p"},
+		{Schema: "sales.eu", Name: "events_2024", RelKind: "p", PartitionOf: "sales.eu.events"},
+		{Schema: "sales.eu", Name: "events_jan", PartitionOf: "sales.eu.events_2024"},
+		{Schema: "sales.eu", Name: "events_feb", PartitionOf: "sales.eu.events_2024"},
+		{Schema: "sales.eu", Name: "events_2025", PartitionOf: "sales.eu.events"},
+		{Schema: "sales.eu", Name: "users"},
+	}
+}
+
 func TestRejectIncludedPartitionParent(t *testing.T) {
 	tables := partitionFixtureTables()
 	policy := &SelectionPolicy{
@@ -27,6 +38,23 @@ func TestRejectIncludedPartitionParent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "public.events_2024") || !strings.Contains(err.Error(), "public.events_2025") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRejectIncludedNestedPartitionParentListsLeaves(t *testing.T) {
+	tables := nestedPartitionFixtureTables()
+	policy := &SelectionPolicy{Includes: []SelectorEntry{{Table: QualifiedTable{Schema: "sales.eu", Name: "events"}}}}
+	err := rejectIncludedPartitionParents(tables, policy)
+	if !IsTableSelectionError(err) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, name := range []string{`"sales.eu".events_jan`, `"sales.eu".events_feb`, `"sales.eu".events_2025`} {
+		if !strings.Contains(err.Error(), name) {
+			t.Fatalf("missing leaf %q: %v", name, err)
+		}
+	}
+	if strings.Contains(err.Error(), `"sales.eu".events_2024`) {
+		t.Fatalf("intermediate parent listed as leaf: %v", err)
 	}
 }
 
@@ -63,6 +91,23 @@ func TestExpandExcludedPartitionParentKeepsIncludedLeaf(t *testing.T) {
 	}
 	if len(filtered) != 1 || filtered[0].Name != "events_2024" {
 		t.Fatalf("filtered = %+v", filtered)
+	}
+}
+
+func TestExpandExcludedNestedPartitionParentWithDottedSchema(t *testing.T) {
+	tables := nestedPartitionFixtureTables()
+	policy := &SelectionPolicy{
+		Excludes: []SelectorEntry{{Table: QualifiedTable{Schema: "sales.eu", Name: "events"}, Source: SelectorSource{Kind: "flag", Name: "--exclude-table"}}},
+	}
+	filtered, prov, err := planPartitionTableSelection(tables, policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || filtered[0].Name != "users" || len(prov.Warnings) != 0 {
+		t.Fatalf("filtered = %+v, warnings = %v", filtered, prov.Warnings)
+	}
+	if !SelectionResumeProvenanceMatches(SelectionPolicyResumeFingerprint(policy), &prov) {
+		t.Fatalf("requested excludes do not match original policy: %+v", prov.RequestedExcludes)
 	}
 }
 

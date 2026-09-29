@@ -21,7 +21,10 @@ func rejectIncludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 		if !ok || table.RelKind != "p" {
 			continue
 		}
-		leaves := directPartitionChildren(qualifiedName(inc.Table.Schema, inc.Table.Name), tables)
+		var leaves []string
+		for _, leaf := range nestedPartitionLeaves(qualifiedName(table.Schema, table.Name), tables) {
+			leaves = append(leaves, selectorIdent(leaf.Schema)+"."+selectorIdent(leaf.Name))
+		}
 		return fmt.Errorf(
 			"%w: include partitioned table %q is not supported; include leaf partitions: %s",
 			ErrTableSelection,
@@ -32,15 +35,24 @@ func rejectIncludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 	return nil
 }
 
-func directPartitionChildren(parentKey string, tables []db.Table) []string {
-	var names []string
-	for _, table := range tables {
-		if table.PartitionOf == parentKey {
-			names = append(names, qualifiedName(table.Schema, table.Name))
-		}
+func selectorIdent(name string) string {
+	if parsed, err := parseUnquotedIdentComponent(name); err == nil && parsed == strings.ToLower(parsed) {
+		return name
 	}
-	sort.Strings(names)
-	return names
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func planPartitionTableSelection(tables []db.Table, policy *SelectionPolicy, ignored []IgnoredFileLine) ([]db.Table, TableSelectionProvenance, error) {
+	if err := rejectIncludedPartitionParents(tables, policy); err != nil {
+		return nil, TableSelectionProvenance{}, err
+	}
+	expanded := expandExcludedPartitionParents(tables, policy)
+	filtered, prov, err := PlanTableSelection(db.WithoutPartitionParents(tables), expanded, ignored)
+	if err != nil {
+		return nil, prov, err
+	}
+	prov.RequestedExcludes = SelectionPolicyResumeFingerprint(policy).RequestedExcludes
+	return filtered, prov, nil
 }
 
 func expandExcludedPartitionParents(tables []db.Table, policy *SelectionPolicy) *SelectionPolicy {
@@ -66,8 +78,8 @@ func expandExcludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 		if ok && table.RelKind == "p" {
 			seen[key] = struct{}{}
 			parent := qualifiedName(table.Schema, table.Name)
-			for _, leafName := range nestedPartitionLeafKeys(parent, tables) {
-				leafKey := tableKeyFromQualified(leafName)
+			for _, leaf := range nestedPartitionLeaves(parent, tables) {
+				leafKey := tableKey(leaf.Schema, leaf.Name)
 				if _, dup := seen[leafKey]; dup {
 					continue
 				}
@@ -75,7 +87,6 @@ func expandExcludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 					continue
 				}
 				seen[leafKey] = struct{}{}
-				leaf := byKey[leafKey]
 				excludes = append(excludes, SelectorEntry{
 					Table:  QualifiedTable{Schema: leaf.Schema, Name: leaf.Name},
 					Raw:    qualifiedName(leaf.Schema, leaf.Name),
@@ -90,36 +101,20 @@ func expandExcludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 	return &SelectionPolicy{Includes: policy.Includes, Excludes: excludes}
 }
 
-func nestedPartitionLeafKeys(parentKey string, tables []db.Table) []string {
-	var keys []string
+func nestedPartitionLeaves(parentKey string, tables []db.Table) []db.Table {
+	var leaves []db.Table
 	for _, table := range tables {
 		if table.PartitionOf != parentKey {
 			continue
 		}
-		name := qualifiedName(table.Schema, table.Name)
-		if partitionHasChildren(name, tables) {
-			keys = append(keys, nestedPartitionLeafKeys(name, tables)...)
+		if table.RelKind == "p" {
+			leaves = append(leaves, nestedPartitionLeaves(qualifiedName(table.Schema, table.Name), tables)...)
 			continue
 		}
-		keys = append(keys, name)
+		leaves = append(leaves, table)
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-func tableKeyFromQualified(qualified string) string {
-	schema, name, ok := strings.Cut(qualified, ".")
-	if !ok {
-		return qualified
-	}
-	return tableKey(schema, name)
-}
-
-func partitionHasChildren(parentKey string, tables []db.Table) bool {
-	for _, table := range tables {
-		if table.PartitionOf == parentKey {
-			return true
-		}
-	}
-	return false
+	sort.Slice(leaves, func(i, j int) bool {
+		return qualifiedName(leaves[i].Schema, leaves[i].Name) < qualifiedName(leaves[j].Schema, leaves[j].Name)
+	})
+	return leaves
 }

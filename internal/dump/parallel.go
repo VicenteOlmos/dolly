@@ -392,14 +392,7 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 		return nil, nil, fmt.Errorf("load schema: %w", err)
 	}
 	if cfg.selection != nil {
-		if err := rejectIncludedPartitionParents(tables, cfg.selection); err != nil {
-			return nil, nil, err
-		}
-		cfg.selection = expandExcludedPartitionParents(tables, cfg.selection)
-	}
-	tables = db.WithoutPartitionParents(tables)
-	if cfg.selection != nil {
-		filtered, selProv, err := PlanTableSelection(tables, cfg.selection, cfg.selectionIgnored)
+		filtered, selProv, err := planPartitionTableSelection(tables, cfg.selection, cfg.selectionIgnored)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -410,6 +403,8 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 		for _, w := range selProv.Warnings {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 		}
+	} else {
+		tables = db.WithoutPartitionParents(tables)
 	}
 	if hasChunkPolicy(cfg) {
 		return nil, nil, fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")

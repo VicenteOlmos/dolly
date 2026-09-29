@@ -416,15 +416,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		return fmt.Errorf("load schema: %w", err)
 	}
 	if cfg.selection != nil {
-		if err := rejectIncludedPartitionParents(tables, cfg.selection); err != nil {
-			return err
-		}
-		cfg.selection = expandExcludedPartitionParents(tables, cfg.selection)
-	}
-	tables = db.WithoutPartitionParents(tables)
-
-	if cfg.selection != nil {
-		filtered, selProv, err := PlanTableSelection(tables, cfg.selection, cfg.selectionIgnored)
+		filtered, selProv, err := planPartitionTableSelection(tables, cfg.selection, cfg.selectionIgnored)
 		if err != nil {
 			return err
 		}
@@ -435,6 +427,8 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		for _, w := range selProv.Warnings {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 		}
+	} else {
+		tables = db.WithoutPartitionParents(tables)
 	}
 
 	chunkPlans, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)
