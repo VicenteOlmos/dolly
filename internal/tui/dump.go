@@ -44,42 +44,48 @@ const (
 	modeFieldChunkSize
 	modeFieldRetryMax
 	modeFieldRetryBase
+	modeFieldIncludeTableFile
+	modeFieldExcludeTableFile
+	modeFieldChunkTableFile
 	modeFieldCount
 )
 
 type dumpScreen struct {
-	draft            *DumpDraft
-	dumpStatus       *DumpStatus
-	dumpLog          *[]string
-	dumpError        *string
-	dumpResult       **DumpResultSummary
-	dumpProgress     **DumpProgressEvent
-	restoreProgress  **RestoreProgressEvent
-	restoreRunning   *bool
-	hasSession       func() bool
-	nav              SectionNav
-	pathCursor       int
-	modeField        int
-	percentCursor    int
-	seedCursor       int
-	chunkCursor      int
-	depthCursor      int
-	tablesCursor     int
-	rowsCursor       int
-	rowsPerCursor    int
-	includeCursor    int
-	excludeCursor    int
-	chunkSizeCursor  int
-	retryMaxCursor   int
-	retryBaseCursor  int
-	restoreDir       string
-	restoreDirCursor int
-	restoreDirFocus  bool
-	historyFocus     int
-	logTailOffset    int
-	fileListOffset   int
-	spinnerFrame     *int
-	trustedSchemaSQL bool
+	draft                  *DumpDraft
+	dumpStatus             *DumpStatus
+	dumpLog                *[]string
+	dumpError              *string
+	dumpResult             **DumpResultSummary
+	dumpProgress           **DumpProgressEvent
+	restoreProgress        **RestoreProgressEvent
+	restoreRunning         *bool
+	hasSession             func() bool
+	nav                    SectionNav
+	pathCursor             int
+	modeField              int
+	percentCursor          int
+	seedCursor             int
+	chunkCursor            int
+	depthCursor            int
+	tablesCursor           int
+	rowsCursor             int
+	rowsPerCursor          int
+	includeCursor          int
+	excludeCursor          int
+	chunkSizeCursor        int
+	retryMaxCursor         int
+	retryBaseCursor        int
+	includeTableFileCursor int
+	excludeTableFileCursor int
+	chunkTableFileCursor   int
+	restoreDir             string
+	restoreDirCursor       int
+	restoreDirFocus        bool
+	historyFocus           int
+	logTailOffset          int
+	fileListOffset         int
+	spinnerFrame           *int
+	trustedSchemaSQL       bool
 }
 
 func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool) ScreenModel {
@@ -377,7 +383,8 @@ func (d *dumpScreen) modeTextFocused() bool {
 	switch d.modeField {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
-		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase:
+		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase,
+		modeFieldIncludeTableFile, modeFieldExcludeTableFile, modeFieldChunkTableFile:
 		return true
 	default:
 		return false
@@ -397,6 +404,9 @@ func (d *dumpScreen) syncModeCursors() {
 	d.chunkSizeCursor = len(d.draft.ChunkSizeText)
 	d.retryMaxCursor = len(d.draft.RetryMaxText)
 	d.retryBaseCursor = len(d.draft.RetryBaseText)
+	d.includeTableFileCursor = len(d.draft.IncludeTableFile)
+	d.excludeTableFileCursor = len(d.draft.ExcludeTableFile)
+	d.chunkTableFileCursor = len(d.draft.ChunkTableFile)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -437,6 +447,12 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.RetryMaxText, &d.retryMaxCursor)
 		case modeFieldRetryBase:
 			return handleFieldCursorKey(k, &d.draft.RetryBaseText, &d.retryBaseCursor)
+		case modeFieldIncludeTableFile:
+			return handleFieldCursorKey(k, &d.draft.IncludeTableFile, &d.includeTableFileCursor)
+		case modeFieldExcludeTableFile:
+			return handleFieldCursorKey(k, &d.draft.ExcludeTableFile, &d.excludeTableFileCursor)
+		case modeFieldChunkTableFile:
+			return handleFieldCursorKey(k, &d.draft.ChunkTableFile, &d.chunkTableFileCursor)
 		}
 	}
 	switch d.modeField {
@@ -506,6 +522,15 @@ func (d *dumpScreen) modeSummary() string {
 	}
 	if strings.TrimSpace(d.draft.ExcludeTables) != "" {
 		parts = append(parts, "exclude")
+	}
+	if strings.TrimSpace(d.draft.IncludeTableFile) != "" {
+		parts = append(parts, "include-file")
+	}
+	if strings.TrimSpace(d.draft.ExcludeTableFile) != "" {
+		parts = append(parts, "exclude-file")
+	}
+	if strings.TrimSpace(d.draft.ChunkTableFile) != "" {
+		parts = append(parts, "chunk-file")
 	}
 	if d.draft.WorkersSet {
 		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
@@ -665,6 +690,9 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldChunkSize, "Chunk size", d.modeFieldValue(d.draft.ChunkSizeText, d.chunkSizeCursor, modeFieldChunkSize)},
 		{modeFieldRetryMax, "Retry max", d.modeFieldValue(d.draft.RetryMaxText, d.retryMaxCursor, modeFieldRetryMax)},
 		{modeFieldRetryBase, "Retry base", d.modeFieldValue(d.draft.RetryBaseText, d.retryBaseCursor, modeFieldRetryBase)},
+		{modeFieldIncludeTableFile, "Include table file", d.modeFieldValue(d.draft.IncludeTableFile, d.includeTableFileCursor, modeFieldIncludeTableFile)},
+		{modeFieldExcludeTableFile, "Exclude table file", d.modeFieldValue(d.draft.ExcludeTableFile, d.excludeTableFileCursor, modeFieldExcludeTableFile)},
+		{modeFieldChunkTableFile, "Chunk table file", d.modeFieldValue(d.draft.ChunkTableFile, d.chunkTableFileCursor, modeFieldChunkTableFile)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))
