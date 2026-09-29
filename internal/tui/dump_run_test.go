@@ -196,3 +196,27 @@ func TestDumpOverridesExplicitZeroRetriesSlowConnection(t *testing.T) {
 		t.Fatalf("retry max = %d, want 0", max)
 	}
 }
+
+func TestDumpOverridesFromDraftIncludeTableFile(t *testing.T) {
+	overrides, err := dumpOverridesFromDraft(DumpDraft{IncludeTableFile: "tables/a.txt,\ntables/b.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"tables/a.txt", "tables/b.txt"}
+	if len(overrides.IncludeTableFiles) != len(want) {
+		t.Fatalf("IncludeTableFiles = %v, want %v", overrides.IncludeTableFiles, want)
+	}
+	for i := range want {
+		if overrides.IncludeTableFiles[i] != want[i] {
+			t.Fatalf("IncludeTableFiles[%d] = %q, want %q", i, overrides.IncludeTableFiles[i], want[i])
+		}
+	}
+
+	empty, err := dumpOverridesFromDraft(DumpDraft{IncludeTableFile: "  \n  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.IncludeTableFiles) != 0 {
+		t.Fatalf("whitespace-only IncludeTableFiles = %v, want none", empty.IncludeTableFiles)
+	}
+}

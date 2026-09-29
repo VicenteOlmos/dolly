@@ -133,25 +133,30 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	var includeTableFiles []string
+	if strings.TrimSpace(draft.IncludeTableFile) != "" {
+		includeTableFiles = splitChunkTables(draft.IncludeTableFile)
+	}
 	return runopts.DumpOverrides{
-		NoTransaction:   draft.NoTransaction,
-		SlowConnection:  draft.SlowConnection,
-		RequireSafeKey:  draft.RequireSafeKey,
-		Percent:         percent,
-		SeedFile:        strings.TrimSpace(draft.SeedFile),
-		ChunkTables:     splitChunkTables(draft.ChunkTables),
-		MaxDepth:        maxDepth,
-		MaxTables:       maxTables,
-		MaxRows:         maxRows,
-		MaxRowsPerTable: maxRowsPer,
-		IncludeTables:   splitChunkTables(draft.IncludeTables),
-		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
-		ChunkSize:       chunkSize,
-		RetryMax:        retryMax,
-		RetryMaxSet:     strings.TrimSpace(draft.RetryMaxText) != "",
-		RetryBase:       retryBase,
-		Workers:         draft.Workers,
-		WorkersSet:      draft.WorkersSet,
+		NoTransaction:     draft.NoTransaction,
+		SlowConnection:    draft.SlowConnection,
+		RequireSafeKey:    draft.RequireSafeKey,
+		Percent:           percent,
+		SeedFile:          strings.TrimSpace(draft.SeedFile),
+		ChunkTables:       splitChunkTables(draft.ChunkTables),
+		MaxDepth:          maxDepth,
+		MaxTables:         maxTables,
+		MaxRows:           maxRows,
+		MaxRowsPerTable:   maxRowsPer,
+		IncludeTables:     splitChunkTables(draft.IncludeTables),
+		ExcludeTables:     splitChunkTables(draft.ExcludeTables),
+		IncludeTableFiles: includeTableFiles,
+		ChunkSize:         chunkSize,
+		RetryMax:          retryMax,
+		RetryMaxSet:       strings.TrimSpace(draft.RetryMaxText) != "",
+		RetryBase:         retryBase,
+		Workers:           draft.Workers,
+		WorkersSet:        draft.WorkersSet,
 	}, nil
 }
 
