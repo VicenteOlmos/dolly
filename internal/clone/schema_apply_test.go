@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
 )
 
 func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
@@ -56,6 +58,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 	// loadAllSchemaColumns (1 query).
 	srcMock.ExpectQuery(`FROM information_schema.columns[\s\S]*table_schema IN \(\$1[\s\S]*ORDER BY table_schema, table_name, ordinal_position`).
 		WillReturnRows(allDDLCols)
+	srcMock.ExpectQuery(`is_generated = 'ALWAYS'`).WillReturnRows(
+		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "generation_expression"}))
 	// loadAllUniqueConstraints (1 query).
 	srcMock.ExpectQuery(`constraint_type = 'UNIQUE'[\s\S]*table_schema IN \(\$1`).
 		WillReturnRows(allUniques)
@@ -91,7 +95,8 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 }
 
 func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
-	srcMock.ExpectQuery(`p\.prokind = 'a'`).WillReturnRows(sqlmock.NewRows([]string{"aggregate"}))
+	srcMock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "aggkind"}))
+	srcMock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
 	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
@@ -391,5 +396,91 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	}
 	if err := tgtMock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
+	parent := db.Table{
+		Schema:      "public",
+		Name:        "events",
+		RelKind:     "p",
+		PartitionBy: "RANGE (id)",
+		Columns:     []db.Column{{Name: "id", PrimaryKey: true}},
+	}
+	cols := []schemaColumn{
+		{name: "id", sqlType: "integer"},
+		{name: "total", sqlType: "integer", generatedExpr: "id * 2"},
+	}
+	got, err := formatCreateTable(parent, cols, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `CREATE TABLE "public"."events" ("id" integer NOT NULL, "total" integer GENERATED ALWAYS AS (id * 2) STORED NOT NULL, PRIMARY KEY ("id")) PARTITION BY RANGE (id)`
+	if got != want {
+		t.Fatalf("parent SQL =\n%s\nwant\n%s", got, want)
+	}
+
+	child := db.Table{
+		Schema:         "public",
+		Name:           "events_2024",
+		PartitionOf:    "public.events",
+		PartitionBound: "FOR VALUES FROM (1) TO (2)",
+	}
+	got, err = formatCreateTable(child, cols, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `CREATE TABLE "public"."events_2024" PARTITION OF "public"."events" FOR VALUES FROM (1) TO (2)`
+	if got != want {
+		t.Fatalf("child SQL =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestOrderPartitionParentsFirst(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "events_2024", PartitionOf: "public.events"},
+		{Schema: "public", Name: "events", RelKind: "p", PartitionBy: "RANGE (id)"},
+	}
+	got := orderPartitionParentsFirst(tables)
+	if got[0].Name != "events" || got[1].Name != "events_2024" {
+		t.Fatalf("order = %s, %s", got[0].Name, got[1].Name)
+	}
+}
+
+func TestIndexesForReplaySkipsPartitionChildren(t *testing.T) {
+	indexes := []indexRow{
+		{schema: "public", table: "events", name: "events_id_idx", def: "CREATE INDEX events_id_idx"},
+		{schema: "public", table: "events_2024", name: "events_2024_id_idx", def: "CREATE INDEX events_2024_id_idx"},
+	}
+	tables := []db.Table{{Schema: "public", Name: "events_2024", PartitionOf: "public.events"}}
+	got := indexesForReplay(indexes, tables)
+	if len(got) != 1 || got[0].table != "events" {
+		t.Fatalf("indexes = %+v", got)
+	}
+}
+
+func TestFormatAggregateNormal(t *testing.T) {
+	got := formatAggregate(aggregateSpec{
+		schema: "public", name: "sum_int", args: "integer",
+		stype: "bigint", sfuncSchema: "public", sfunc: "int4_sum",
+		parallel: "s", initVal: sql.NullString{String: "0", Valid: true},
+	})
+	want := `CREATE AGGREGATE "public"."sum_int"(integer) (SFUNC = "public"."int4_sum", STYPE = bigint, INITCOND = '0', PARALLEL = SAFE)`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestLoadAggregatesRejectsOrderedSet(t *testing.T) {
+	conn, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	mock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(
+		sqlmock.NewRows([]string{"name", "aggkind"}).AddRow(`"public"."percentile"(double precision)`, "o"))
+	_, err = loadAggregates(context.Background(), conn, []string{"public"})
+	if err == nil || !strings.Contains(err.Error(), "ordered-set aggregate") {
+		t.Fatalf("err = %v", err)
 	}
 }

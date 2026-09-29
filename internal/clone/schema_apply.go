@@ -4,11 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
+
+// execer is the target side of catalog replay. *sql.DB satisfies it, and a
+// script recorder does too so schema.sql can be written without pg_dump.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
 
 type schemaColumn struct {
 	name            string
@@ -16,6 +23,7 @@ type schemaColumn struct {
 	nullable        bool
 	defaultExpr     sql.NullString
 	ordinalPosition int
+	generatedExpr   string
 }
 
 type uniqueConstraint struct {
@@ -31,13 +39,52 @@ type uniqueConstraint struct {
 // order), triggers, rules, comments, grants, and RLS.
 //
 // Limitations (prefer pg_dump when it is on PATH):
-//   - Aggregates, exclusion constraints, and operator classes are not replayed.
+//   - Ordered-set and hypothetical aggregates, exclusion constraints, and operator classes are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
+//   - Indexes that exist only on a partition (not the parent) are omitted.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
 }
 
-func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, includePrivileges bool) error {
+// RenderCatalogSchema replays the catalog into a SQL script. Privileges are
+// included only when includePrivileges is true. schema.sql capture passes false,
+// matching pg_dump --no-acl.
+func RenderCatalogSchema(ctx context.Context, srcDB *sql.DB, schemas []string, includePrivileges bool) (string, error) {
+	rec := &scriptExec{}
+	if err := applySchemas(ctx, srcDB, rec, schemas, includePrivileges); err != nil {
+		return "", err
+	}
+	return rec.String(), nil
+}
+
+type scriptExec struct {
+	b strings.Builder
+}
+
+func (s *scriptExec) String() string { return s.b.String() }
+
+func (s *scriptExec) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	if len(args) > 0 {
+		return nil, fmt.Errorf("catalog schema script cannot bind parameters")
+	}
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return scriptResult{}, nil
+	}
+	if !strings.HasSuffix(q, ";") {
+		q += ";"
+	}
+	s.b.WriteString(q)
+	s.b.WriteByte('\n')
+	return scriptResult{}, nil
+}
+
+type scriptResult struct{}
+
+func (scriptResult) LastInsertId() (int64, error) { return 0, nil }
+func (scriptResult) RowsAffected() (int64, error) { return 0, nil }
+
+func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []string, includePrivileges bool) error {
 	if len(schemas) == 0 {
 		return fmt.Errorf("schemas are required")
 	}
@@ -85,7 +132,7 @@ func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, i
 		return err
 	}
 
-	routines, err := loadRoutines(ctx, srcDB, schemas)
+	routines, aggregates, err := loadRoutines(ctx, srcDB, schemas)
 	if err != nil {
 		return err
 	}
@@ -104,18 +151,24 @@ func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, i
 	if err := applySQLDefs(ctx, tgtDB, routineDefs, "function"); err != nil {
 		return err
 	}
+	if err := applySQLDefs(ctx, tgtDB, aggregates, "aggregate"); err != nil {
+		return err
+	}
 
 	tables, err := db.LoadPostgresSchemasBatched(ctx, srcDB, schemas)
 	if err != nil {
 		return fmt.Errorf("load source schema: %w", err)
 	}
-	sorted := dump.SortTables(tables)
+	sorted := orderPartitionParentsFirst(dump.SortTables(tables))
 
 	// Batch all per-table queries (4 queries total, not 4N).
 	// Only run when there are tables to avoid unnecessary queries.
 	if len(sorted) > 0 {
 		schemaCols, err := loadAllSchemaColumns(ctx, srcDB, schemas)
 		if err != nil {
+			return err
+		}
+		if err := mergeGeneratedExpressions(ctx, srcDB, schemas, schemaCols); err != nil {
 			return err
 		}
 		uniqueMap, err := loadAllUniqueConstraints(ctx, srcDB, schemas)
@@ -151,7 +204,7 @@ func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, i
 	if err != nil {
 		return err
 	}
-	if err := applyIndexes(ctx, tgtDB, indexes); err != nil {
+	if err := applyIndexes(ctx, tgtDB, indexesForReplay(indexes, sorted)); err != nil {
 		return err
 	}
 
@@ -492,12 +545,41 @@ func loadUniqueConstraints(ctx context.Context, q *sql.DB, schema, table string)
 	return out, nil
 }
 
-func createTable(ctx context.Context, tgtDB *sql.DB, table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) error {
+func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) error {
+	stmt, err := formatCreateTable(table, cols, uniques, checks)
+	if err != nil {
+		return err
+	}
+	if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("create table %s: %w", quoteQualifiedTable(table.Schema, table.Name), err)
+	}
+	return nil
+}
+
+func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) (string, error) {
+	qual := quoteQualifiedTable(table.Schema, table.Name)
+	if table.PartitionOf != "" {
+		parentSchema, parentName, ok := splitQualified(table.PartitionOf)
+		if !ok {
+			return "", fmt.Errorf("partition %s has invalid parent %q", qual, table.PartitionOf)
+		}
+		bound := strings.TrimSpace(table.PartitionBound)
+		if bound == "" {
+			return "", fmt.Errorf("partition %s has no partition bound", qual)
+		}
+		return fmt.Sprintf("CREATE TABLE %s PARTITION OF %s %s", qual, quoteQualifiedTable(parentSchema, parentName), bound), nil
+	}
+
 	var parts []string
 	for _, c := range cols {
-		part := fmt.Sprintf("%s %s", quoteIdentifier(c.name), c.sqlType)
-		if c.defaultExpr.Valid && c.defaultExpr.String != "" {
-			part += " DEFAULT " + c.defaultExpr.String
+		var part string
+		if c.generatedExpr != "" {
+			part = fmt.Sprintf("%s %s GENERATED ALWAYS AS (%s) STORED", quoteIdentifier(c.name), c.sqlType, c.generatedExpr)
+		} else {
+			part = fmt.Sprintf("%s %s", quoteIdentifier(c.name), c.sqlType)
+			if c.defaultExpr.Valid && c.defaultExpr.String != "" {
+				part += " DEFAULT " + c.defaultExpr.String
+			}
 		}
 		if !c.nullable {
 			part += " NOT NULL"
@@ -529,15 +611,126 @@ func createTable(ctx context.Context, tgtDB *sql.DB, table db.Table, cols []sche
 		parts = append(parts, formatTableCheckConstraint(chk.name, chk.def))
 	}
 
-	stmt := fmt.Sprintf(
-		"CREATE TABLE %s (%s)",
-		quoteQualifiedTable(table.Schema, table.Name),
-		strings.Join(parts, ", "),
-	)
-	if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
-		return fmt.Errorf("create table %s: %w", quoteQualifiedTable(table.Schema, table.Name), err)
+	stmt := fmt.Sprintf("CREATE TABLE %s (%s)", qual, strings.Join(parts, ", "))
+	if table.RelKind == "p" {
+		partBy := strings.TrimSpace(table.PartitionBy)
+		if partBy == "" {
+			return "", fmt.Errorf("partitioned table %s has no partition key", qual)
+		}
+		stmt += " PARTITION BY " + partBy
+	}
+	return stmt, nil
+}
+
+func splitQualified(name string) (string, string, bool) {
+	schema, table, ok := strings.Cut(name, ".")
+	if !ok || schema == "" || table == "" {
+		return "", "", false
+	}
+	return schema, table, true
+}
+
+func mergeGeneratedExpressions(ctx context.Context, q *sql.DB, schemas []string, cols map[string][]schemaColumn) error {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT table_schema, table_name, column_name, generation_expression
+		FROM information_schema.columns
+		WHERE is_generated = 'ALWAYS'
+		  AND table_schema IN (%s)
+	`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("load generated expressions: %w", err)
+	}
+	defer rows.Close()
+	type exprKey struct{ table, column string }
+	exprs := map[exprKey]string{}
+	for rows.Next() {
+		var schema, table, column string
+		var expr sql.NullString
+		if err := rows.Scan(&schema, &table, &column, &expr); err != nil {
+			return fmt.Errorf("load generated expressions: %w", err)
+		}
+		if !expr.Valid || strings.TrimSpace(expr.String) == "" {
+			continue
+		}
+		exprs[exprKey{schema + "." + table, column}] = expr.String
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load generated expressions: %w", err)
+	}
+	for key, list := range cols {
+		for i := range list {
+			if expr, ok := exprs[exprKey{key, list[i].name}]; ok {
+				list[i].generatedExpr = expr
+			}
+		}
+		cols[key] = list
 	}
 	return nil
+}
+
+func orderPartitionParentsFirst(tables []db.Table) []db.Table {
+	if len(tables) < 2 {
+		return tables
+	}
+	byName := make(map[string]db.Table, len(tables))
+	orig := make(map[string]int, len(tables))
+	for i, table := range tables {
+		key := table.Schema + "." + table.Name
+		byName[key] = table
+		orig[key] = i
+	}
+	depth := make(map[string]int, len(tables))
+	var walk func(key string, stack map[string]bool) int
+	walk = func(key string, stack map[string]bool) int {
+		if d, ok := depth[key]; ok {
+			return d
+		}
+		table, ok := byName[key]
+		if !ok || table.PartitionOf == "" || stack[key] {
+			depth[key] = 0
+			return 0
+		}
+		stack[key] = true
+		d := walk(table.PartitionOf, stack) + 1
+		delete(stack, key)
+		depth[key] = d
+		return d
+	}
+	order := append([]db.Table(nil), tables...)
+	for _, table := range order {
+		walk(table.Schema+"."+table.Name, map[string]bool{})
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		di := depth[order[i].Schema+"."+order[i].Name]
+		dj := depth[order[j].Schema+"."+order[j].Name]
+		if di != dj {
+			return di < dj
+		}
+		return orig[order[i].Schema+"."+order[i].Name] < orig[order[j].Schema+"."+order[j].Name]
+	})
+	return order
+}
+
+func indexesForReplay(indexes []indexRow, tables []db.Table) []indexRow {
+	skip := map[string]bool{}
+	for _, table := range tables {
+		if table.PartitionOf != "" {
+			skip[table.Schema+"."+table.Name] = true
+		}
+	}
+	if len(skip) == 0 {
+		return indexes
+	}
+	out := make([]indexRow, 0, len(indexes))
+	for _, idx := range indexes {
+		if skip[idx.schema+"."+idx.table] {
+			continue
+		}
+		out = append(out, idx)
+	}
+	return out
 }
 
 func primaryKeyColumnNames(cols []db.Column) []string {

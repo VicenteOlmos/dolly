@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 type routineRow struct {
@@ -18,23 +19,12 @@ type depEdge struct {
 	ref int64
 }
 
-func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRow, error) {
-	inClause, args := schemaINClause(schemas)
-	aggregateQuery := fmt.Sprintf(`
-		SELECT format('%%I.%%I(%%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))
-		FROM pg_proc p
-		JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE n.nspname IN (%s) AND p.prokind = 'a'
-		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
-		ORDER BY n.nspname, p.proname LIMIT 1`, inClause)
-	var aggregate string
-	switch err := q.QueryRowContext(ctx, aggregateQuery, args...).Scan(&aggregate); err {
-	case nil:
-		return nil, fmt.Errorf("catalog schema replay does not support aggregate %s; install pg_dump to clone this schema", aggregate)
-	case sql.ErrNoRows:
-	default:
-		return nil, fmt.Errorf("list aggregates: %w", err)
+func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRow, []string, error) {
+	aggregates, err := loadAggregates(ctx, q, schemas)
+	if err != nil {
+		return nil, nil, err
 	}
+	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
 		SELECT p.oid, n.nspname || '.' || p.proname, pg_get_functiondef(p.oid)
 		FROM pg_proc p
@@ -48,21 +38,183 @@ func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRo
 		ORDER BY n.nspname, p.proname, p.oid`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list functions: %w", err)
+		return nil, nil, fmt.Errorf("list functions: %w", err)
 	}
 	defer rows.Close()
 	var out []routineRow
 	for rows.Next() {
 		var row routineRow
 		if err := rows.Scan(&row.oid, &row.name, &row.def); err != nil {
-			return nil, fmt.Errorf("scan function: %w", err)
+			return nil, nil, fmt.Errorf("scan function: %w", err)
 		}
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list functions: %w", err)
+		return nil, nil, fmt.Errorf("list functions: %w", err)
+	}
+	return out, aggregates, nil
+}
+
+func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
+	inClause, args := schemaINClause(schemas)
+	unsupported := fmt.Sprintf(`
+		SELECT format('%%I.%%I(%%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), a.aggkind
+		FROM pg_aggregate a
+		JOIN pg_proc p ON p.oid = a.aggfnoid
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname IN (%s) AND a.aggkind <> 'n'
+		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+		ORDER BY n.nspname, p.proname
+		LIMIT 1`, inClause)
+	var name, kind string
+	switch err := q.QueryRowContext(ctx, unsupported, args...).Scan(&name, &kind); err {
+	case nil:
+		label := "ordered-set"
+		if kind == "h" {
+			label = "hypothetical"
+		}
+		return nil, fmt.Errorf("catalog schema replay does not support %s aggregate %s; install pg_dump to clone this schema", label, name)
+	case sql.ErrNoRows:
+	default:
+		return nil, fmt.Errorf("list aggregates: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), p.proparallel,
+		       format_type(a.aggtranstype, NULL),
+		       sn.nspname, sp.proname, a.aggtransspace,
+		       COALESCE(fn.nspname, ''), COALESCE(fp.proname, ''), a.aggfinalextra,
+		       COALESCE(cn.nspname, ''), COALESCE(cp.proname, ''),
+		       COALESCE(srn.nspname, ''), COALESCE(srp.proname, ''),
+		       COALESCE(dsn.nspname, ''), COALESCE(dsp.proname, ''),
+		       a.agginitval,
+		       COALESCE(mn.nspname, ''), COALESCE(mp.proname, ''),
+		       CASE WHEN a.aggmtranstype = 0 THEN '' ELSE format_type(a.aggmtranstype, NULL) END,
+		       a.aggmtransspace, a.aggminitval,
+		       COALESCE(invn.nspname, ''), COALESCE(invp.proname, ''),
+		       COALESCE(mfn.nspname, ''), COALESCE(mfp.proname, ''),
+		       a.aggmfinalextra
+		FROM pg_aggregate a
+		JOIN pg_proc p ON p.oid = a.aggfnoid
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		JOIN pg_proc sp ON sp.oid = a.aggtransfn
+		JOIN pg_namespace sn ON sn.oid = sp.pronamespace
+		LEFT JOIN pg_proc fp ON a.aggfinalfn <> 0 AND fp.oid = a.aggfinalfn
+		LEFT JOIN pg_namespace fn ON fn.oid = fp.pronamespace
+		LEFT JOIN pg_proc cp ON a.aggcombinefn <> 0 AND cp.oid = a.aggcombinefn
+		LEFT JOIN pg_namespace cn ON cn.oid = cp.pronamespace
+		LEFT JOIN pg_proc srp ON a.aggserialfn <> 0 AND srp.oid = a.aggserialfn
+		LEFT JOIN pg_namespace srn ON srn.oid = srp.pronamespace
+		LEFT JOIN pg_proc dsp ON a.aggdeserialfn <> 0 AND dsp.oid = a.aggdeserialfn
+		LEFT JOIN pg_namespace dsn ON dsn.oid = dsp.pronamespace
+		LEFT JOIN pg_proc mp ON a.aggmtransfn <> 0 AND mp.oid = a.aggmtransfn
+		LEFT JOIN pg_namespace mn ON mn.oid = mp.pronamespace
+		LEFT JOIN pg_proc invp ON a.aggminvtransfn <> 0 AND invp.oid = a.aggminvtransfn
+		LEFT JOIN pg_namespace invn ON invn.oid = invp.pronamespace
+		LEFT JOIN pg_proc mfp ON a.aggmfinalfn <> 0 AND mfp.oid = a.aggmfinalfn
+		LEFT JOIN pg_namespace mfn ON mfn.oid = mfp.pronamespace
+		WHERE n.nspname IN (%s) AND a.aggkind = 'n'
+		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+		ORDER BY n.nspname, p.proname, p.oid`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list aggregates: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var spec aggregateSpec
+		var initVal, minit sql.NullString
+		if err := rows.Scan(
+			&spec.schema, &spec.name, &spec.args, &spec.parallel,
+			&spec.stype,
+			&spec.sfuncSchema, &spec.sfunc, &spec.sspace,
+			&spec.finalSchema, &spec.final, &spec.finalExtra,
+			&spec.combineSchema, &spec.combine,
+			&spec.serialSchema, &spec.serial,
+			&spec.deserialSchema, &spec.deserial,
+			&initVal,
+			&spec.msfuncSchema, &spec.msfunc,
+			&spec.mstype, &spec.msspace, &minit,
+			&spec.minvSchema, &spec.minv,
+			&spec.mfinalSchema, &spec.mfinal, &spec.mfinalExtra,
+		); err != nil {
+			return nil, fmt.Errorf("scan aggregate: %w", err)
+		}
+		spec.initVal = initVal
+		spec.minit = minit
+		out = append(out, formatAggregate(spec))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list aggregates: %w", err)
 	}
 	return out, nil
+}
+
+type aggregateSpec struct {
+	schema, name, args, parallel, stype    string
+	sfuncSchema, sfunc                     string
+	sspace                                 int
+	finalSchema, final                     string
+	finalExtra                             bool
+	combineSchema, combine                 string
+	serialSchema, serial                   string
+	deserialSchema, deserial               string
+	initVal                                sql.NullString
+	msfuncSchema, msfunc, mstype           string
+	msspace                                int
+	minit                                  sql.NullString
+	minvSchema, minv, mfinalSchema, mfinal string
+	mfinalExtra                            bool
+}
+
+func formatAggregate(a aggregateSpec) string {
+	var clauses []string
+	addFn := func(label, schema, name string) {
+		if name == "" {
+			return
+		}
+		clauses = append(clauses, fmt.Sprintf("%s = %s", label, quoteQualifiedTable(schema, name)))
+	}
+	addFn("SFUNC", a.sfuncSchema, a.sfunc)
+	clauses = append(clauses, "STYPE = "+a.stype)
+	if a.sspace > 0 {
+		clauses = append(clauses, fmt.Sprintf("SSPACE = %d", a.sspace))
+	}
+	addFn("FINALFUNC", a.finalSchema, a.final)
+	if a.finalExtra {
+		clauses = append(clauses, "FINALFUNC_EXTRA")
+	}
+	addFn("COMBINEFUNC", a.combineSchema, a.combine)
+	addFn("SERIALFUNC", a.serialSchema, a.serial)
+	addFn("DESERIALFUNC", a.deserialSchema, a.deserial)
+	if a.initVal.Valid {
+		clauses = append(clauses, "INITCOND = "+quoteLiteral(a.initVal.String))
+	}
+	addFn("MSFUNC", a.msfuncSchema, a.msfunc)
+	if a.mstype != "" {
+		clauses = append(clauses, "MSTYPE = "+a.mstype)
+	}
+	if a.msspace > 0 {
+		clauses = append(clauses, fmt.Sprintf("MSSPACE = %d", a.msspace))
+	}
+	if a.minit.Valid {
+		clauses = append(clauses, "MINITCOND = "+quoteLiteral(a.minit.String))
+	}
+	addFn("MINVFUNC", a.minvSchema, a.minv)
+	addFn("MFINALFUNC", a.mfinalSchema, a.mfinal)
+	if a.mfinalExtra {
+		clauses = append(clauses, "MFINALFUNC_EXTRA")
+	}
+	switch a.parallel {
+	case "s":
+		clauses = append(clauses, "PARALLEL = SAFE")
+	case "r":
+		clauses = append(clauses, "PARALLEL = RESTRICTED")
+	default:
+		clauses = append(clauses, "PARALLEL = UNSAFE")
+	}
+	return fmt.Sprintf("CREATE AGGREGATE %s(%s) (%s)", quoteQualifiedTable(a.schema, a.name), a.args, strings.Join(clauses, ", "))
 }
 
 func loadRoutineDeps(ctx context.Context, q *sql.DB, schemas []string) ([]depEdge, error) {
@@ -187,7 +339,7 @@ func loadDepEdges(ctx context.Context, q *sql.DB, query string, args []any, labe
 	return out, nil
 }
 
-func applySQLDefs(ctx context.Context, tgt *sql.DB, defs []string, label string) error {
+func applySQLDefs(ctx context.Context, tgt execer, defs []string, label string) error {
 	for _, def := range defs {
 		if _, err := tgt.ExecContext(ctx, def); err != nil {
 			return fmt.Errorf("apply %s: %w", label, err)
