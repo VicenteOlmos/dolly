@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
@@ -62,6 +63,26 @@ func TestDumpModeSanitizeToggle(t *testing.T) {
 	}
 	if !strings.Contains(ds.modeSummary(), "sanitize") {
 		t.Fatalf("mode summary = %q", ds.modeSummary())
+	}
+}
+
+func TestDumpModeSanitizeToggleFromEnabledConfig(t *testing.T) {
+	app := NewApp()
+	app.cfg = config.DefaultConfig()
+	app.cfg.Sanitization.Enabled = true
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionMode)
+	ds.modeField = modeFieldSanitize
+	if ds.sanitizeLabel() != "on (config)" || !strings.Contains(ds.modeSummary(), "sanitize") {
+		t.Fatalf("initial sanitize label = %q, summary = %q", ds.sanitizeLabel(), ds.modeSummary())
+	}
+	ds.Update(keyPress("", tea.KeySpace, 0))
+	if !app.dump.SanitizeSet || app.dump.Sanitize || ds.sanitizeLabel() != "off" || strings.Contains(ds.modeSummary(), "sanitize") {
+		t.Fatalf("first toggle: sanitize = %v set=%v label=%q summary=%q", app.dump.Sanitize, app.dump.SanitizeSet, ds.sanitizeLabel(), ds.modeSummary())
+	}
+	ds.Update(keyPress("", tea.KeySpace, 0))
+	if !app.dump.Sanitize || ds.sanitizeLabel() != "on" {
+		t.Fatalf("second toggle: sanitize = %v label=%q", app.dump.Sanitize, ds.sanitizeLabel())
 	}
 }
 

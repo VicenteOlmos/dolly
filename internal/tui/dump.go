@@ -62,6 +62,7 @@ type dumpScreen struct {
 	restoreProgress        **RestoreProgressEvent
 	restoreRunning         *bool
 	hasSession             func() bool
+	sanitizeDefault        func() bool
 	nav                    SectionNav
 	pathCursor             int
 	modeField              int
@@ -92,10 +93,11 @@ type dumpScreen struct {
 	trustedSchemaSQL       bool
 }
 
-func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool) ScreenModel {
+func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool, sanitizeDefault func() bool) ScreenModel {
 	return &dumpScreen{
 		draft:           draft,
 		hasSession:      hasSession,
+		sanitizeDefault: sanitizeDefault,
 		dumpStatus:      dumpStatus,
 		dumpLog:         dumpLog,
 		dumpError:       dumpError,
@@ -388,7 +390,8 @@ func (d *dumpScreen) requestRestore() tea.Cmd {
 }
 
 func (d *dumpScreen) onFieldCursorNavigation() bool {
-	return d.sectionActive(dumpSectionPath) || d.modeTextFocused()
+	return d.sectionActive(dumpSectionPath) || d.modeTextFocused() ||
+		(d.sectionActive(dumpSectionHistory) && (d.restoreDirFocus || d.restoreWorkersFocus))
 }
 
 func (d *dumpScreen) modeTextFocused() bool {
@@ -483,12 +486,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 		}
 	case modeFieldSanitize:
 		if k.Code == tea.KeySpace {
-			if !d.draft.SanitizeSet {
-				d.draft.Sanitize = !d.draft.Sanitize
-				d.draft.SanitizeSet = true
-			} else {
-				d.draft.Sanitize = !d.draft.Sanitize
-			}
+			d.draft.Sanitize = !d.sanitizeEnabled()
+			d.draft.SanitizeSet = true
 			return true
 		}
 	case modeFieldWorkers:
@@ -533,7 +532,7 @@ func (d *dumpScreen) modeSummary() string {
 	if d.draft.RequireSafeKey {
 		parts = append(parts, "safe-key")
 	}
-	if d.draft.SanitizeSet && d.draft.Sanitize {
+	if d.sanitizeEnabled() {
 		parts = append(parts, "sanitize")
 	}
 	if strings.TrimSpace(d.draft.PercentText) != "" {
@@ -573,14 +572,22 @@ func (d *dumpScreen) workersLabel() string {
 	return strconv.Itoa(d.draft.Workers)
 }
 
+func (d *dumpScreen) sanitizeEnabled() bool {
+	if d.draft.SanitizeSet {
+		return d.draft.Sanitize
+	}
+	return d.sanitizeDefault != nil && d.sanitizeDefault()
+}
+
 func (d *dumpScreen) sanitizeLabel() string {
+	label := "off"
+	if d.sanitizeEnabled() {
+		label = "on"
+	}
 	if !d.draft.SanitizeSet {
-		return "config"
+		return label + " (config)"
 	}
-	if d.draft.Sanitize {
-		return "on"
-	}
-	return "off"
+	return label
 }
 
 func (d *dumpScreen) View(width, height int) string {

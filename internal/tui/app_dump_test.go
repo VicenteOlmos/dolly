@@ -436,7 +436,7 @@ func TestDumpScreenLogScroll(t *testing.T) {
 	status := DumpStatusIdle
 	var dumpErr string
 	var dumpResult *DumpResultSummary
-	ds := newDumpScreen(&DumpDraft{}, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil).(*dumpScreen)
+	ds := newDumpScreen(&DumpDraft{}, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil).(*dumpScreen)
 	enterDumpSection(ds, dumpSectionLog)
 
 	ds.Update(keyPress("", tea.KeyUp, 0))
@@ -475,7 +475,7 @@ func TestDumpScreenPathEdit(t *testing.T) {
 	var log []string
 	var dumpErr string
 	var dumpResult *DumpResultSummary
-	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil)
+	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil)
 	ds := screen.(*dumpScreen)
 	enterDumpSection(ds, dumpSectionPath)
 
@@ -1169,5 +1169,29 @@ func TestRestoreHistoryWorkersOverrideText(t *testing.T) {
 	needs, msg := (&App{cfg: cfg, dump: DumpDraft{RestoreWorkersText: "4"}}).restoreNeedsConfirm(false)
 	if !needs || !strings.Contains(msg, "non-atomic parallel restore") {
 		t.Fatalf("confirm = %v %q", needs, msg)
+	}
+}
+
+func TestAppHistoryWorkersDigitsReachField(t *testing.T) {
+	app := NewApp()
+	app.screen = ScreenDump
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionHistory)
+	for range 4 {
+		app = drainUpdate(app, keyPress("", tea.KeyTab, 0))
+	}
+	if !ds.restoreWorkersFocus {
+		t.Fatal("Workers field not focused")
+	}
+	for _, digit := range "14" {
+		app = drainUpdate(app, keyPress(string(digit), digit, 0))
+	}
+	if app.screen != ScreenDump || app.dump.RestoreWorkersText != "14" {
+		t.Fatalf("screen = %v, Workers = %q", app.screen, app.dump.RestoreWorkersText)
+	}
+	app = drainUpdate(app, keyPress("", tea.KeyEscape, 0))
+	app = drainUpdate(app, keyPress("4", '4', 0))
+	if app.screen != ScreenClone {
+		t.Fatalf("screen after leaving Workers = %v, want Clone", app.screen)
 	}
 }
