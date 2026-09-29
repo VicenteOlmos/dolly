@@ -145,6 +145,99 @@ func TestCloneRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIntegrationCatalogReplayPartitionConstraints(t *testing.T) {
+	dsn := os.Getenv("DOLLY_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("DOLLY_TEST_PG_DSN not set")
+	}
+	ctx := context.Background()
+	adminDSN, err := RewriteDSN(dsn, "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	srcName := fmt.Sprintf("dolly_catalog_src_%d", os.Getpid())
+	tgtName := fmt.Sprintf("dolly_catalog_tgt_%d", os.Getpid())
+	for _, name := range []string{srcName, tgtName} {
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, name)); err != nil {
+			t.Fatal(err)
+		}
+		name := name
+		t.Cleanup(func() {
+			_, _ = admin.ExecContext(context.Background(), fmt.Sprintf(`DROP DATABASE IF EXISTS "%s"`, name))
+		})
+		if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srcDSN, err := RewriteDSN(dsn, srcName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgtDSN, err := RewriteDSN(dsn, tgtName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := sql.Open("pgx", srcDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	tgt, err := sql.Open("pgx", tgtDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tgt.Close() })
+	if _, err := src.ExecContext(ctx, `
+		CREATE TABLE referenced (id integer PRIMARY KEY);
+		CREATE TABLE events (id integer, ref integer, CONSTRAINT events_ref_fk FOREIGN KEY (ref) REFERENCES referenced(id)) PARTITION BY RANGE (id);
+		CREATE TABLE events_low PARTITION OF events FOR VALUES FROM (0) TO (100) PARTITION BY LIST (id);
+		CREATE TABLE events_low_1 PARTITION OF events_low FOR VALUES IN (1);
+		ALTER TABLE events_low_1 ADD CONSTRAINT positive_ref CHECK (ref > 0);
+		ALTER TABLE events_low_1 ALTER COLUMN ref SET DEFAULT 1;
+		CREATE TABLE computed (value integer GENERATED ALWAYS AS (1) STORED);
+		INSERT INTO computed DEFAULT VALUES;
+		INSERT INTO computed DEFAULT VALUES;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplySchemasFromSource(ctx, src, tgt, []string{"public"}); err != nil {
+		t.Fatalf("catalog replay: %v", err)
+	}
+	var count int
+	if err := tgt.QueryRowContext(ctx, `SELECT count(*) FROM pg_constraint WHERE conname = 'events_ref_fk' AND conparentid = 0`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("parent foreign keys = %d, error = %v", count, err)
+	}
+	if _, err := tgt.ExecContext(ctx, `INSERT INTO referenced VALUES (1); INSERT INTO events_low_1 (id) VALUES (1)`); err != nil {
+		t.Fatalf("nested partition default: %v", err)
+	}
+	if _, err := tgt.ExecContext(ctx, `INSERT INTO events_low_1 (id, ref) VALUES (1, -1)`); err == nil {
+		t.Fatal("partition-local CHECK was not replayed")
+	}
+	srcCopy, err := openCopyConn(ctx, srcDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srcCopy.Close(ctx)
+	tgtCopy, err := openCopyConn(ctx, tgtDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tgtCopy.Close(ctx)
+	if err := copyTableColumns(ctx, srcCopy, tgtCopy, db.Table{
+		Schema: "public", Name: "computed", Columns: []db.Column{{Name: "value", Generated: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tgt.QueryRowContext(ctx, `SELECT count(*) FROM computed WHERE value = 1`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("streamed generated rows = %d, error = %v", count, err)
+	}
+}
+
 func TestDropDatabaseTerminatesActiveTargetAndUnblocksRecreate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

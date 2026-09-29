@@ -21,6 +21,7 @@ func loadTable(ctx context.Context, q execQuerier, table db.Table, path string, 
 	if err := dump.ValidateTableName(table.Name); err != nil {
 		return fmt.Errorf("validate table: %w", err)
 	}
+	validNames := columnNames(table.Columns)
 	table, err := writableTable(table)
 	if err != nil {
 		return err
@@ -29,8 +30,6 @@ func loadTable(ctx context.Context, q execQuerier, table db.Table, path string, 
 	if err != nil {
 		return err
 	}
-
-	colNames := columnNames(table.Columns)
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -59,7 +58,7 @@ func loadTable(ctx context.Context, q execQuerier, table db.Table, path string, 
 			return fmt.Errorf("table %q line %d: decode json: %w", table.Name, lineNo, err)
 		}
 
-		args, err := coerceRow(table.Columns, colNames, row)
+		args, err := coerceRow(table.Columns, validNames, row)
 		if err != nil {
 			return fmt.Errorf("table %q line %d: %w", table.Name, lineNo, err)
 		}
@@ -103,7 +102,7 @@ var loadTableCopyInTx = func(ctx context.Context, conn *sql.Conn, table db.Table
 
 func writableTable(table db.Table) (db.Table, error) {
 	cols := db.DataColumns(table.Columns)
-	if len(cols) == 0 {
+	if len(table.Columns) == 0 {
 		return db.Table{}, fmt.Errorf("table %q has no loadable columns", table.Name)
 	}
 	table.Columns = cols
@@ -114,22 +113,30 @@ func copyFromPGX(ctx context.Context, conn *pgx.Conn, table db.Table, path strin
 	if err := dump.ValidateTableName(table.Name); err != nil {
 		return fmt.Errorf("validate table: %w", err)
 	}
+	validNames := columnNames(table.Columns)
 	table, err := writableTable(table)
 	if err != nil {
 		return err
 	}
-
 	colNames := make([]string, len(table.Columns))
 	for i, c := range table.Columns {
 		colNames[i] = c.Name
 	}
 
-	colNameMap := columnNames(table.Columns)
-	src, err := newNDJSONCopySource(path, table, colNameMap)
+	src, err := newNDJSONCopySource(path, table, validNames)
 	if err != nil {
 		return err
 	}
 	defer src.close()
+	if len(table.Columns) == 0 {
+		query, _, _ := buildInsert(table, ConflictError)
+		for src.Next() {
+			if _, err := conn.Exec(ctx, query); err != nil {
+				return fmt.Errorf("table %q: insert: %w", table.Name, err)
+			}
+		}
+		return src.err
+	}
 
 	ident := pgx.Identifier{table.Schema, table.Name}
 	_, err = conn.CopyFrom(ctx, ident, colNames, src)

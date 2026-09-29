@@ -416,6 +416,7 @@ func loadAllCheckConstraints(ctx context.Context, q *sql.DB, schemas []string) (
 		INNER JOIN pg_class c ON c.oid = con.conrelid
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE con.contype = 'c'
+		  AND con.coninhcount = 0
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, con.conname;
 	`, inClause)
@@ -451,6 +452,7 @@ func loadAllForeignKeyConstraints(ctx context.Context, q *sql.DB, schemas []stri
 		INNER JOIN pg_class c ON c.oid = con.conrelid
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE con.contype = 'f'
+		  AND con.conparentid = 0
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, con.conname;
 	`, inClause)
@@ -567,7 +569,28 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 		if bound == "" {
 			return "", fmt.Errorf("partition %s has no partition bound", qual)
 		}
-		return fmt.Sprintf("CREATE TABLE %s PARTITION OF %s %s", qual, quoteQualifiedTable(parentSchema, parentName), bound), nil
+		stmt := fmt.Sprintf("CREATE TABLE %s PARTITION OF %s", qual, quoteQualifiedTable(parentSchema, parentName))
+		var local []string
+		for _, c := range cols {
+			if c.defaultExpr.Valid && c.defaultExpr.String != "" && c.generatedExpr == "" {
+				local = append(local, fmt.Sprintf("%s WITH OPTIONS DEFAULT %s", quoteIdentifier(c.name), c.defaultExpr.String))
+			}
+		}
+		for _, chk := range checks {
+			local = append(local, formatTableCheckConstraint(chk.name, chk.def))
+		}
+		if len(local) > 0 {
+			stmt += " (" + strings.Join(local, ", ") + ")"
+		}
+		stmt += " " + bound
+		if table.RelKind == "p" {
+			partBy := strings.TrimSpace(table.PartitionBy)
+			if partBy == "" {
+				return "", fmt.Errorf("partitioned table %s has no partition key", qual)
+			}
+			stmt += " PARTITION BY " + partBy
+		}
+		return stmt, nil
 	}
 
 	var parts []string

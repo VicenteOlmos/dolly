@@ -37,6 +37,17 @@ func (c *pgxCopyConn) CopyFrom(ctx context.Context, r io.Reader, sql string) err
 	return err
 }
 
+func (c *pgxCopyConn) countRows(ctx context.Context, qual string) (int64, error) {
+	var count int64
+	err := c.conn.QueryRow(ctx, "SELECT count(*) FROM "+qual).Scan(&count)
+	return count, err
+}
+
+func (c *pgxCopyConn) insertDefaultRow(ctx context.Context, qual string) error {
+	_, err := c.conn.Exec(ctx, "INSERT INTO "+qual+" DEFAULT VALUES")
+	return err
+}
+
 func (c *pgxCopyConn) Close(ctx context.Context) error {
 	return c.conn.Close(ctx)
 }
@@ -439,7 +450,25 @@ func copyRelation(ctx context.Context, srcConn, tgtConn copyConn, schema, tableN
 	if db.HasGenerated(columns) {
 		data := db.DataColumns(columns)
 		if len(data) == 0 {
-			return fmt.Errorf("table %s has no loadable columns", qual)
+			src, srcOK := srcConn.(interface {
+				countRows(context.Context, string) (int64, error)
+			})
+			tgt, tgtOK := tgtConn.(interface {
+				insertDefaultRow(context.Context, string) error
+			})
+			if !srcOK || !tgtOK {
+				return fmt.Errorf("copy %s: default-row connection unavailable", qual)
+			}
+			count, err := src.countRows(ctx, qual)
+			if err != nil {
+				return fmt.Errorf("count source rows in %s: %w", qual, err)
+			}
+			for i := int64(0); i < count; i++ {
+				if err := tgt.insertDefaultRow(ctx, qual); err != nil {
+					return fmt.Errorf("insert default row in %s: %w", qual, err)
+				}
+			}
+			return nil
 		}
 		quoted := make([]string, len(data))
 		for i, col := range data {

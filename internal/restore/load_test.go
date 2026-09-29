@@ -42,6 +42,28 @@ func TestLoadTableContextCancellation(t *testing.T) {
 	}
 }
 
+func TestLoadTableOnlyGeneratedColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "computed.ndjson")
+	if err := os.WriteFile(path, []byte("{\"value\":1}\n{\"value\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for i := 0; i < 2; i++ {
+		mock.ExpectExec(`INSERT INTO "public"\."computed" DEFAULT VALUES`).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	table := db.Table{Schema: "public", Name: "computed", Columns: []db.Column{{Name: "value", Generated: true}}}
+	if err := loadTable(context.Background(), conn, table, path, ConflictError); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadTableValidateTableNameRejectsTraversal(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "users.ndjson")

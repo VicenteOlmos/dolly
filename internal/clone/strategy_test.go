@@ -1011,9 +1011,17 @@ func sliceEqual(a, b []string) bool {
 type mockCopyConn struct {
 	copyToCalls   []copyCall
 	copyFromCalls []copyCall
+	rowCount      int64
+	defaultRows   int64
 	copyToErr     error
 	copyFromErr   error
 	closed        bool
+}
+
+func (m *mockCopyConn) countRows(context.Context, string) (int64, error) { return m.rowCount, nil }
+func (m *mockCopyConn) insertDefaultRow(context.Context, string) error {
+	m.defaultRows++
+	return nil
 }
 
 type copyCall struct {
@@ -1461,6 +1469,17 @@ func TestCopyTableOmitsGeneratedColumns(t *testing.T) {
 	}
 	if tgt.copyFromCalls[0].sql != `COPY "public"."users" ("id") FROM STDIN` {
 		t.Fatalf("from = %q", tgt.copyFromCalls[0].sql)
+	}
+}
+
+func TestCopyTableOnlyGeneratedColumns(t *testing.T) {
+	src := &mockCopyConn{rowCount: 3}
+	tgt := &mockCopyConn{}
+	err := copyTableColumns(context.Background(), src, tgt, db.Table{
+		Schema: "public", Name: "computed", Columns: []db.Column{{Name: "value", Generated: true}},
+	})
+	if err != nil || tgt.defaultRows != 3 || len(src.copyToCalls) != 0 {
+		t.Fatalf("copy: err=%v inserted=%d copy calls=%v", err, tgt.defaultRows, src.copyToCalls)
 	}
 }
 

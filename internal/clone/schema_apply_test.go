@@ -434,6 +434,17 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 	if got != want {
 		t.Fatalf("child SQL =\n%s\nwant\n%s", got, want)
 	}
+	child.RelKind = "p"
+	child.PartitionBy = "LIST (total)"
+	cols[0].defaultExpr = sql.NullString{String: "42", Valid: true}
+	got, err = formatCreateTable(child, cols, nil, []checkConstraint{{name: "positive", def: "CHECK (id > 0)"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `CREATE TABLE "public"."events_2024" PARTITION OF "public"."events" ("id" WITH OPTIONS DEFAULT 42, CONSTRAINT "positive" CHECK (id > 0)) FOR VALUES FROM (1) TO (2) PARTITION BY LIST (total)`
+	if got != want {
+		t.Fatalf("nested child SQL =\n%s\nwant\n%s", got, want)
+	}
 }
 
 func TestOrderPartitionParentsFirst(t *testing.T) {
