@@ -124,17 +124,23 @@ type SchemaDraft struct {
 }
 
 type DumpDraft struct {
-	OutputDir      string
-	NoTransaction  bool
-	SlowConnection bool
-	RequireSafeKey bool
-	PercentText    string
-	SeedFile       string
-	ChunkTables    string
-	Workers        int
-	WorkersSet     bool
-	SchemaPicker   SchemaPickerState
-	History        DumpHistoryState
+	OutputDir           string
+	NoTransaction       bool
+	SlowConnection      bool
+	RequireSafeKey      bool
+	PercentText         string
+	SeedFile            string
+	ChunkTables         string
+	MaxDepthText        string
+	MaxTablesText       string
+	MaxRowsText         string
+	MaxRowsPerTableText string
+	IncludeTables       string
+	ExcludeTables       string
+	Workers             int
+	WorkersSet          bool
+	SchemaPicker        SchemaPickerState
+	History             DumpHistoryState
 }
 
 // DumpHistoryEntry is one row in the dump history list.
@@ -192,6 +198,7 @@ type CloneDraft struct {
 	TargetProfileName string
 	AnalyzeEnabled    bool
 	AnalyzeState      AnalyzeState
+	IncludePrivileges bool
 }
 
 // TargetSource selects where the clone target DSN comes from.

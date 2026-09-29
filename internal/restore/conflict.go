@@ -47,7 +47,7 @@ func ParseConflictPolicy(s string) (ConflictPolicy, error) {
 
 func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames []string, err error) {
 	if len(table.Columns) == 0 {
-		return "", nil, fmt.Errorf("table %q has no columns", table.Name)
+		return fmt.Sprintf("INSERT INTO %s DEFAULT VALUES", pgx.Identifier{table.Schema, table.Name}.Sanitize()), nil, nil
 	}
 
 	colNames = make([]string, len(table.Columns))

@@ -104,16 +104,50 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	maxDepth, err := parseOptionalNonNegative(draft.MaxDepthText, "max depth")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
+	maxTables, err := parseOptionalNonNegative(draft.MaxTablesText, "max tables")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
+	maxRows, err := parseOptionalNonNegative(draft.MaxRowsText, "max rows")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
+	maxRowsPer, err := parseOptionalNonNegative(draft.MaxRowsPerTableText, "max rows per table")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
 	return runopts.DumpOverrides{
-		NoTransaction:  draft.NoTransaction,
-		SlowConnection: draft.SlowConnection,
-		RequireSafeKey: draft.RequireSafeKey,
-		Percent:        percent,
-		SeedFile:       strings.TrimSpace(draft.SeedFile),
-		ChunkTables:    splitChunkTables(draft.ChunkTables),
-		Workers:        draft.Workers,
-		WorkersSet:     draft.WorkersSet,
+		NoTransaction:   draft.NoTransaction,
+		SlowConnection:  draft.SlowConnection,
+		RequireSafeKey:  draft.RequireSafeKey,
+		Percent:         percent,
+		SeedFile:        strings.TrimSpace(draft.SeedFile),
+		ChunkTables:     splitChunkTables(draft.ChunkTables),
+		MaxDepth:        maxDepth,
+		MaxTables:       maxTables,
+		MaxRows:         maxRows,
+		MaxRowsPerTable: maxRowsPer,
+		IncludeTables:   splitChunkTables(draft.IncludeTables),
+		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
+		Workers:         draft.Workers,
+		WorkersSet:      draft.WorkersSet,
 	}, nil
+}
+
+func parseOptionalNonNegative(raw, label string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", label)
+	}
+	return n, nil
 }
 
 func parseDraftPercent(raw string) (int, error) {

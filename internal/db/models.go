@@ -7,6 +7,9 @@ type Column struct {
 	IsNullable      bool   `json:"is_nullable"`
 	PrimaryKey      bool   `json:"primary_key"`
 	OrdinalPosition int    `json:"ordinal_position"`
+	// Generated is true for GENERATED ALWAYS columns. Identity columns stay false
+	// so dumped IDs are preserved.
+	Generated bool `json:"generated,omitempty"`
 }
 
 // ForeignKey represents a foreign-key constraint.
@@ -50,4 +53,48 @@ type Table struct {
 	Columns       []Column          `json:"columns"`
 	ForeignKeys   []ForeignKey      `json:"foreign_keys"`
 	UniqueIndexes []UniqueIndexInfo `json:"-"`
+	// RelKind is pg_class.relkind ("r" ordinary, "p" partitioned parent).
+	RelKind string `json:"relkind,omitempty"`
+	// PartitionOf is schema.table of the partitioned parent when this row is a partition.
+	PartitionOf string `json:"partition_of,omitempty"`
+	// PartitionBound is pg_get_expr(relpartbound) (FOR VALUES … or DEFAULT).
+	PartitionBound string `json:"partition_bound,omitempty"`
+	// PartitionBy is pg_get_partkeydef (for example RANGE (id)) on a partitioned parent.
+	PartitionBy string `json:"partition_by,omitempty"`
+}
+
+// WithoutPartitionParents drops partitioned parents. Selecting a parent returns
+// every child row, so dump and clone copy only the leaves.
+func WithoutPartitionParents(tables []Table) []Table {
+	out := make([]Table, 0, len(tables))
+	for _, table := range tables {
+		if table.RelKind == "p" {
+			continue
+		}
+		out = append(out, table)
+	}
+	return out
+}
+
+// DataColumns returns columns that can be written. GENERATED ALWAYS values are
+// computed on the destination.
+func DataColumns(cols []Column) []Column {
+	out := make([]Column, 0, len(cols))
+	for _, col := range cols {
+		if col.Generated {
+			continue
+		}
+		out = append(out, col)
+	}
+	return out
+}
+
+// HasGenerated reports whether any column is GENERATED ALWAYS.
+func HasGenerated(cols []Column) bool {
+	for _, col := range cols {
+		if col.Generated {
+			return true
+		}
+	}
+	return false
 }

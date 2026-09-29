@@ -90,6 +90,22 @@ func enterCloneForm(app *App) *cloneScreen {
 	return cs
 }
 
+func TestClonePrivilegesReachRunner(t *testing.T) {
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	app.screen = ScreenClone
+	cs := enterCloneForm(app)
+	cs.formField = cloneFieldPrivileges
+	app = drainUpdate(app, keyPress(" ", ' ', 0))
+	if !app.clone.IncludePrivileges {
+		t.Fatal("space did not enable privileges")
+	}
+	app = drainUpdate(app, ctrlEnter())
+	if !runner.lastDraft.IncludePrivileges {
+		t.Fatal("clone runner did not receive IncludePrivileges")
+	}
+}
+
 func TestAppCloneSuccess(t *testing.T) {
 	runner := mockCloneRunner{lines: []string{"strategy: template", "schemas: public, app"}}
 	app := cloneAppWithSession(t, runner)

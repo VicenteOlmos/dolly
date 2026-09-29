@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -311,11 +312,63 @@ func stubSeams(t *testing.T) func() {
 	origLookPath := lookPath
 	origRunCommand := runCommand
 	origReplaceFile := replaceFile
+	origOpen := openCaptureDB
+	origRender := renderCatalogSchema
 	lookPath = func(file string) (string, error) { return "/bin/" + file, nil }
 	return func() {
 		lookPath = origLookPath
 		runCommand = origRunCommand
 		replaceFile = origReplaceFile
+		openCaptureDB = origOpen
+		renderCatalogSchema = origRender
+	}
+}
+
+func TestCaptureFallsBackToCatalogReplay(t *testing.T) {
+	restoreSeams := stubSeams(t)
+	defer restoreSeams()
+	lookPath = func(string) (string, error) { return "", errors.New("missing") }
+	openCaptureDB = func(string) (*sql.DB, error) { return nil, nil }
+	renderCatalogSchema = func(_ context.Context, _ *sql.DB, schemas []string, includePrivileges bool) (string, error) {
+		if includePrivileges {
+			t.Fatal("catalog schema.sql should omit privileges")
+		}
+		if len(schemas) != 1 || schemas[0] != "app" {
+			t.Fatalf("schemas = %v", schemas)
+		}
+		return "CREATE TABLE public.users (id integer);\n", nil
+	}
+
+	var stderr bytes.Buffer
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	done := make(chan struct{})
+	go func() {
+		_, _ = stderr.ReadFrom(r)
+		close(done)
+	}()
+
+	outDir := t.TempDir()
+	err = Capture(context.Background(), "postgres://u:secret@localhost/db", outDir, []string{"app"})
+	_ = w.Close()
+	os.Stderr = orig
+	<-done
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(outDir, "schema.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "CREATE TABLE public.users") {
+		t.Fatalf("schema.sql = %s", data)
+	}
+	if !strings.Contains(stderr.String(), "catalog replay") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 

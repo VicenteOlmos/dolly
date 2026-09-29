@@ -178,9 +178,11 @@ Run `dolly <command> --help` for command-specific flags.
 
 **TUI and CLI restore:** the TUI history section restores the selected dump, or a directory you type there (`p` to edit the path). `dolly restore --input <dir>` remains the scripted path.
 
-**TUI dump mode:** the dump screen Mode section sets slow connection, `--require-safe-key`, workers, percent, seed file, and chunk tables for the next run. The same flags stay on `dolly dump`.
+**TUI dump mode:** the dump screen Mode section sets slow connection, `--require-safe-key`, workers, percent, seed file, chunk tables, subset limits (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`), and include/exclude tables for the next run. `--max-in-list-size` stays on the CLI. The same flags stay on `dolly dump`.
 
-When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility, including `CREATE SCHEMA IF NOT EXISTS` so `--trust-schema-sql` can replay into a fresh database that already has `public`. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
+Partitioned parents are not exported: a `SELECT` of the parent returns every child, so Dolly dumps and clones only the leaf partitions. Name the partitions in `--include-table`. `GENERATED ALWAYS` columns are stored in the dump metadata and omitted from restore and logical-stream writes so the destination computes them. Identity columns are still copied.
+
+When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility, including `CREATE SCHEMA IF NOT EXISTS` so `--trust-schema-sql` can replay into a fresh database that already has `public`. If `pg_dump` is missing, Dolly writes the same file from catalog replay (without owners or ACLs) and prints a warning. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
 
 Trusted schema replay runs outside the restore transaction, so acknowledge both conditions explicitly:
 
@@ -315,7 +317,7 @@ Serial `--no-transaction` mode can leave partial progress if it fails mid-way. P
 ### Clone strategies
 
 <!-- readme:fidelity:schema-replay -->
-Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and refreshes materialized views after the data load. Materialized-view contents are **not cloned** as a separate copy; they are refreshed from the restored tables. User triggers are disabled while rows load; cloned **triggers may fire** after they are re-enabled. Owners and **ACL**s are omitted unless you pass `--with-privileges` (the target must already have those roles). **Cluster-global** roles and tablespaces are not created. `template` and `physical-backup` refuse to run when sanitization is enabled. `logical-stream` redacts sensitive columns in that case. When `pg_dump` is not on PATH, schema-replay replays the catalog (functions, views, triggers, and rules included; aggregates require `pg_dump`, while exclusion constraints and operator classes stay omitted).
+Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and refreshes materialized views after the data load. Materialized-view contents are **not cloned** as a separate copy; they are refreshed from the restored tables. User triggers are disabled while rows load; cloned **triggers may fire** after they are re-enabled. Owners and **ACL**s are omitted unless you pass `--with-privileges` (the target must already have those roles). **Cluster-global** roles and tablespaces are not created. `template` and `physical-backup` refuse to run when sanitization is enabled. `logical-stream` redacts sensitive columns in that case. When `pg_dump` is not on PATH, schema-replay replays the catalog (functions, views, triggers, rules, and normal aggregates included; ordered-set and hypothetical aggregates require `pg_dump`, while exclusion constraints and operator classes stay omitted). Partitioned tables are created with `PARTITION BY`, and only leaf partitions are copied. Generated columns are declared on the table and omitted from the data load. The clone form can pass `--with-privileges`.
 <!-- /readme:fidelity:schema-replay -->
 
 | Strategy | When | Sanitization |

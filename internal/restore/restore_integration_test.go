@@ -636,6 +636,41 @@ func TestIntegrationLoadTableCopy(t *testing.T) {
 	t.Fatal("departments missing from dump metadata")
 }
 
+func TestIntegrationRestoreOnlyGeneratedColumns(t *testing.T) {
+	prev := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = prev })
+	conn := openIntegrationDB(t)
+	ctx := context.Background()
+	const tableName = "dolly_only_generated"
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE dolly_only_generated (value integer GENERATED ALWAYS AS (1) STORED)`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = conn.ExecContext(context.Background(), `DROP TABLE IF EXISTS dolly_only_generated`) })
+	for i := 0; i < 3; i++ {
+		if _, err := conn.ExecContext(ctx, `INSERT INTO dolly_only_generated DEFAULT VALUES`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := t.TempDir()
+	policy := dump.SelectionPolicy{Includes: []dump.SelectorEntry{{Table: dump.QualifiedTable{Schema: "public", Name: tableName}}}}
+	if err := dump.Dump(ctx, conn, dir, dump.WithTableSelection(policy, nil), dump.WithoutSequences()); err != nil {
+		t.Fatal(err)
+	}
+	for _, opts := range [][]Option{{WithSchemas([]string{"public"})}, {WithSchemas([]string{"public"}), WithoutTransaction(), WithDSN(os.Getenv(pgintegration.EnvDSN))}} {
+		if _, err := conn.ExecContext(ctx, `TRUNCATE dolly_only_generated`); err != nil {
+			t.Fatal(err)
+		}
+		if err := Restore(ctx, conn, dir, opts...); err != nil {
+			t.Fatalf("restore: %v", err)
+		}
+		var count int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM dolly_only_generated WHERE value = 1`).Scan(&count); err != nil || count != 3 {
+			t.Fatalf("restored rows = %d, error = %v", count, err)
+		}
+	}
+}
+
 func TestIntegrationRestoreReplaceRejectsExternalForeignKey(t *testing.T) {
 	conn := openIntegrationDB(t)
 	dir := integrationDump(t, conn)

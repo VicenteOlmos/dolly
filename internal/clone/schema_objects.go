@@ -17,7 +17,7 @@ func schemaINClause(schemas []string) (string, []any) {
 	return strings.Join(placeholders, ", "), args
 }
 
-func applyExtensions(ctx context.Context, srcDB, tgtDB *sql.DB) error {
+func applyExtensions(ctx context.Context, srcDB *sql.DB, tgtDB execer) error {
 	const query = `
 		SELECT extname
 		FROM pg_extension
@@ -90,7 +90,7 @@ func loadEnumTypes(ctx context.Context, q *sql.DB, schemas []string) ([]enumType
 	return out, nil
 }
 
-func applyEnumTypes(ctx context.Context, tgtDB *sql.DB, enums []enumType) error {
+func applyEnumTypes(ctx context.Context, tgtDB execer, enums []enumType) error {
 	for _, e := range enums {
 		stmt := formatCreateEnumType(e.schema, e.name, e.labels)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
@@ -137,7 +137,7 @@ func loadDomainTypes(ctx context.Context, q *sql.DB, schemas []string) ([]domain
 	return out, rows.Err()
 }
 
-func applyDomainTypes(ctx context.Context, tgtDB *sql.DB, domains []domainType) error {
+func applyDomainTypes(ctx context.Context, tgtDB execer, domains []domainType) error {
 	for _, d := range domains {
 		stmt := formatCreateDomain(d.schema, d.name, d.baseType, d.notNull, d.defaultExpr)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
@@ -219,7 +219,7 @@ func loadCompositeAttrs(ctx context.Context, q *sql.DB, schema, typeName string)
 	return attrs, rows.Err()
 }
 
-func applyCompositeTypes(ctx context.Context, tgtDB *sql.DB, types []struct {
+func applyCompositeTypes(ctx context.Context, tgtDB execer, types []struct {
 	schema string
 	name   string
 	attrs  []compositeAttr
@@ -327,7 +327,7 @@ func loadSequenceOwnership(ctx context.Context, q *sql.DB, schemas []string) (ma
 	return out, rows.Err()
 }
 
-func applySequences(ctx context.Context, tgtDB *sql.DB, seqs []sequenceRow) error {
+func applySequences(ctx context.Context, tgtDB execer, seqs []sequenceRow) error {
 	for _, s := range seqs {
 		stmt := formatCreateSequence(s.schema, s.name, s.def)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
@@ -408,7 +408,7 @@ func loadForeignKeyConstraints(ctx context.Context, q *sql.DB, schema, table str
 	return out, rows.Err()
 }
 
-func applyForeignKeyConstraints(ctx context.Context, tgtDB *sql.DB, schema, table string, fks []foreignKeyConstraint) error {
+func applyForeignKeyConstraints(ctx context.Context, tgtDB execer, schema, table string, fks []foreignKeyConstraint) error {
 	for _, fk := range fks {
 		stmt := formatAlterTableAddConstraint(schema, table, fk.name, fk.def)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
@@ -459,7 +459,7 @@ func loadIndexes(ctx context.Context, q *sql.DB, schemas []string) ([]indexRow, 
 	return out, rows.Err()
 }
 
-func applyIndexes(ctx context.Context, tgtDB *sql.DB, indexes []indexRow) error {
+func applyIndexes(ctx context.Context, tgtDB execer, indexes []indexRow) error {
 	for _, idx := range indexes {
 		if _, err := tgtDB.ExecContext(ctx, idx.def); err != nil {
 			return fmt.Errorf("create index %s on %s.%s: %w", idx.name, idx.schema, idx.table, err)
@@ -502,7 +502,7 @@ func loadViews(ctx context.Context, q *sql.DB, schemas []string) ([]viewRow, err
 }
 
 // applyViews creates views in multiple passes to handle simple dependency chains.
-func applyViews(ctx context.Context, tgtDB *sql.DB, views []viewRow) error {
+func applyViews(ctx context.Context, tgtDB execer, views []viewRow) error {
 	pending := append([]viewRow(nil), views...)
 	const maxPasses = 16
 	for pass := 0; pass < maxPasses && len(pending) > 0; pass++ {
@@ -594,7 +594,7 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 	return out, rows.Err()
 }
 
-func applyComments(ctx context.Context, tgtDB *sql.DB, comments []commentRow) error {
+func applyComments(ctx context.Context, tgtDB execer, comments []commentRow) error {
 	for _, c := range comments {
 		stmt := formatCommentOn(c.kind, c.schema, c.object, c.column, c.description)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
@@ -664,7 +664,7 @@ func loadGrants(ctx context.Context, q *sql.DB, schemas []string) ([]grantRow, e
 	return out, nil
 }
 
-func applyGrants(ctx context.Context, tgtDB *sql.DB, grants []grantRow) error {
+func applyGrants(ctx context.Context, tgtDB execer, grants []grantRow) error {
 	for _, g := range grants {
 		privs := strings.Join(g.privileges, ", ")
 		var stmt string
@@ -773,7 +773,7 @@ func loadPolicies(ctx context.Context, q *sql.DB, schemas []string) ([]struct {
 	return out, rows.Err()
 }
 
-func applyRLS(ctx context.Context, tgtDB *sql.DB, tables []rlsTable, policies []struct {
+func applyRLS(ctx context.Context, tgtDB execer, tables []rlsTable, policies []struct {
 	schema string
 	table  string
 	pol    policyDef

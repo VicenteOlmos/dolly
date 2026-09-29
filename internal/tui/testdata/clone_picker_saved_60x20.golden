@@ -3,8 +3,8 @@
 │       UooU\.'@@@@@@`.      ││                       │
 │       \__/(@@@@@@@@@@)     ││ Target & strategy:    │
 │          (@@@@@@@@)        ││ ↑/↓/Tab field · ←/→   │
-│          `YY~~~~YY'        ││ edit · Space toggle   │
-│           ||    ||         ││ analyze · Esc back    │
+│          `YY~~~~YY'        ││ edit · Space toggle · │
+│           ||    ||         ││ Esc back              │
 │                            ││ Clone name:           │
 │            dolly           ││ db_stub_dolly_1       │
 │                            ││ Target DSN: [Saved]   │
@@ -16,6 +16,7 @@
 ╰────────────────────────────╯│ Strategy: schema-     │
                               │ replay                │
                               │ Analyze: [ ]          │
+                              │ Privileges: [ ]       │
                               ╰───────────────────────╯
 U@U dump · restore · clone · tui · history restore          
 ↑↓ section · Enter open · g/F5 clone · ?/F1                 

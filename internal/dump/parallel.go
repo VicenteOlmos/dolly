@@ -391,6 +391,7 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 	if err != nil {
 		return nil, nil, fmt.Errorf("load schema: %w", err)
 	}
+	tables = db.WithoutPartitionParents(tables)
 	if cfg.selection != nil {
 		filtered, selProv, err := PlanTableSelection(tables, cfg.selection, cfg.selectionIgnored)
 		if err != nil {

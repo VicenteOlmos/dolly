@@ -2,7 +2,7 @@
 │              __            ││ Clone                                     │
 │       UooU\.'@@@@@@`.      ││                                           │
 │       \__/(@@@@@@@@@@)     ││ Target & strategy:  ↑/↓/Tab field · ←/→   │
-│          (@@@@@@@@)        ││ edit · Space toggle analyze · Esc back    │
+│          (@@@@@@@@)        ││ edit · Space toggle · Esc back            │
 │          `YY~~~~YY'        ││ Clone name: db_stub_dolly_1               │
 │           ||    ||         ││ Target DSN: [Current DSN]                 │
 │                            ││ postgres://u:%2A%2A%2A@h-                 │
@@ -10,7 +10,7 @@
 │                            ││ lmode=verify-full                         │
 │   1 connect                ││ Strategy: ← template →                    │
 │   2 schema                 ││ Analyze: [ ]                              │
-│   3 dump                   ││                                           │
+│   3 dump                   ││ Privileges: [ ]                           │
 │ > 4 clone                  ││                                           │
 │   5 config                 ││                                           │
 │                            ││                                           │

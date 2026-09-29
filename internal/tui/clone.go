@@ -10,7 +10,14 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
-const cloneFormFieldCount = 4
+const (
+	cloneFieldName = iota
+	cloneFieldTarget
+	cloneFieldStrategy
+	cloneFieldAnalyze
+	cloneFieldPrivileges
+	cloneFormFieldCount
+)
 
 const (
 	cloneSectionForm = iota
@@ -269,7 +276,7 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 	if c.sectionActive(cloneSectionForm) {
 		switch k.String() {
 		case "a":
-			if c.formField == 3 {
+			if c.formField == cloneFieldAnalyze {
 				c.toggleAnalyze()
 				return nil
 			}
@@ -320,18 +327,22 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case tea.KeyLeft:
-		if c.sectionActive(cloneSectionForm) && c.formField == 2 {
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldStrategy {
 			c.cycleStrategy(-1)
 			return nil
 		}
 	case tea.KeyRight:
-		if c.sectionActive(cloneSectionForm) && c.formField == 2 {
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldStrategy {
 			c.cycleStrategy(1)
 			return nil
 		}
 	case tea.KeyEnter, tea.KeySpace:
-		if c.sectionActive(cloneSectionForm) && c.formField == 3 {
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldAnalyze {
 			c.toggleAnalyze()
+			return nil
+		}
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldPrivileges {
+			c.draft.IncludePrivileges = !c.draft.IncludePrivileges
 			return nil
 		}
 	}
@@ -341,8 +352,7 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 		}
 	}
 	if c.sectionActive(cloneSectionForm) {
-		// Suppress printable input at strategy index (it's a cycler).
-		if c.formField == 2 && len(k.Text) == 1 && k.Text[0] >= 32 {
+		if c.formField >= cloneFieldStrategy && len(k.Text) == 1 && k.Text[0] >= 32 {
 			return nil
 		}
 		field := c.activeField()
@@ -425,7 +435,7 @@ func (c *cloneScreen) cloneInsideSection(width, height int) []string {
 	headerUsed := 4
 	switch c.nav.Section {
 	case cloneSectionForm:
-		hint := "  " + StyleMuted.Render("↑/↓/Tab field · ←/→ edit · Space toggle analyze · Esc back")
+		hint := "  " + StyleMuted.Render("↑/↓/Tab field · ←/→ edit · Space toggle · Esc back")
 		return c.formSection(hint, width)
 	case cloneSectionPicker:
 		maxLines := schemaPickerMaxLines(height, headerUsed, 4)
@@ -471,6 +481,7 @@ func (c *cloneScreen) formSection(hint string, width int) []string {
 	lines = append(lines, c.renderTargetField(width))
 	lines = append(lines, c.renderStrategyField(width))
 	lines = append(lines, c.renderAnalyzeLine())
+	lines = append(lines, c.renderPrivilegesLine())
 	return lines
 }
 
@@ -513,8 +524,22 @@ func (c *cloneScreen) toggleAnalyze() {
 }
 
 // renderAnalyzeLine renders the analyze toggle and result.
+func (c *cloneScreen) renderPrivilegesLine() string {
+	focused := c.sectionActive(cloneSectionForm) && c.formField == cloneFieldPrivileges
+	toggle := "[ ]"
+	if c.draft.IncludePrivileges {
+		toggle = "[✓]"
+	}
+	if focused {
+		toggle = StyleAccent.Render(toggle)
+	} else {
+		toggle = StyleBase.Render(toggle)
+	}
+	return StyleMuted.Render("Privileges:") + " " + toggle
+}
+
 func (c *cloneScreen) renderAnalyzeLine() string {
-	focused := c.sectionActive(cloneSectionForm) && c.formField == 3
+	focused := c.sectionActive(cloneSectionForm) && c.formField == cloneFieldAnalyze
 	toggle := "[ ]"
 	if c.draft.AnalyzeEnabled {
 		toggle = "[✓]"

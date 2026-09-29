@@ -1,6 +1,13 @@
 package dump
 
-import "github.com/DATA-DOG/go-sqlmock"
+import (
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/VicenteOlmos/dolly/internal/db"
+)
+
+func init() {
+	db.SkipRelationAnnotations = true
+}
 
 func emptyUniqueIndexMock(mock sqlmock.Sqlmock) {
 	idxRows := sqlmock.NewRows([]string{
