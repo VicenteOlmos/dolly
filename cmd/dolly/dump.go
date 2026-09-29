@@ -65,6 +65,7 @@ type dumpFlags struct {
 	ChunkTableFiles   []string
 	Workers           int
 	WorkersSet        bool
+	RequireSafeKey    bool
 	Schemas           []string
 	SchemasSet        bool
 	schemasFlag       dumpSchemasFlag
@@ -79,6 +80,7 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	fs.StringVar(&flags.Output, "output", "", "output directory")
 	fs.BoolVar(&flags.NoTransaction, "no-transaction", false, "skip read-only transaction wrapper (recommended for large subset closures)")
 	fs.BoolVar(&flags.SlowConnection, "slow-connection", false, "chunk tables by primary key for slow/unstable connections (forces --no-transaction)")
+	fs.BoolVar(&flags.RequireSafeKey, "require-safe-key", false, "refuse ctid resume when a table has no primary key or eligible unique key")
 	fs.IntVar(&flags.ChunkSize, "chunk-size", 0, "rows per chunk in slow-connection mode (default: config slow_chunk_size or 1000)")
 	fs.IntVar(&flags.RetryMax, "retry-max", 0, "max query retries per chunk in slow-connection mode (0 = disabled)")
 	fs.StringVar(&flags.RetryBase, "retry-base", "", "base backoff between slow-connection retries (default: config or 500ms)")
@@ -170,6 +172,7 @@ func dumpFlagsToOverrides(flags dumpFlags) runopts.DumpOverrides {
 		ChunkTableFiles:   flags.ChunkTableFiles,
 		Workers:           flags.Workers,
 		WorkersSet:        flags.WorkersSet,
+		RequireSafeKey:    flags.RequireSafeKey,
 	}
 }
 

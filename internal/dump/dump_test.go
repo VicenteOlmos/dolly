@@ -1889,6 +1889,34 @@ func TestDumpSlowPlusChunkUsesGlobalPlans(t *testing.T) {
 	}
 }
 
+func TestDumpRequireSafeKeyRejectsCTID(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "logs", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "logs", "note", "text", "YES", 1, false)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+	emptyUniqueIndexMock(mock)
+
+	err = Dump(context.Background(), sqlDB, t.TempDir(), WithoutSequences(), WithSlowConnection(), WithRequireSafeKey())
+	if err == nil || !strings.Contains(err.Error(), "--require-safe-key") {
+		t.Fatalf("err = %v, want require-safe-key refusal", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDumpChunkOnlyRequestedFallbackWarning(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
