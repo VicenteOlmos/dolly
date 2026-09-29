@@ -15,12 +15,18 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/VicenteOlmos/dolly/internal/db"
-
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
+	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
+
+func TestMain(m *testing.M) {
+	unskipRelationAnnotations()
+	os.Exit(m.Run())
+}
+
+func unskipRelationAnnotations() { db.SkipRelationAnnotations = false }
 
 func requirePgDumpMajorMatch(t *testing.T, db *sql.DB) {
 	t.Helper()

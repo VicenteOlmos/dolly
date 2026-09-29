@@ -24,7 +24,10 @@ import (
 
 var integrationDB *sql.DB
 
+func unskipRelationAnnotations() { db.SkipRelationAnnotations = false }
+
 func TestMain(m *testing.M) {
+	unskipRelationAnnotations()
 	db, err := pgintegration.SetupMainDB()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "postgres integration setup: %v\n", err)

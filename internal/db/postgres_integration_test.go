@@ -18,6 +18,7 @@ var integrationUniqueSchemaSeq uint64
 var integrationDB *sql.DB
 
 func TestMain(m *testing.M) {
+	SkipRelationAnnotations = false
 	db, err := pgintegration.SetupMainDB()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "postgres integration setup: %v\n", err)

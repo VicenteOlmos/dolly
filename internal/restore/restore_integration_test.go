@@ -27,7 +27,10 @@ var (
 	restoreIntegrationMu sync.Mutex
 )
 
+func unskipRelationAnnotations() { db.SkipRelationAnnotations = false }
+
 func TestMain(m *testing.M) {
+	unskipRelationAnnotations()
 	flag.Parse()
 	if testing.Short() {
 		os.Exit(0)

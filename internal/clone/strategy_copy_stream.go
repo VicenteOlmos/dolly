@@ -182,6 +182,7 @@ func (s *CopyStreamStrategy) Execute(ctx context.Context, opts Options) error {
 	if err != nil {
 		return s.wrapWithCleanup("load schema", adminDSN, opts.CloneName, err)
 	}
+	tables = db.WithoutPartitionParents(tables)
 
 	sorted := dump.SortTables(tables)
 
@@ -298,7 +299,7 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 			}
 			continue
 		}
-		if err := copyTable(ctx, srcConn, tgtConn, table.Schema, table.Name); err != nil {
+		if err := copyTableColumns(ctx, srcConn, tgtConn, table); err != nil {
 			return fmt.Errorf("copy table %q: %w", quoteQualifiedTable(table.Schema, table.Name), err)
 		}
 	}
@@ -352,8 +353,9 @@ func copyTableSanitized(ctx context.Context, srcConn, tgtConn copyConn, table db
 	if !ok {
 		return fmt.Errorf("target connection cannot load sanitized rows")
 	}
+	table.Columns = db.DataColumns(table.Columns)
 	if len(table.Columns) == 0 {
-		return fmt.Errorf("table %s has no columns", quoteQualifiedTable(table.Schema, table.Name))
+		return fmt.Errorf("table %s has no loadable columns", quoteQualifiedTable(table.Schema, table.Name))
 	}
 	cols := make([]string, len(table.Columns))
 	quoted := make([]string, len(table.Columns))
@@ -423,14 +425,38 @@ func (s *sanitizedCopySource) Values() ([]any, error) { return s.vals, nil }
 func (s *sanitizedCopySource) Err() error { return s.err }
 
 func copyTable(ctx context.Context, srcConn, tgtConn copyConn, schema, tableName string) error {
+	return copyRelation(ctx, srcConn, tgtConn, schema, tableName, nil)
+}
+
+func copyTableColumns(ctx context.Context, srcConn, tgtConn copyConn, table db.Table) error {
+	return copyRelation(ctx, srcConn, tgtConn, table.Schema, table.Name, table.Columns)
+}
+
+func copyRelation(ctx context.Context, srcConn, tgtConn copyConn, schema, tableName string, columns []db.Column) error {
+	qual := quoteQualifiedTable(schema, tableName)
+	toSQL := fmt.Sprintf("COPY %s TO STDOUT", qual)
+	fromSQL := fmt.Sprintf("COPY %s FROM STDIN", qual)
+	if db.HasGenerated(columns) {
+		data := db.DataColumns(columns)
+		if len(data) == 0 {
+			return fmt.Errorf("table %s has no loadable columns", qual)
+		}
+		quoted := make([]string, len(data))
+		for i, col := range data {
+			quoted[i] = quoteIdentifier(col.Name)
+		}
+		list := strings.Join(quoted, ", ")
+		toSQL = fmt.Sprintf("COPY (SELECT %s FROM %s) TO STDOUT", list, qual)
+		fromSQL = fmt.Sprintf("COPY %s (%s) FROM STDIN", qual, list)
+	}
+
 	pr, pw := io.Pipe()
 
 	var srcErr error
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sql := fmt.Sprintf("COPY %s TO STDOUT", quoteQualifiedTable(schema, tableName))
-		if err := srcConn.CopyTo(ctx, pw, sql); err != nil {
+		if err := srcConn.CopyTo(ctx, pw, toSQL); err != nil {
 			srcErr = err
 			pw.CloseWithError(err)
 			return
@@ -438,8 +464,7 @@ func copyTable(ctx context.Context, srcConn, tgtConn copyConn, schema, tableName
 		pw.Close()
 	}()
 
-	sql := fmt.Sprintf("COPY %s FROM STDIN", quoteQualifiedTable(schema, tableName))
-	tgtErr := tgtConn.CopyFrom(ctx, pr, sql)
+	tgtErr := tgtConn.CopyFrom(ctx, pr, fromSQL)
 	pr.Close()
 	<-done
 

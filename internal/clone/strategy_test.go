@@ -22,6 +22,7 @@ import (
 )
 
 func init() {
+	db.SkipRelationAnnotations = true
 	applyTargetFidelity = func(_ context.Context, _, _ *sql.DB, restore func() error) error {
 		if err := restore(); err != nil {
 			return fmt.Errorf("restore: %w", err)
@@ -1438,6 +1439,28 @@ func TestCopyTable(t *testing.T) {
 	}
 	if tgt.copyFromCalls[0].sql != `COPY "public"."users" FROM STDIN` {
 		t.Fatalf("unexpected CopyFrom SQL: %q", tgt.copyFromCalls[0].sql)
+	}
+}
+
+func TestCopyTableOmitsGeneratedColumns(t *testing.T) {
+	src := &mockCopyConn{}
+	tgt := &mockCopyConn{}
+	err := copyTableColumns(context.Background(), src, tgt, db.Table{
+		Schema: "public",
+		Name:   "users",
+		Columns: []db.Column{
+			{Name: "id"},
+			{Name: "total", Generated: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.copyToCalls[0].sql != `COPY (SELECT "id" FROM "public"."users") TO STDOUT` {
+		t.Fatalf("to = %q", src.copyToCalls[0].sql)
+	}
+	if tgt.copyFromCalls[0].sql != `COPY "public"."users" ("id") FROM STDIN` {
+		t.Fatalf("from = %q", tgt.copyFromCalls[0].sql)
 	}
 }
 

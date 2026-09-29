@@ -21,6 +21,10 @@ func loadTable(ctx context.Context, q execQuerier, table db.Table, path string, 
 	if err := dump.ValidateTableName(table.Name); err != nil {
 		return fmt.Errorf("validate table: %w", err)
 	}
+	table, err := writableTable(table)
+	if err != nil {
+		return err
+	}
 	query, _, err := buildInsert(table, policy)
 	if err != nil {
 		return err
@@ -97,12 +101,22 @@ var loadTableCopyInTx = func(ctx context.Context, conn *sql.Conn, table db.Table
 	})
 }
 
+func writableTable(table db.Table) (db.Table, error) {
+	cols := db.DataColumns(table.Columns)
+	if len(cols) == 0 {
+		return db.Table{}, fmt.Errorf("table %q has no loadable columns", table.Name)
+	}
+	table.Columns = cols
+	return table, nil
+}
+
 func copyFromPGX(ctx context.Context, conn *pgx.Conn, table db.Table, path string) error {
 	if err := dump.ValidateTableName(table.Name); err != nil {
 		return fmt.Errorf("validate table: %w", err)
 	}
-	if len(table.Columns) == 0 {
-		return fmt.Errorf("table %q has no columns", table.Name)
+	table, err := writableTable(table)
+	if err != nil {
+		return err
 	}
 
 	colNames := make([]string, len(table.Columns))

@@ -11,6 +11,10 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func init() {
+	SkipRelationAnnotations = true
+}
+
 func int64Ptr(v int64) *int64 {
 	return &v
 }

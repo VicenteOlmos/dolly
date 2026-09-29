@@ -11,6 +11,11 @@ type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
+// SkipRelationAnnotations skips partition and generated-column lookups.
+// Production leaves this false. sqlmock suites set it so existing query
+// sequences stay valid; tests that cover the annotations turn it back off.
+var SkipRelationAnnotations bool
+
 // LoadPostgresSchemas loads base tables for the given schema names.
 // When schemas is nil or empty, only the public schema is loaded.
 // Delegates to LoadPostgresSchemasBatched (2 queries for columns + FKs
@@ -50,6 +55,11 @@ func LoadPostgresSchemasBatched(ctx context.Context, q queryer, schemas []string
 		tables[i].Columns = colMap[key]
 		tables[i].ForeignKeys = fkMap[key]
 		tables[i].UniqueIndexes = idxMap[key]
+	}
+	if !SkipRelationAnnotations {
+		if err := annotateLoadedTables(ctx, q, tables, filter); err != nil {
+			return nil, err
+		}
 	}
 
 	return tables, nil
@@ -405,6 +415,111 @@ func fetchUniqueIndexes(ctx context.Context, q queryer, schemas []string) (map[s
 	}
 
 	return out, nil
+}
+
+func annotateLoadedTables(ctx context.Context, q queryer, tables []Table, schemas []string) error {
+	if err := annotatePartitions(ctx, q, tables, schemas); err != nil {
+		return err
+	}
+	return annotateGeneratedColumns(ctx, q, tables, schemas)
+}
+
+func annotatePartitions(ctx context.Context, q queryer, tables []Table, schemas []string) error {
+	placeholders := make([]string, len(schemas))
+	args := make([]any, len(schemas))
+	for i, schema := range schemas {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = schema
+	}
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, c.relkind::text, c.relispartition,
+		       COALESCE(pg_get_partkeydef(c.oid), ''),
+		       CASE WHEN c.relispartition THEN COALESCE(pg_get_expr(c.relpartbound, c.oid), '') ELSE '' END,
+		       CASE WHEN c.relispartition THEN COALESCE(pn.nspname, '') ELSE '' END,
+		       CASE WHEN c.relispartition THEN COALESCE(p.relname, '') ELSE '' END
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		LEFT JOIN pg_inherits i ON c.relispartition AND i.inhrelid = c.oid
+		LEFT JOIN pg_class p ON p.oid = i.inhparent
+		LEFT JOIN pg_namespace pn ON pn.oid = p.relnamespace
+		WHERE n.nspname IN (%s)
+		  AND c.relkind IN ('r', 'p')
+	`, strings.Join(placeholders, ", "))
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("annotate partitions: %w", err)
+	}
+	defer rows.Close()
+
+	byName := make(map[string]*Table, len(tables))
+	for i := range tables {
+		byName[tables[i].Schema+"."+tables[i].Name] = &tables[i]
+	}
+	for rows.Next() {
+		var schema, name, relkind, partBy, bound, parentSchema, parentName string
+		var isPartition bool
+		if err := rows.Scan(&schema, &name, &relkind, &isPartition, &partBy, &bound, &parentSchema, &parentName); err != nil {
+			return fmt.Errorf("annotate partitions: %w", err)
+		}
+		table := byName[schema+"."+name]
+		if table == nil {
+			continue
+		}
+		table.RelKind = relkind
+		if relkind == "p" {
+			table.PartitionBy = partBy
+		}
+		if isPartition && parentSchema != "" && parentName != "" {
+			table.PartitionOf = parentSchema + "." + parentName
+			table.PartitionBound = bound
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("annotate partitions: %w", err)
+	}
+	return nil
+}
+
+func annotateGeneratedColumns(ctx context.Context, q queryer, tables []Table, schemas []string) error {
+	placeholders := make([]string, len(schemas))
+	args := make([]any, len(schemas))
+	for i, schema := range schemas {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = schema
+	}
+	query := fmt.Sprintf(`
+		SELECT table_schema, table_name, column_name
+		FROM information_schema.columns
+		WHERE is_generated = 'ALWAYS'
+		  AND table_schema IN (%s)
+	`, strings.Join(placeholders, ", "))
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("annotate generated columns: %w", err)
+	}
+	defer rows.Close()
+
+	type colKey struct{ schema, table, column string }
+	generated := map[colKey]struct{}{}
+	for rows.Next() {
+		var schema, table, column string
+		if err := rows.Scan(&schema, &table, &column); err != nil {
+			return fmt.Errorf("annotate generated columns: %w", err)
+		}
+		generated[colKey{schema, table, column}] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("annotate generated columns: %w", err)
+	}
+	for i := range tables {
+		for j := range tables[i].Columns {
+			col := &tables[i].Columns[j]
+			if _, ok := generated[colKey{tables[i].Schema, tables[i].Name, col.Name}]; ok {
+				col.Generated = true
+			}
+		}
+	}
+	return nil
 }
 
 // Per-table fetchColumns/fetchForeignKeys removed; LoadPostgresSchemas uses batched queries.
