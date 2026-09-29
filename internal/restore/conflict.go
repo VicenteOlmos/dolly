@@ -60,14 +60,36 @@ func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames 
 	}
 
 	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
+	valuesClause := strings.Join(placeholders, ", ")
+	pkCols := primaryKeyColumns(table.Columns)
+	if hasAlwaysIdentity(table.Columns) {
+		base := fmt.Sprintf(
+			"INSERT INTO %s (%s) OVERRIDING SYSTEM VALUE VALUES (%s)",
+			tableIdent,
+			strings.Join(idents, ", "),
+			valuesClause,
+		)
+		return finishInsert(base, table, policy, pkCols, colNames)
+	}
 	base := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
 		tableIdent,
 		strings.Join(idents, ", "),
-		strings.Join(placeholders, ", "),
+		valuesClause,
 	)
+	return finishInsert(base, table, policy, pkCols, colNames)
+}
 
-	pkCols := primaryKeyColumns(table.Columns)
+func hasAlwaysIdentity(cols []db.Column) bool {
+	for _, c := range cols {
+		if c.Identity == "ALWAYS" {
+			return true
+		}
+	}
+	return false
+}
+
+func finishInsert(base string, table db.Table, policy ConflictPolicy, pkCols []string, colNames []string) (string, []string, error) {
 	if len(pkCols) == 0 || policy == ConflictError {
 		return base, colNames, nil
 	}
