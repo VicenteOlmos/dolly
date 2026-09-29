@@ -17,6 +17,7 @@ import (
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
+	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
@@ -142,6 +143,9 @@ func TestIntegrationCatalogReplayPartitionConstraints(t *testing.T) {
 	if dsn == "" {
 		t.Skip("DOLLY_TEST_PG_DSN not set")
 	}
+	prev := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = prev })
 	ctx := context.Background()
 	adminDSN, err := RewriteDSN(dsn, "postgres")
 	if err != nil {

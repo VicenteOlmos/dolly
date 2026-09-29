@@ -637,6 +637,9 @@ func TestIntegrationLoadTableCopy(t *testing.T) {
 }
 
 func TestIntegrationRestoreOnlyGeneratedColumns(t *testing.T) {
+	prev := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = prev })
 	conn := openIntegrationDB(t)
 	ctx := context.Background()
 	const tableName = "dolly_only_generated"
