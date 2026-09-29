@@ -17,7 +17,7 @@ Choose your path:
 | Work interactively | `dolly tui` — connect, inspect schemas, dump, and clone from a real terminal. |
 | Script dump or restore | `dolly dump`, `dolly restore`, and `dolly clone` — use a DSN or saved connection. |
 
-`dolly tui` has no flags, requires a TTY, and reads `config.jsonc` from the current directory. In the dump screen, the **Mode** section edits chunk size and slow-connection retry settings; **History** restore can set row conflict policy and replace. The **Clone** form can set replace and on-conflict for the restore phase.
+`dolly tui` has no flags, requires a TTY, and reads `config.jsonc` from the current directory. In the dump screen, the **Mode** section edits chunk size, table-list files, and slow-connection retry settings; **History** restore can set row conflict policy and replace. The **Clone** form can set replace and on-conflict for the restore phase, override the physical-backup **target directory**, and toggle **skip-create**.
 
 ## Install
 

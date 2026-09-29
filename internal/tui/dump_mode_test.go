@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -47,6 +48,25 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 	}
 	if _, err := dumpOverridesFromDraft(DumpDraft{PercentText: "0"}); err == nil {
 		t.Fatal("percent 0 text should be rejected")
+	}
+}
+
+func TestDumpModeEditsChunkTableFile(t *testing.T) {
+	app := NewApp()
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionMode)
+	ds.modeField = modeFieldChunkTableFile
+	if !ds.modeTextFocused() || !strings.Contains(strings.Join(ds.modeSectionLines(), "\n"), "Chunk table file") {
+		t.Fatal("chunk table file is not an editable Mode row")
+	}
+	for _, r := range "tables/chunk.txt" {
+		ds.Update(keyPress(string(r), r, 0))
+	}
+	if app.dump.ChunkTableFile != "tables/chunk.txt" {
+		t.Fatalf("ChunkTableFile = %q", app.dump.ChunkTableFile)
+	}
+	if !strings.Contains(ds.modeSummary(), "chunk-file") {
+		t.Fatalf("mode summary = %q", ds.modeSummary())
 	}
 }
 
