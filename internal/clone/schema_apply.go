@@ -259,6 +259,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	tableFillfactors, err := loadTableFillfactors(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyTableFillfactors(ctx, tgtDB, tableFillfactors); err != nil {
+		return err
+	}
+
 	indexes, err := loadIndexes(ctx, srcDB, schemas)
 	if err != nil {
 		return err

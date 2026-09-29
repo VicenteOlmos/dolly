@@ -210,6 +210,15 @@ func formatAlterColumnCompression(schema, table, column, code string) (string, b
 	), true
 }
 
+// formatAlterTableFillfactor emits ALTER TABLE ... SET (fillfactor=N).
+func formatAlterTableFillfactor(schema, table string, fillfactor int) string {
+	return fmt.Sprintf(
+		"ALTER TABLE %s SET (fillfactor=%d)",
+		quoteQualifiedTable(schema, table),
+		fillfactor,
+	)
+}
+
 // formatAlterColumnStorage emits ALTER TABLE ... ALTER COLUMN ... SET STORAGE.
 func formatAlterColumnStorage(schema, table, column, storageCode string) (string, bool) {
 	var storage string

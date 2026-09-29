@@ -199,6 +199,15 @@ func TestFormatAlterColumnCompression(t *testing.T) {
 	}
 }
 
+func TestFormatAlterTableFillfactor(t *testing.T) {
+	t.Parallel()
+	got := formatAlterTableFillfactor("app", "events", 90)
+	want := `ALTER TABLE "app"."events" SET (fillfactor=90)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatAlterColumnStorage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
