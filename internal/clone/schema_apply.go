@@ -115,6 +115,13 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err := applyDomainTypes(ctx, tgtDB, domains); err != nil {
 		return err
 	}
+	domainChecks, err := loadDomainCheckConstraints(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyDomainCheckConstraints(ctx, tgtDB, domainChecks); err != nil {
+		return err
+	}
 
 	composites, err := loadCompositeTypes(ctx, srcDB, schemas)
 	if err != nil {

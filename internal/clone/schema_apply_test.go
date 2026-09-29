@@ -18,6 +18,8 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "typname", "enumlabel"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
+	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
@@ -348,6 +350,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 			AddRow("app", "status_enum", "inactive"))
 	srcMock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
+	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(

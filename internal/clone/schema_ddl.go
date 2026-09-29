@@ -109,6 +109,17 @@ func formatTableCheckConstraint(name, pgConstraintDef string) string {
 	return fmt.Sprintf("CONSTRAINT %s CHECK (%s)", quoteIdentifier(name), def)
 }
 
+// formatAlterDomainAddConstraint uses pg_get_constraintdef output for domain CHECK.
+func formatAlterDomainAddConstraint(schema, domain, constraintName, pgConstraintDef string) string {
+	def := strings.TrimSpace(pgConstraintDef)
+	return fmt.Sprintf(
+		"ALTER DOMAIN %s ADD CONSTRAINT %s %s",
+		quoteQualifiedType(schema, domain),
+		quoteIdentifier(constraintName),
+		def,
+	)
+}
+
 // formatAlterTableAddConstraint uses pg_get_constraintdef output for FOREIGN KEY.
 func formatAlterTableAddConstraint(schema, table, constraintName, pgConstraintDef string) string {
 	def := strings.TrimSpace(pgConstraintDef)

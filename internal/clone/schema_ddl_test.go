@@ -128,6 +128,16 @@ func TestFormatTableCheckConstraint(t *testing.T) {
 	}
 }
 
+func TestFormatAlterDomainAddConstraint(t *testing.T) {
+	t.Parallel()
+	def := "CHECK (VALUE > 0)"
+	got := formatAlterDomainAddConstraint("app", "positive_int", "positive_int_check", def)
+	want := `ALTER DOMAIN "app"."positive_int" ADD CONSTRAINT "positive_int_check" CHECK (VALUE > 0)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatAlterTableAddConstraintForeignKey(t *testing.T) {
 	t.Parallel()
 	def := `FOREIGN KEY ("user_id") REFERENCES "app"."users" ("id") ON DELETE CASCADE`

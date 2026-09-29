@@ -147,6 +147,49 @@ func applyDomainTypes(ctx context.Context, tgtDB execer, domains []domainType) e
 	return nil
 }
 
+type domainCheckConstraint struct {
+	schema     string
+	domain     string
+	name       string
+	constraint string
+}
+
+func loadDomainCheckConstraints(ctx context.Context, q *sql.DB, schemas []string) ([]domainCheckConstraint, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, t.typname, c.conname, pg_get_constraintdef(c.oid, true)
+		FROM pg_constraint c
+		JOIN pg_type t ON t.oid = c.contypid
+		JOIN pg_namespace n ON n.oid = t.typnamespace
+		WHERE t.typtype = 'd' AND c.contype = 'c' AND n.nspname IN (%s)
+		ORDER BY n.nspname, t.typname, c.conname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list domain check constraints: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domainCheckConstraint
+	for rows.Next() {
+		var dc domainCheckConstraint
+		if err := rows.Scan(&dc.schema, &dc.domain, &dc.name, &dc.constraint); err != nil {
+			return nil, fmt.Errorf("scan domain check constraint: %w", err)
+		}
+		out = append(out, dc)
+	}
+	return out, rows.Err()
+}
+
+func applyDomainCheckConstraints(ctx context.Context, tgtDB execer, checks []domainCheckConstraint) error {
+	for _, dc := range checks {
+		stmt := formatAlterDomainAddConstraint(dc.schema, dc.domain, dc.name, dc.constraint)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("add domain check %q on %s.%s: %w", dc.name, dc.schema, dc.domain, err)
+		}
+	}
+	return nil
+}
+
 func loadCompositeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]struct {
 	schema string
 	name   string
