@@ -193,6 +193,17 @@ func formatGrantTable(privileges, schema, table, grantee string) string {
 	)
 }
 
+// formatGrantColumn emits GRANT privileges (column) ON TABLE.
+func formatGrantColumn(privileges, schema, table, column, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT %s (%s) ON TABLE %s TO %s",
+		privileges,
+		quoteIdentifier(column),
+		quoteQualifiedTable(schema, table),
+		quoteGrantee(grantee),
+	)
+}
+
 // formatGrantSchema emits GRANT privileges ON SCHEMA.
 func formatGrantSchema(privileges, schema, grantee string) string {
 	return fmt.Sprintf(

@@ -90,6 +90,8 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
 	srcMock.ExpectQuery(`FROM information_schema.table_privileges`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`FROM information_schema.column_privileges`).WillReturnRows(
+		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "grantee", "privilege_type"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
@@ -384,6 +386,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
 	srcMock.ExpectQuery(`FROM information_schema.table_privileges`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`FROM information_schema.column_privileges`).WillReturnRows(
+		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "grantee", "privilege_type"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(

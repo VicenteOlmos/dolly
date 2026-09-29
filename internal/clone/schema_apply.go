@@ -270,6 +270,13 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		if err := applyGrants(ctx, tgtDB, grants); err != nil {
 			return err
 		}
+		columnGrants, err := loadColumnGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyColumnGrants(ctx, tgtDB, columnGrants); err != nil {
+			return err
+		}
 	}
 
 	rlsTables, err := loadRLSTables(ctx, srcDB, schemas)

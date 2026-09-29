@@ -786,6 +786,71 @@ func applyGrants(ctx context.Context, tgtDB execer, grants []grantRow) error {
 	return nil
 }
 
+type columnGrantRow struct {
+	schema     string
+	table      string
+	column     string
+	grantee    string
+	privileges []string
+}
+
+func loadColumnGrants(ctx context.Context, q *sql.DB, schemas []string) ([]columnGrantRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT table_schema, table_name, column_name, grantee, privilege_type
+		FROM information_schema.column_privileges
+		WHERE table_schema IN (%s)
+		  AND grantee <> 'PUBLIC'
+		ORDER BY table_schema, table_name, column_name, grantee`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list column grants: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct {
+		schema, table, column, grantee string
+	}
+	byKey := make(map[key][]string)
+	var order []key
+	for rows.Next() {
+		var schema, table, column, grantee, priv string
+		if err := rows.Scan(&schema, &table, &column, &grantee, &priv); err != nil {
+			return nil, fmt.Errorf("scan column grant: %w", err)
+		}
+		k := key{schema: schema, table: table, column: column, grantee: grantee}
+		if _, ok := byKey[k]; !ok {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], strings.ToUpper(priv))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list column grants: %w", err)
+	}
+	var out []columnGrantRow
+	for _, k := range order {
+		out = append(out, columnGrantRow{
+			schema:     k.schema,
+			table:      k.table,
+			column:     k.column,
+			grantee:    k.grantee,
+			privileges: byKey[k],
+		})
+	}
+	return out, nil
+}
+
+func applyColumnGrants(ctx context.Context, tgtDB execer, grants []columnGrantRow) error {
+	for _, g := range grants {
+		privs := strings.Join(g.privileges, ", ")
+		stmt := formatGrantColumn(privs, g.schema, g.table, g.column, g.grantee)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("grant on column %s.%s.%s: %w", g.schema, g.table, g.column, err)
+		}
+	}
+	return nil
+}
+
 type rlsTable struct {
 	schema string
 	table  string

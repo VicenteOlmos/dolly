@@ -191,6 +191,15 @@ func TestFormatGrantTable(t *testing.T) {
 	}
 }
 
+func TestFormatGrantColumn(t *testing.T) {
+	t.Parallel()
+	got := formatGrantColumn("SELECT, UPDATE", "app", "users", "email", "app_reader")
+	want := `GRANT SELECT, UPDATE ("email") ON TABLE "app"."users" TO "app_reader"`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatEnableRLSAndPolicy(t *testing.T) {
 	t.Parallel()
 	rls := formatEnableRLS("app", "users", false)
