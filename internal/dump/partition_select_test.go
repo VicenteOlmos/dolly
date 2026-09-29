@@ -27,6 +27,26 @@ func nestedPartitionFixtureTables() []db.Table {
 	}
 }
 
+func TestRejectIncludedPartitionParentNoLeaves(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "events", RelKind: "p"},
+		{Schema: "public", Name: "users"},
+	}
+	policy := &SelectionPolicy{
+		Includes: []SelectorEntry{{Table: QualifiedTable{Schema: "public", Name: "events"}}},
+	}
+	err := rejectIncludedPartitionParents(tables, policy)
+	if !IsTableSelectionError(err) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "no leaf partitions in scope") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "include leaf partitions:") {
+		t.Fatalf("must not print empty leaf list: %v", err)
+	}
+}
+
 func TestRejectIncludedPartitionParent(t *testing.T) {
 	tables := partitionFixtureTables()
 	policy := &SelectionPolicy{
