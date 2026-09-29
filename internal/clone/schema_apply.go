@@ -31,8 +31,10 @@ type schemaColumn struct {
 }
 
 type uniqueConstraint struct {
-	name    string
-	columns []string
+	name       string
+	columns    []string
+	deferrable bool
+	deferred   bool
 }
 
 // ApplySchemasFromSource creates selected schemas and database objects on target to match
@@ -198,6 +200,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		}
 		uniqueMap, err := loadAllUniqueConstraints(ctx, srcDB, schemas)
 		if err != nil {
+			return err
+		}
+		if err := mergeUniqueConstraintDeferrability(ctx, srcDB, schemas, uniqueMap); err != nil {
 			return err
 		}
 		checkMap, err := loadAllCheckConstraints(ctx, srcDB, schemas)
@@ -460,6 +465,50 @@ func loadAllUniqueConstraints(ctx context.Context, q *sql.DB, schemas []string) 
 	return out, nil
 }
 
+func mergeUniqueConstraintDeferrability(ctx context.Context, q *sql.DB, schemas []string, uniqueMap map[string][]uniqueConstraint) error {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, con.conname, con.condeferrable, con.condeferred
+		FROM pg_constraint con
+		INNER JOIN pg_class c ON c.oid = con.conrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE con.contype = 'u'
+		  AND n.nspname IN (%s)
+	`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("load unique constraint deferrability: %w", err)
+	}
+	defer rows.Close()
+
+	type deferKey struct {
+		key  string
+		name string
+	}
+	deferBy := make(map[deferKey]struct{ deferrable, deferred bool })
+	for rows.Next() {
+		var schema, table, name string
+		var deferrable, deferred bool
+		if err := rows.Scan(&schema, &table, &name, &deferrable, &deferred); err != nil {
+			return fmt.Errorf("scan unique deferrability: %w", err)
+		}
+		deferBy[deferKey{schema + "." + table, name}] = struct{ deferrable, deferred bool }{deferrable, deferred}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load unique constraint deferrability: %w", err)
+	}
+	for key, list := range uniqueMap {
+		for i := range list {
+			if d, ok := deferBy[deferKey{key, list[i].name}]; ok {
+				list[i].deferrable = d.deferrable
+				list[i].deferred = d.deferred
+			}
+		}
+		uniqueMap[key] = list
+	}
+	return nil
+}
+
 // loadAllCheckConstraints loads CHECK constraints for all tables in the given
 // schemas in a single query. Returns a map keyed by "schema.table".
 func loadAllCheckConstraints(ctx context.Context, q *sql.DB, schemas []string) (map[string][]checkConstraint, error) {
@@ -694,7 +743,15 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 		for i, name := range uq.columns {
 			quoted[i] = quoteIdentifier(name)
 		}
-		parts = append(parts, fmt.Sprintf("CONSTRAINT %s UNIQUE (%s)", quoteIdentifier(uq.name), strings.Join(quoted, ", ")))
+		uniqueClause := fmt.Sprintf("CONSTRAINT %s UNIQUE (%s)", quoteIdentifier(uq.name), strings.Join(quoted, ", "))
+		if uq.deferrable {
+			if uq.deferred {
+				uniqueClause += " DEFERRABLE INITIALLY DEFERRED"
+			} else {
+				uniqueClause += " DEFERRABLE"
+			}
+		}
+		parts = append(parts, uniqueClause)
 	}
 
 	for _, chk := range checks {

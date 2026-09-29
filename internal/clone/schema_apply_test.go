@@ -67,6 +67,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 	// loadAllUniqueConstraints (1 query).
 	srcMock.ExpectQuery(`constraint_type = 'UNIQUE'[\s\S]*table_schema IN \(\$1`).
 		WillReturnRows(allUniques)
+	srcMock.ExpectQuery(`con\.contype = 'u'[\s\S]*nspname IN \(\$1`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "conname", "condeferrable", "condeferred"}))
 	// loadAllCheckConstraints (1 query).
 	srcMock.ExpectQuery(`con\.contype = 'c'[\s\S]*nspname IN \(\$1`).
 		WillReturnRows(allChecks)
@@ -465,6 +467,42 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFormatCreateTableDeferrableUnique(t *testing.T) {
+	t.Parallel()
+	table := db.Table{Schema: "app", Name: "items"}
+	cols := []schemaColumn{{name: "code", sqlType: "text", nullable: false}}
+	tests := []struct {
+		name   string
+		unique uniqueConstraint
+		want   string
+	}{
+		{
+			name:   "non_deferrable",
+			unique: uniqueConstraint{name: "items_code_key", columns: []string{"code"}},
+			want:   `CONSTRAINT "items_code_key" UNIQUE ("code")`,
+		},
+		{
+			name:   "deferrable_immediate",
+			unique: uniqueConstraint{name: "items_code_key", columns: []string{"code"}, deferrable: true},
+			want:   `CONSTRAINT "items_code_key" UNIQUE ("code") DEFERRABLE`,
+		},
+		{
+			name:   "deferrable_deferred",
+			unique: uniqueConstraint{name: "items_code_key", columns: []string{"code"}, deferrable: true, deferred: true},
+			want:   `CONSTRAINT "items_code_key" UNIQUE ("code") DEFERRABLE INITIALLY DEFERRED`,
+		},
+	}
+	for _, tt := range tests {
+		got, err := formatCreateTable(table, cols, []uniqueConstraint{tt.unique}, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if !strings.Contains(got, tt.want) {
+			t.Fatalf("%s: got %q, want substring %q", tt.name, got, tt.want)
+		}
 	}
 }
 
