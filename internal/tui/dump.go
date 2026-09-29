@@ -32,6 +32,7 @@ const (
 	modeFieldMaxRowsPerTable
 	modeFieldInclude
 	modeFieldExclude
+	modeFieldChunkSize
 	modeFieldCount
 )
 
@@ -57,6 +58,7 @@ type dumpScreen struct {
 	rowsPerCursor    int
 	includeCursor    int
 	excludeCursor    int
+	chunkSizeCursor  int
 	restoreDir       string
 	restoreDirCursor int
 	restoreDirFocus  bool
@@ -319,7 +321,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	switch d.modeField {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
-		modeFieldInclude, modeFieldExclude:
+		modeFieldInclude, modeFieldExclude, modeFieldChunkSize:
 		return true
 	default:
 		return false
@@ -336,6 +338,7 @@ func (d *dumpScreen) syncModeCursors() {
 	d.rowsPerCursor = len(d.draft.MaxRowsPerTableText)
 	d.includeCursor = len(d.draft.IncludeTables)
 	d.excludeCursor = len(d.draft.ExcludeTables)
+	d.chunkSizeCursor = len(d.draft.ChunkSizeText)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -370,6 +373,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.IncludeTables, &d.includeCursor)
 		case modeFieldExclude:
 			return handleFieldCursorKey(k, &d.draft.ExcludeTables, &d.excludeCursor)
+		case modeFieldChunkSize:
+			return handleFieldCursorKey(k, &d.draft.ChunkSizeText, &d.chunkSizeCursor)
 		}
 	}
 	switch d.modeField {
@@ -595,6 +600,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldMaxRowsPerTable, "Max rows/table", d.modeFieldValue(d.draft.MaxRowsPerTableText, d.rowsPerCursor, modeFieldMaxRowsPerTable)},
 		{modeFieldInclude, "Include tables", d.modeFieldValue(d.draft.IncludeTables, d.includeCursor, modeFieldInclude)},
 		{modeFieldExclude, "Exclude tables", d.modeFieldValue(d.draft.ExcludeTables, d.excludeCursor, modeFieldExclude)},
+		{modeFieldChunkSize, "Chunk size", d.modeFieldValue(d.draft.ChunkSizeText, d.chunkSizeCursor, modeFieldChunkSize)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))

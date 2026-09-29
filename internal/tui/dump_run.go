@@ -120,6 +120,10 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	chunkSize, err := parseOptionalPositiveInt(draft.ChunkSizeText, "chunk size")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
 	return runopts.DumpOverrides{
 		NoTransaction:   draft.NoTransaction,
 		SlowConnection:  draft.SlowConnection,
@@ -133,9 +137,22 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		MaxRowsPerTable: maxRowsPer,
 		IncludeTables:   splitChunkTables(draft.IncludeTables),
 		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
+		ChunkSize:       chunkSize,
 		Workers:         draft.Workers,
 		WorkersSet:      draft.WorkersSet,
 	}, nil
+}
+
+func parseOptionalPositiveInt(raw, label string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%s must be an integer >= 1", label)
+	}
+	return n, nil
 }
 
 func parseOptionalNonNegative(raw, label string) (int, error) {

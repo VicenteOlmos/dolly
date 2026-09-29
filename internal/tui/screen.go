@@ -137,6 +137,7 @@ type DumpDraft struct {
 	MaxRowsPerTableText string
 	IncludeTables       string
 	ExcludeTables       string
+	ChunkSizeText       string
 	Workers             int
 	WorkersSet          bool
 	SchemaPicker        SchemaPickerState
