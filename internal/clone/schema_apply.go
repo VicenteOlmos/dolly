@@ -606,6 +606,9 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 			part = fmt.Sprintf("%s %s GENERATED ALWAYS AS (%s) STORED", quoteIdentifier(c.name), c.sqlType, c.generatedExpr)
 		} else {
 			part = fmt.Sprintf("%s %s", quoteIdentifier(c.name), c.sqlType)
+			if c.collationSchema != "" && c.collationName != "" {
+				part += " COLLATE " + quoteQualifiedType(c.collationSchema, c.collationName)
+			}
 			switch c.identityGen {
 			case "ALWAYS":
 				part += " GENERATED ALWAYS AS IDENTITY"
