@@ -528,6 +528,107 @@ func applyIndexes(ctx context.Context, tgtDB execer, indexes []indexRow) error {
 	return nil
 }
 
+type replicaIdentityRow struct {
+	schema    string
+	table     string
+	ident     string
+	indexName string
+}
+
+func loadReplicaIdentities(ctx context.Context, q *sql.DB, schemas []string) ([]replicaIdentityRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, c.relreplident::text,
+		       COALESCE(idx_class.relname, '')
+		FROM pg_class c
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		LEFT JOIN pg_index ix ON ix.indrelid = c.oid AND ix.indisreplident
+		LEFT JOIN pg_class idx_class ON idx_class.oid = ix.indexrelid
+		WHERE c.relkind IN ('r', 'p')
+		  AND NOT c.relispartition
+		  AND c.relreplident <> 'd'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list replica identities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []replicaIdentityRow
+	for rows.Next() {
+		var row replicaIdentityRow
+		if err := rows.Scan(&row.schema, &row.table, &row.ident, &row.indexName); err != nil {
+			return nil, fmt.Errorf("scan replica identity: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyReplicaIdentities(ctx context.Context, tgtDB execer, rows []replicaIdentityRow) error {
+	for _, row := range rows {
+		stmt, ok := formatAlterTableReplicaIdentity(row.schema, row.table, row.ident, row.indexName)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("replica identity on %s.%s: %w", row.schema, row.table, err)
+		}
+	}
+	return nil
+}
+
+type columnStorageRow struct {
+	schema  string
+	table   string
+	column  string
+	storage string
+}
+
+func loadColumnStorageOverrides(ctx context.Context, q *sql.DB, schemas []string) ([]columnStorageRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, a.attname, a.attstorage::text
+		FROM pg_attribute a
+		INNER JOIN pg_class c ON c.oid = a.attrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		INNER JOIN pg_type t ON t.oid = a.atttypid
+		WHERE a.attnum > 0 AND NOT a.attisdropped
+		  AND c.relkind IN ('r', 'p')
+		  AND a.attstorage <> t.typstorage
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, a.attnum`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list column storage overrides: %w", err)
+	}
+	defer rows.Close()
+
+	var out []columnStorageRow
+	for rows.Next() {
+		var row columnStorageRow
+		if err := rows.Scan(&row.schema, &row.table, &row.column, &row.storage); err != nil {
+			return nil, fmt.Errorf("scan column storage: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyColumnStorageOverrides(ctx context.Context, tgtDB execer, rows []columnStorageRow) error {
+	for _, row := range rows {
+		stmt, ok := formatAlterColumnStorage(row.schema, row.table, row.column, row.storage)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("column storage on %s.%s.%s: %w", row.schema, row.table, row.column, err)
+		}
+	}
+	return nil
+}
+
 func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
@@ -692,7 +793,35 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		WHERE d.classoid = 'pg_class'::regclass AND d.objsubid = 0
 		  AND c.relkind = 'i'
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'constraint', n.nspname, c.relname, con.conname, d.description
+		FROM pg_description d
+		INNER JOIN pg_constraint con ON con.oid = d.objoid
+		INNER JOIN pg_class c ON c.oid = con.conrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE d.classoid = 'pg_constraint'::regclass AND d.objsubid = 0
+		  AND ((con.contype = 'u' AND con.conparentid = 0)
+		    OR (con.contype = 'c' AND con.coninhcount = 0)
+		    OR (con.contype = 'f' AND con.conparentid = 0))
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'domain_constraint', n.nspname, t.typname, con.conname, d.description
+		FROM pg_description d
+		INNER JOIN pg_constraint con ON con.oid = d.objoid
+		INNER JOIN pg_type t ON t.oid = con.contypid
+		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		WHERE d.classoid = 'pg_constraint'::regclass AND d.objsubid = 0
+		  AND t.typtype = 'd' AND con.contype = 'c'
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'domain', n.nspname, t.typname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_type t ON t.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		WHERE d.classoid = 'pg_type'::regclass AND d.objsubid = 0
+		  AND t.typtype = 'd'
+		  AND n.nspname IN (%s)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)

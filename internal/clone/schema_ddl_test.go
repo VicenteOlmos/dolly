@@ -147,6 +147,48 @@ func TestFormatAlterTableAddConstraintForeignKey(t *testing.T) {
 	}
 }
 
+func TestFormatAlterTableReplicaIdentity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		ident, index string
+		want         string
+		ok           bool
+	}{
+		{"f", "", `ALTER TABLE "app"."events" REPLICA IDENTITY FULL`, true},
+		{"n", "", `ALTER TABLE "app"."events" REPLICA IDENTITY NOTHING`, true},
+		{"i", "events_pkey", `ALTER TABLE "app"."events" REPLICA IDENTITY USING INDEX "events_pkey"`, true},
+		{"i", "", "", false},
+		{"d", "", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := formatAlterTableReplicaIdentity("app", "events", tt.ident, tt.index)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("ident=%q index=%q: got (%q, %v), want (%q, %v)", tt.ident, tt.index, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestFormatAlterColumnStorage(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		code string
+		want string
+		ok   bool
+	}{
+		{"p", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE PLAIN`, true},
+		{"e", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE EXTERNAL`, true},
+		{"x", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE EXTENDED`, true},
+		{"m", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE MAIN`, true},
+		{"z", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := formatAlterColumnStorage("app", "docs", "body", tt.code)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("code=%q: got (%q, %v), want (%q, %v)", tt.code, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestFormatCreateView(t *testing.T) {
 	t.Parallel()
 	got := formatCreateView("app", "active_users", "SELECT id FROM users WHERE active", false)
@@ -177,6 +219,19 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	}
 	if got := commentTarget("procedure", "app", "my_proc(integer)", ""); got != `PROCEDURE "app"."my_proc"(integer)` {
 		t.Fatalf("procedure target = %q", got)
+	}
+	constraint := commentTarget("constraint", "app", "orders", "orders_total_check")
+	wantConstraint := `CONSTRAINT "orders_total_check" ON "app"."orders"`
+	if constraint != wantConstraint {
+		t.Fatalf("constraint target = %q, want %q", constraint, wantConstraint)
+	}
+	if got := commentTarget("domain_constraint", "app", "email", "email_check"); got != `CONSTRAINT "email_check" ON DOMAIN "app"."email"` {
+		t.Fatalf("domain constraint target = %q", got)
+	}
+	domain := commentTarget("domain", "app", "email", "")
+	wantDomain := `DOMAIN "app"."email"`
+	if domain != wantDomain {
+		t.Fatalf("domain target = %q, want %q", domain, wantDomain)
 	}
 	idx := commentTarget("index", "app", "users_email_idx", "")
 	wantIdx := `INDEX "app"."users_email_idx"`

@@ -135,6 +135,52 @@ func formatAlterTableAddConstraint(schema, table, constraintName, pgConstraintDe
 	)
 }
 
+// formatAlterTableReplicaIdentity emits ALTER TABLE ... REPLICA IDENTITY.
+func formatAlterTableReplicaIdentity(schema, table, ident, indexName string) (string, bool) {
+	qual := quoteQualifiedTable(schema, table)
+	switch ident {
+	case "f":
+		return fmt.Sprintf("ALTER TABLE %s REPLICA IDENTITY FULL", qual), true
+	case "n":
+		return fmt.Sprintf("ALTER TABLE %s REPLICA IDENTITY NOTHING", qual), true
+	case "i":
+		indexName = strings.TrimSpace(indexName)
+		if indexName == "" {
+			return "", false
+		}
+		return fmt.Sprintf(
+			"ALTER TABLE %s REPLICA IDENTITY USING INDEX %s",
+			qual,
+			quoteIdentifier(indexName),
+		), true
+	default:
+		return "", false
+	}
+}
+
+// formatAlterColumnStorage emits ALTER TABLE ... ALTER COLUMN ... SET STORAGE.
+func formatAlterColumnStorage(schema, table, column, storageCode string) (string, bool) {
+	var storage string
+	switch storageCode {
+	case "p":
+		storage = "PLAIN"
+	case "e":
+		storage = "EXTERNAL"
+	case "x":
+		storage = "EXTENDED"
+	case "m":
+		storage = "MAIN"
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(
+		"ALTER TABLE ONLY %s ALTER COLUMN %s SET STORAGE %s",
+		quoteQualifiedTable(schema, table),
+		quoteIdentifier(column),
+		storage,
+	), true
+}
+
 // formatCreateView emits CREATE [MATERIALIZED] VIEW.
 func formatCreateView(schema, name, definition string, materialized bool) string {
 	kind := "VIEW"
@@ -183,6 +229,12 @@ func commentTarget(kind, schema, object, column string) string {
 		return target + " " + quoteQualifiedType(schema, fn) + "(" + argList + ")"
 	case "index":
 		return "INDEX " + quoteQualifiedTable(schema, object)
+	case "constraint":
+		return "CONSTRAINT " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
+	case "domain_constraint":
+		return "CONSTRAINT " + quoteIdentifier(column) + " ON DOMAIN " + quoteQualifiedType(schema, object)
+	case "domain":
+		return "DOMAIN " + quoteQualifiedType(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}

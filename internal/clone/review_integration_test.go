@@ -144,6 +144,48 @@ func TestCatalogReplayNormalAggregatePG16(t *testing.T) {
 	}
 }
 
+func TestCatalogReplayReplicaStorageAndConstraintCommentsPG16(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	previous := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = previous })
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE DOMAIN app.label AS text CONSTRAINT label_check CHECK (length(VALUE) > 0);
+		COMMENT ON CONSTRAINT label_check ON DOMAIN app.label IS 'not empty';
+		CREATE TABLE app.items (id integer NOT NULL, label app.label);
+		CREATE UNIQUE INDEX items_id_idx ON app.items (id);
+		ALTER TABLE app.items REPLICA IDENTITY USING INDEX items_id_idx;
+		CREATE TABLE app.pk_items (id integer, CONSTRAINT custom_pk PRIMARY KEY (id));
+		COMMENT ON CONSTRAINT custom_pk ON app.pk_items IS 'renamed pk';
+		CREATE TABLE app.z_parent (id integer, body text) PARTITION BY RANGE (id);
+		CREATE TABLE app.a_leaf PARTITION OF app.z_parent FOR VALUES FROM (0) TO (10);
+		CREATE TABLE app.b_leaf PARTITION OF app.z_parent FOR VALUES FROM (10) TO (20);
+		ALTER TABLE ONLY app.z_parent ALTER COLUMN body SET STORAGE EXTERNAL;
+		ALTER TABLE ONLY app.b_leaf ALTER COLUMN body SET STORAGE MAIN;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var ident, index string
+	if err := tgt.QueryRowContext(ctx, `SELECT c.relreplident::text, i.relname FROM pg_class c JOIN pg_index x ON x.indrelid = c.oid AND x.indisreplident JOIN pg_class i ON i.oid = x.indexrelid WHERE c.oid = 'app.items'::regclass`).Scan(&ident, &index); err != nil || ident != "i" || index != "items_id_idx" {
+		t.Fatalf("replica identity = %q on %q, err = %v", ident, index, err)
+	}
+	for _, table := range []struct{ name, storage string }{{"a_leaf", "x"}, {"b_leaf", "m"}, {"z_parent", "e"}} {
+		var got string
+		if err := tgt.QueryRowContext(ctx, `SELECT a.attstorage::text FROM pg_attribute a WHERE a.attrelid = $1::regclass AND a.attname = 'body'`, "app."+table.name).Scan(&got); err != nil || got != table.storage {
+			t.Fatalf("%s storage = %q, err = %v, want %q", table.name, got, err, table.storage)
+		}
+	}
+	var comment string
+	if err := tgt.QueryRowContext(ctx, `SELECT obj_description(c.oid, 'pg_constraint') FROM pg_constraint c WHERE c.contypid = 'app.label'::regtype AND c.conname = 'label_check'`).Scan(&comment); err != nil || comment != "not empty" {
+		t.Fatalf("domain constraint comment = %q, err = %v", comment, err)
+	}
+}
+
 func TestCatalogReplayIdentityTypesAndPartitionIndexesPG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, _, _ := reviewDBPair(t)
