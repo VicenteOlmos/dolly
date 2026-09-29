@@ -419,6 +419,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		if err := rejectIncludedPartitionParents(tables, cfg.selection); err != nil {
 			return err
 		}
+		cfg.selection = expandExcludedPartitionParents(tables, cfg.selection)
 	}
 	tables = db.WithoutPartitionParents(tables)
 

@@ -395,6 +395,7 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 		if err := rejectIncludedPartitionParents(tables, cfg.selection); err != nil {
 			return nil, nil, err
 		}
+		cfg.selection = expandExcludedPartitionParents(tables, cfg.selection)
 	}
 	tables = db.WithoutPartitionParents(tables)
 	if cfg.selection != nil {
