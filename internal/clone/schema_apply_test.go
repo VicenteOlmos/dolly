@@ -20,6 +20,10 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
+	srcMock.ExpectQuery(`pg_collation`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "collname", "collprovider", "colliculocale", "collcollate", "collctype", "collisdeterministic",
+		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
@@ -368,6 +372,10 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
+	srcMock.ExpectQuery(`pg_collation`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "collname", "collprovider", "colliculocale", "collcollate", "collctype", "collisdeterministic",
+		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
@@ -441,6 +449,9 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`t\.typtype = 'e'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "label"}))
 	mock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "base", "notnull", "default"}).AddRow("app", "positive", "integer", false, ""))
 	mock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "domain", "name", "def"}).AddRow("app", "positive", "valid", "CHECK (app.valid_value(VALUE))"))
+	mock.ExpectQuery(`pg_collation`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "collname", "collprovider", "colliculocale", "collcollate", "collctype", "collisdeterministic",
+	}))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))

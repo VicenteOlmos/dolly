@@ -190,6 +190,65 @@ func applyDomainCheckConstraints(ctx context.Context, tgtDB execer, checks []dom
 	return nil
 }
 
+type collationRow struct {
+	schema          string
+	name            string
+	provider        string
+	icuLocale       string
+	libcCollate     string
+	libcCtype       string
+	isDeterministic bool
+}
+
+func loadCollations(ctx context.Context, q *sql.DB, schemas []string) ([]collationRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, coll.collname, coll.collprovider::text,
+		       COALESCE(coll.colliculocale, ''),
+		       COALESCE(coll.collcollate, ''),
+		       COALESCE(coll.collctype, ''),
+		       coll.collisdeterministic
+		FROM pg_collation coll
+		INNER JOIN pg_namespace n ON n.oid = coll.collnamespace
+		WHERE coll.collprovider <> 'd'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, coll.collname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list collations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []collationRow
+	for rows.Next() {
+		var row collationRow
+		if err := rows.Scan(
+			&row.schema, &row.name, &row.provider,
+			&row.icuLocale, &row.libcCollate, &row.libcCtype, &row.isDeterministic,
+		); err != nil {
+			return nil, fmt.Errorf("scan collation: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyCollations(ctx context.Context, tgtDB execer, rows []collationRow) error {
+	for _, row := range rows {
+		stmt, ok := formatCreateCollation(
+			row.schema, row.name, row.provider,
+			row.icuLocale, row.libcCollate, row.libcCtype, row.isDeterministic,
+		)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("create collation %s.%s: %w", row.schema, row.name, err)
+		}
+	}
+	return nil
+}
+
 func loadCompositeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]struct {
 	schema string
 	name   string

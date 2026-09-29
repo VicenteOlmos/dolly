@@ -125,6 +125,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	collations, err := loadCollations(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyCollations(ctx, tgtDB, collations); err != nil {
+		return err
+	}
+
 	composites, err := loadCompositeTypes(ctx, srcDB, schemas)
 	if err != nil {
 		return err

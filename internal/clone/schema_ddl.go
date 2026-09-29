@@ -158,6 +158,39 @@ func formatAlterTableReplicaIdentity(schema, table, ident, indexName string) (st
 	}
 }
 
+// formatCreateCollation emits CREATE COLLATION for libc or ICU user collations.
+func formatCreateCollation(schema, name, provider, icuLocale, libcCollate, libcCtype string, deterministic bool) (string, bool) {
+	qual := quoteQualifiedType(schema, name)
+	switch provider {
+	case "c":
+		if libcCollate == "" || libcCtype == "" {
+			return "", false
+		}
+		return fmt.Sprintf(
+			"CREATE COLLATION %s (PROVIDER = libc, LC_COLLATE = %s, LC_CTYPE = %s)",
+			qual,
+			quoteLiteral(libcCollate),
+			quoteLiteral(libcCtype),
+		), true
+	case "i":
+		if icuLocale == "" {
+			return "", false
+		}
+		det := "true"
+		if !deterministic {
+			det = "false"
+		}
+		return fmt.Sprintf(
+			"CREATE COLLATION %s (PROVIDER = icu, LOCALE = %s, DETERMINISTIC = %s)",
+			qual,
+			quoteLiteral(icuLocale),
+			det,
+		), true
+	default:
+		return "", false
+	}
+}
+
 // formatAlterColumnStorage emits ALTER TABLE ... ALTER COLUMN ... SET STORAGE.
 func formatAlterColumnStorage(schema, table, column, storageCode string) (string, bool) {
 	var storage string
