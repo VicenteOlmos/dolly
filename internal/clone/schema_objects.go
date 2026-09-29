@@ -528,6 +528,57 @@ func applyIndexes(ctx context.Context, tgtDB execer, indexes []indexRow) error {
 	return nil
 }
 
+type replicaIdentityRow struct {
+	schema    string
+	table     string
+	ident     string
+	indexName string
+}
+
+func loadReplicaIdentities(ctx context.Context, q *sql.DB, schemas []string) ([]replicaIdentityRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, c.relreplident::text,
+		       COALESCE(idx_class.relname, '')
+		FROM pg_class c
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		LEFT JOIN pg_index ix ON ix.indrelid = c.oid AND ix.indisreplident
+		LEFT JOIN pg_class idx_class ON idx_class.oid = ix.indexrelid
+		WHERE c.relkind IN ('r', 'p')
+		  AND NOT c.relispartition
+		  AND c.relreplident <> 'd'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list replica identities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []replicaIdentityRow
+	for rows.Next() {
+		var row replicaIdentityRow
+		if err := rows.Scan(&row.schema, &row.table, &row.ident, &row.indexName); err != nil {
+			return nil, fmt.Errorf("scan replica identity: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyReplicaIdentities(ctx context.Context, tgtDB execer, rows []replicaIdentityRow) error {
+	for _, row := range rows {
+		stmt, ok := formatAlterTableReplicaIdentity(row.schema, row.table, row.ident, row.indexName)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("replica identity on %s.%s: %w", row.schema, row.table, err)
+		}
+	}
+	return nil
+}
+
 func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`

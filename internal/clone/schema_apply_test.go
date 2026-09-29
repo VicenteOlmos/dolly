@@ -78,6 +78,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 }
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
@@ -377,6 +379,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	srcMock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
 
+	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
@@ -441,6 +445,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(sqlmock.NewRows([]string{"oid", "name", "def"}).AddRow(1, "app.valid_value(integer)", "CREATE FUNCTION app.valid_value(integer) RETURNS boolean LANGUAGE sql AS 'SELECT true'"))
 	mock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(sqlmock.NewRows([]string{"oid", "ref"}))
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
+	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}))
 	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}))
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
 	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true))

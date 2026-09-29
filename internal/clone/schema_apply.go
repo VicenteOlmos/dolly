@@ -230,6 +230,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		}
 	} // end if len(sorted) > 0
 
+	replicaIdentities, err := loadReplicaIdentities(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyReplicaIdentities(ctx, tgtDB, replicaIdentities); err != nil {
+		return err
+	}
+
 	indexes, err := loadIndexes(ctx, srcDB, schemas)
 	if err != nil {
 		return err

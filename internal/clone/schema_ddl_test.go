@@ -147,6 +147,27 @@ func TestFormatAlterTableAddConstraintForeignKey(t *testing.T) {
 	}
 }
 
+func TestFormatAlterTableReplicaIdentity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		ident, index string
+		want         string
+		ok           bool
+	}{
+		{"f", "", `ALTER TABLE "app"."events" REPLICA IDENTITY FULL`, true},
+		{"n", "", `ALTER TABLE "app"."events" REPLICA IDENTITY NOTHING`, true},
+		{"i", "events_pkey", `ALTER TABLE "app"."events" REPLICA IDENTITY USING INDEX "events_pkey"`, true},
+		{"i", "", "", false},
+		{"d", "", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := formatAlterTableReplicaIdentity("app", "events", tt.ident, tt.index)
+		if ok != tt.ok || got != tt.want {
+			t.Fatalf("ident=%q index=%q: got (%q, %v), want (%q, %v)", tt.ident, tt.index, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestFormatCreateView(t *testing.T) {
 	t.Parallel()
 	got := formatCreateView("app", "active_users", "SELECT id FROM users WHERE active", false)
