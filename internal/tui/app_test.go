@@ -186,8 +186,13 @@ func TestAppDumpOverviewDrillSection(t *testing.T) {
 
 	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
 	ds := app.screens[ScreenDump].(*dumpScreen)
+	if ds.nav.Section != dumpSectionMode {
+		t.Fatalf("section = %d, want mode after ↓ in overview", ds.nav.Section)
+	}
+	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
+	ds = app.screens[ScreenDump].(*dumpScreen)
 	if ds.nav.Section != dumpSectionPicker {
-		t.Fatalf("section = %d, want schema after ↓ in overview", ds.nav.Section)
+		t.Fatalf("section = %d, want schema after second ↓ in overview", ds.nav.Section)
 	}
 
 	app = drainUpdate(app, keyPress("", tea.KeyEnter, 0))

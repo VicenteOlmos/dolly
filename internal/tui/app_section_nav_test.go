@@ -101,7 +101,7 @@ func TestAppDumpOverviewSectionsCycle(t *testing.T) {
 		t.Fatalf("initial section = %d, want path", ds.nav.Section)
 	}
 
-	want := []int{dumpSectionPicker, dumpSectionHistory, dumpSectionLog, dumpSectionPath}
+	want := []int{dumpSectionMode, dumpSectionPicker, dumpSectionHistory, dumpSectionLog, dumpSectionPath}
 	for i, section := range want {
 		app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
 		ds = app.screens[ScreenDump].(*dumpScreen)

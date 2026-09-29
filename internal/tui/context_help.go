@@ -96,6 +96,8 @@ func (d *dumpScreen) contextHelp(width int) string {
 	switch d.nav.Section {
 	case dumpSectionPath:
 		return wrapText("Output base directory: each run creates {base}/{n}. Transaction on wraps the dump in a read-only transaction; turn off for large subset closures.", width)
+	case dumpSectionMode:
+		return wrapText("Dump mode for the next run: slow connection, require a safe key (refuse ctid resume), workers, percent, seed file, and chunk tables. The same settings exist as dolly dump flags.", width)
 	case dumpSectionPicker:
 		return wrapText("Schemas included in the dump. Space toggles a schema; a selects or clears all. At least one schema is required to start.", width)
 	case dumpSectionHistory:

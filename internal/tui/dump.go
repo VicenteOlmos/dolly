@@ -12,10 +12,20 @@ const dumpLogMaxLines = 50
 
 const (
 	dumpSectionPath = iota
+	dumpSectionMode
 	dumpSectionPicker
 	dumpSectionHistory
 	dumpSectionLog
 	dumpSectionCount
+)
+
+const (
+	modeFieldSlow = iota
+	modeFieldSafe
+	modeFieldWorkers
+	modeFieldPercent
+	modeFieldSeed
+	modeFieldChunk
 )
 
 type dumpScreen struct {
@@ -30,6 +40,10 @@ type dumpScreen struct {
 	hasSession       func() bool
 	nav              SectionNav
 	pathCursor       int
+	modeField        int
+	percentCursor    int
+	seedCursor       int
+	chunkCursor      int
 	restoreDir       string
 	restoreDirCursor int
 	restoreDirFocus  bool
@@ -128,6 +142,8 @@ func (d *dumpScreen) onEnterSection() {
 	switch d.nav.Section {
 	case dumpSectionPath:
 		d.pathCursor = len(d.draft.OutputDir)
+	case dumpSectionMode:
+		d.syncModeCursors()
 	case dumpSectionHistory:
 		if d.draft.History.Cursor >= len(d.draft.History.Entries) {
 			d.draft.History.Cursor = 0
@@ -212,6 +228,12 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
+	if d.sectionActive(dumpSectionMode) {
+		if d.handleModeKey(k) {
+			return nil
+		}
+	}
+
 	switch k.String() {
 	case "t":
 		if d.sectionActive(dumpSectionPath) {
@@ -222,6 +244,8 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 	switch k.Code {
 	case tea.KeyDown:
 		switch d.nav.Section {
+		case dumpSectionMode:
+			d.moveModeField(1)
 		case dumpSectionPicker:
 			d.draft.SchemaPicker.MoveCursor(1)
 		case dumpSectionHistory:
@@ -232,6 +256,8 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	case tea.KeyUp:
 		switch d.nav.Section {
+		case dumpSectionMode:
+			d.moveModeField(-1)
 		case dumpSectionPicker:
 			d.draft.SchemaPicker.MoveCursor(-1)
 		case dumpSectionHistory:
@@ -270,7 +296,122 @@ func (d *dumpScreen) requestRestore() tea.Cmd {
 }
 
 func (d *dumpScreen) onFieldCursorNavigation() bool {
-	return d.sectionActive(dumpSectionPath)
+	return d.sectionActive(dumpSectionPath) || d.modeTextFocused()
+}
+
+func (d *dumpScreen) modeTextFocused() bool {
+	if !d.sectionActive(dumpSectionMode) {
+		return false
+	}
+	switch d.modeField {
+	case modeFieldPercent, modeFieldSeed, modeFieldChunk:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *dumpScreen) syncModeCursors() {
+	d.percentCursor = len(d.draft.PercentText)
+	d.seedCursor = len(d.draft.SeedFile)
+	d.chunkCursor = len(d.draft.ChunkTables)
+}
+
+func (d *dumpScreen) moveModeField(delta int) {
+	d.modeField += delta
+	if d.modeField < modeFieldSlow {
+		d.modeField = modeFieldSlow
+	}
+	if d.modeField > modeFieldChunk {
+		d.modeField = modeFieldChunk
+	}
+	d.syncModeCursors()
+}
+
+func (d *dumpScreen) handleModeKey(k tea.Key) bool {
+	if d.modeTextFocused() {
+		switch d.modeField {
+		case modeFieldPercent:
+			return handleFieldCursorKey(k, &d.draft.PercentText, &d.percentCursor)
+		case modeFieldSeed:
+			return handleFieldCursorKey(k, &d.draft.SeedFile, &d.seedCursor)
+		case modeFieldChunk:
+			return handleFieldCursorKey(k, &d.draft.ChunkTables, &d.chunkCursor)
+		}
+	}
+	switch d.modeField {
+	case modeFieldSlow:
+		if k.String() == "s" || k.Code == tea.KeySpace {
+			d.draft.SlowConnection = !d.draft.SlowConnection
+			return true
+		}
+	case modeFieldSafe:
+		if k.String() == "k" || k.Code == tea.KeySpace {
+			d.draft.RequireSafeKey = !d.draft.RequireSafeKey
+			return true
+		}
+	case modeFieldWorkers:
+		switch k.Code {
+		case tea.KeyLeft:
+			d.adjustWorkers(-1)
+			return true
+		case tea.KeyRight:
+			d.adjustWorkers(1)
+			return true
+		}
+	}
+	return false
+}
+
+func (d *dumpScreen) adjustWorkers(delta int) {
+	maxWorkers := maxDumpWorkers()
+	if !d.draft.WorkersSet {
+		if delta > 0 {
+			d.draft.Workers = 1
+			d.draft.WorkersSet = true
+		}
+		return
+	}
+	next := d.draft.Workers + delta
+	if next < 1 {
+		d.draft.Workers = 0
+		d.draft.WorkersSet = false
+		return
+	}
+	if next > maxWorkers {
+		next = maxWorkers
+	}
+	d.draft.Workers = next
+}
+
+func (d *dumpScreen) modeSummary() string {
+	parts := []string{"full"}
+	if d.draft.SlowConnection {
+		parts = []string{"slow"}
+	}
+	if d.draft.RequireSafeKey {
+		parts = append(parts, "safe-key")
+	}
+	if strings.TrimSpace(d.draft.PercentText) != "" {
+		parts = append(parts, strings.TrimSpace(d.draft.PercentText)+"%")
+	}
+	if strings.TrimSpace(d.draft.SeedFile) != "" {
+		parts = append(parts, "seed")
+	}
+	if strings.TrimSpace(d.draft.ChunkTables) != "" {
+		parts = append(parts, "chunk")
+	}
+	if d.draft.WorkersSet {
+		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (d *dumpScreen) workersLabel() string {
+	if !d.draft.WorkersSet {
+		return "config"
+	}
+	return strconv.Itoa(d.draft.Workers)
 }
 
 func (d *dumpScreen) View(width, height int) string {
@@ -341,6 +482,7 @@ func (d *dumpScreen) dumpOverviewRows() []string {
 	}
 	return []string{
 		overviewSectionRow(d.nav, dumpSectionPath, "Base directory", pathSummary),
+		overviewSectionRow(d.nav, dumpSectionMode, "Mode", d.modeSummary()),
 		overviewSectionRow(d.nav, dumpSectionPicker, "Schemas", schemaSummary),
 		overviewSectionRow(d.nav, dumpSectionHistory, "History", historySummary),
 		overviewSectionRow(d.nav, dumpSectionLog, "Log", logSummary),
@@ -354,6 +496,8 @@ func (d *dumpScreen) dumpInsideSection(width, height int) []string {
 	switch d.nav.Section {
 	case dumpSectionPath:
 		return d.pathSectionLines()
+	case dumpSectionMode:
+		return d.modeSectionLines()
 	case dumpSectionPicker:
 		maxLines := schemaPickerMaxLines(height, headerUsed, 4)
 		return d.schemaSection(maxLines)
@@ -386,6 +530,51 @@ func (d *dumpScreen) pathSectionLines() []string {
 		StyleMuted.Render("←/→ edit · Esc back")
 	lines = append(lines, hint)
 	return lines
+}
+
+func (d *dumpScreen) modeSectionLines() []string {
+	onOff := func(v bool) string {
+		if v {
+			return "on"
+		}
+		return "off"
+	}
+	rows := []struct {
+		field int
+		label string
+		value string
+	}{
+		{modeFieldSlow, "Slow connection", onOff(d.draft.SlowConnection)},
+		{modeFieldSafe, "Require safe key", onOff(d.draft.RequireSafeKey)},
+		{modeFieldWorkers, "Workers", d.workersLabel()},
+		{modeFieldPercent, "Percent", d.modeFieldValue(d.draft.PercentText, d.percentCursor, modeFieldPercent)},
+		{modeFieldSeed, "Seed file", d.modeFieldValue(d.draft.SeedFile, d.seedCursor, modeFieldSeed)},
+		{modeFieldChunk, "Chunk tables", d.modeFieldValue(d.draft.ChunkTables, d.chunkCursor, modeFieldChunk)},
+	}
+	var lines []string
+	lines = append(lines, StyleAccent.Render("Mode"))
+	for _, row := range rows {
+		prefix := "  "
+		label := row.label
+		if d.modeField == row.field {
+			prefix = "> "
+			label = StyleAccent.Render(label)
+		}
+		val := row.value
+		if val == "" {
+			val = StyleMuted.Render("(empty)")
+		}
+		lines = append(lines, prefix+label+"  "+val)
+	}
+	lines = append(lines, StyleMuted.Render("↑/↓ field · s slow · k safe key · ←/→ workers · type percent, seed, chunk · Esc back"))
+	return lines
+}
+
+func (d *dumpScreen) modeFieldValue(value string, cursor, field int) string {
+	if d.modeField != field {
+		return value
+	}
+	return renderEditableField(value, cursor, false, true)
 }
 
 func (d *dumpScreen) historySection(maxLines int) []string {
