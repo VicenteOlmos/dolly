@@ -123,7 +123,7 @@ func TestCatalogReplayFunctionDefaultsIndexesAndModesPG16(t *testing.T) {
 	}
 }
 
-func TestCatalogReplayRejectsAggregatePG16(t *testing.T) {
+func TestCatalogReplayNormalAggregatePG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, _, _ := reviewDBPair(t)
 	if _, err := src.ExecContext(ctx, `CREATE SCHEMA app;
@@ -131,9 +131,15 @@ func TestCatalogReplayRejectsAggregatePG16(t *testing.T) {
 		CREATE AGGREGATE app.my_sum(integer) (SFUNC = app.sum_step, STYPE = integer, INITCOND = '0')`); err != nil {
 		t.Fatal(err)
 	}
-	err := applySchemas(ctx, src, tgt, []string{"app"}, false)
-	if err == nil || !strings.Contains(err.Error(), "aggregate app.my_sum(integer)") || !strings.Contains(err.Error(), "pg_dump") {
-		t.Fatalf("expected actionable aggregate error, got %v", err)
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	if err := tgt.QueryRowContext(ctx, `SELECT app.my_sum(v) FROM (VALUES (1), (2)) AS s(v)`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 3 {
+		t.Fatalf("app.my_sum = %d, want 3", got)
 	}
 }
 
