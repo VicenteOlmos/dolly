@@ -51,6 +51,20 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 	}
 }
 
+func TestDumpModeSanitizeToggle(t *testing.T) {
+	app := NewApp()
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionMode)
+	ds.modeField = modeFieldSanitize
+	ds.Update(keyPress("", tea.KeySpace, 0))
+	if !app.dump.SanitizeSet || !app.dump.Sanitize {
+		t.Fatalf("Sanitize = %v set=%v", app.dump.Sanitize, app.dump.SanitizeSet)
+	}
+	if !strings.Contains(ds.modeSummary(), "sanitize") {
+		t.Fatalf("mode summary = %q", ds.modeSummary())
+	}
+}
+
 func TestDumpModeEditsChunkTableFile(t *testing.T) {
 	app := NewApp()
 	ds := app.screens[ScreenDump].(*dumpScreen)

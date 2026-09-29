@@ -128,6 +128,8 @@ type DumpDraft struct {
 	NoTransaction       bool
 	SlowConnection      bool
 	RequireSafeKey      bool
+	Sanitize            bool
+	SanitizeSet         bool
 	PercentText         string
 	SeedFile            string
 	ChunkTables         string

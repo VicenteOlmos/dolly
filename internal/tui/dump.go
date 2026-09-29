@@ -31,6 +31,7 @@ const (
 const (
 	modeFieldSlow = iota
 	modeFieldSafe
+	modeFieldSanitize
 	modeFieldWorkers
 	modeFieldPercent
 	modeFieldSeed
@@ -466,6 +467,16 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			d.draft.RequireSafeKey = !d.draft.RequireSafeKey
 			return true
 		}
+	case modeFieldSanitize:
+		if k.Code == tea.KeySpace {
+			if !d.draft.SanitizeSet {
+				d.draft.Sanitize = !d.draft.Sanitize
+				d.draft.SanitizeSet = true
+			} else {
+				d.draft.Sanitize = !d.draft.Sanitize
+			}
+			return true
+		}
 	case modeFieldWorkers:
 		switch k.Code {
 		case tea.KeyLeft:
@@ -508,6 +519,9 @@ func (d *dumpScreen) modeSummary() string {
 	if d.draft.RequireSafeKey {
 		parts = append(parts, "safe-key")
 	}
+	if d.draft.SanitizeSet && d.draft.Sanitize {
+		parts = append(parts, "sanitize")
+	}
 	if strings.TrimSpace(d.draft.PercentText) != "" {
 		parts = append(parts, strings.TrimSpace(d.draft.PercentText)+"%")
 	}
@@ -543,6 +557,16 @@ func (d *dumpScreen) workersLabel() string {
 		return "config"
 	}
 	return strconv.Itoa(d.draft.Workers)
+}
+
+func (d *dumpScreen) sanitizeLabel() string {
+	if !d.draft.SanitizeSet {
+		return "config"
+	}
+	if d.draft.Sanitize {
+		return "on"
+	}
+	return "off"
 }
 
 func (d *dumpScreen) View(width, height int) string {
@@ -677,6 +701,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 	}{
 		{modeFieldSlow, "Slow connection", onOff(d.draft.SlowConnection)},
 		{modeFieldSafe, "Require safe key", onOff(d.draft.RequireSafeKey)},
+		{modeFieldSanitize, "Sanitize", d.sanitizeLabel()},
 		{modeFieldWorkers, "Workers", d.workersLabel()},
 		{modeFieldPercent, "Percent", d.modeFieldValue(d.draft.PercentText, d.percentCursor, modeFieldPercent)},
 		{modeFieldSeed, "Seed file", d.modeFieldValue(d.draft.SeedFile, d.seedCursor, modeFieldSeed)},
