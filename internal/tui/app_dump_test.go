@@ -1147,3 +1147,27 @@ func TestRestoreNeedsConfirmParallelWorkers(t *testing.T) {
 		t.Fatalf("parallel confirm = %v %q", needs, msg)
 	}
 }
+
+func TestRestoreHistoryWorkersOverrideUsesConfigWhenEmpty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.Workers = 3
+	history := restoreHistoryOverridesFromDraft(DumpDraft{})
+	workers, err := effectiveRestoreWorkers(cfg, history)
+	if err != nil || workers != 3 {
+		t.Fatalf("workers = %d err=%v, want 3", workers, err)
+	}
+}
+
+func TestRestoreHistoryWorkersOverrideText(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.Workers = 1
+	history := restoreHistoryOverridesFromDraft(DumpDraft{RestoreWorkersText: "4"})
+	o, err := restoreHistoryUserOverrides(history)
+	if err != nil || !o.WorkersSet || o.Workers != 4 {
+		t.Fatalf("override = %+v err=%v", o, err)
+	}
+	needs, msg := (&App{cfg: cfg, dump: DumpDraft{RestoreWorkersText: "4"}}).restoreNeedsConfirm(false)
+	if !needs || !strings.Contains(msg, "non-atomic parallel restore") {
+		t.Fatalf("confirm = %v %q", needs, msg)
+	}
+}

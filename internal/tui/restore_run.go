@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -40,9 +42,55 @@ type productionRestoreRunner struct{}
 
 // restoreHistoryOverrides carries optional TUI history restore settings for one run.
 type restoreHistoryOverrides struct {
-	OnConflict string
-	Replace    bool
-	ReplaceSet bool
+	OnConflict  string
+	Replace     bool
+	ReplaceSet  bool
+	WorkersText string
+}
+
+func restoreHistoryUserOverrides(history restoreHistoryOverrides) (runopts.RestoreHistoryUserOverrides, error) {
+	o := runopts.RestoreHistoryUserOverrides{
+		OnConflict: history.OnConflict,
+		Replace:    history.Replace,
+		ReplaceSet: history.ReplaceSet,
+	}
+	raw := strings.TrimSpace(history.WorkersText)
+	if raw == "" {
+		return o, nil
+	}
+	workers, err := strconv.Atoi(raw)
+	if err != nil {
+		return runopts.RestoreHistoryUserOverrides{}, fmt.Errorf("restore workers must be an integer between 1 and %d", restore.MaxParallelRestoreWorkers())
+	}
+	if err := runopts.ValidateRestoreWorkers(workers); err != nil {
+		return runopts.RestoreHistoryUserOverrides{}, err
+	}
+	o.Workers = workers
+	o.WorkersSet = true
+	return o, nil
+}
+
+func effectiveRestoreWorkers(cfg *config.Config, history restoreHistoryOverrides) (int, error) {
+	o, err := restoreHistoryUserOverrides(history)
+	if err != nil {
+		return 0, err
+	}
+	if o.WorkersSet {
+		return o.Workers, nil
+	}
+	if cfg == nil {
+		return 1, nil
+	}
+	return runopts.ResolveRestoreWorkers(runopts.RestoreOverrides{}, cfg), nil
+}
+
+func restoreHistoryOverridesFromDraft(d DumpDraft) restoreHistoryOverrides {
+	return restoreHistoryOverrides{
+		OnConflict:  d.RestoreOnConflict,
+		Replace:     d.RestoreReplace,
+		ReplaceSet:  d.RestoreReplaceSet,
+		WorkersText: d.RestoreWorkersText,
+	}
 }
 
 func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, onProgress func(restore.ProgressEvent)) error {
@@ -54,11 +102,11 @@ func runProductionRestoreHistory(ctx context.Context, db *sql.DB, inputDir strin
 	if err != nil {
 		return err
 	}
-	opts, err := runopts.RestoreHistoryOptionsWithOverrides(cfg, inputDir, schemas, trustedSchemaSQL, dsn, runopts.RestoreHistoryUserOverrides{
-		OnConflict: history.OnConflict,
-		Replace:    history.Replace,
-		ReplaceSet: history.ReplaceSet,
-	})
+	userOverrides, err := restoreHistoryUserOverrides(history)
+	if err != nil {
+		return err
+	}
+	opts, err := runopts.RestoreHistoryOptionsWithOverrides(cfg, inputDir, schemas, trustedSchemaSQL, dsn, userOverrides)
 	if err != nil {
 		return err
 	}

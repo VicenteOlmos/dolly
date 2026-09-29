@@ -555,7 +555,11 @@ func (a *App) restoreNeedsConfirm(trustedSchemaSQL bool) (bool, string) {
 	if onConflict == "upsert" {
 		parts = append(parts, "overwrite conflicting rows (upsert)")
 	}
-	if a.cfg.Restore.Workers > 1 {
+	workers, err := effectiveRestoreWorkers(a.cfg, restoreHistoryOverridesFromDraft(a.dump))
+	if err != nil {
+		return false, ""
+	}
+	if workers > 1 {
 		parts = append(parts, "run a non-atomic parallel restore (commits per table; a failure can leave a partial database)")
 	}
 	if len(parts) == 0 {
@@ -602,15 +606,15 @@ func (a *App) handleRestoreRequested(msg restoreRequestedMsg) (tea.Model, tea.Cm
 	if len(schemas) == 0 {
 		schemas = a.dump.SchemaPicker.SelectedNames()
 	}
+	history := restoreHistoryOverridesFromDraft(a.dump)
+	if _, err := restoreHistoryUserOverrides(history); err != nil {
+		a.statusMsg = truncateStatus(StyleWarning.Render(err.Error()), a.width)
+		return a, nil
+	}
 	a.restoreRunning = true
 	a.restoreProgress = nil
 	a.statusMsg = "Restoring…"
 	appendDumpLog(&a.dumpLog, "restore started: "+msg.inputDir)
-	history := restoreHistoryOverrides{
-		OnConflict: a.dump.RestoreOnConflict,
-		Replace:    a.dump.RestoreReplace,
-		ReplaceSet: a.dump.RestoreReplaceSet,
-	}
 	cmd, ch, cancel := startRestoreCmd(runner, context.Background(), a.db, msg.inputDir, schemas, msg.trustedSchemaSQL, a.conn.DSN(), history)
 	a.restoreCh = ch
 	a.restoreCancel = cancel

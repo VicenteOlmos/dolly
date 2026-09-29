@@ -125,3 +125,30 @@ func TestRestoreHistoryOptionsWithOverrides(t *testing.T) {
 		t.Fatal("expected replace with skip conflict to fail")
 	}
 }
+
+func TestRestoreHistoryOptionsWorkersOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Restore.Workers = 1
+
+	opts, err := RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		Workers:    4,
+		WorkersSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restore.InspectWorkers(opts...) != 4 {
+		t.Fatalf("workers = %d, want 4", restore.InspectWorkers(opts...))
+	}
+
+	_, err = RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		Workers:    4,
+		WorkersSet: true,
+		Replace:    true,
+		ReplaceSet: true,
+	})
+	if err == nil {
+		t.Fatal("expected parallel restore with replace to fail")
+	}
+}

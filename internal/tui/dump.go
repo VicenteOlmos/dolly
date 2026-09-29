@@ -15,6 +15,7 @@ const (
 	historyFocusPath
 	historyFocusConflict
 	historyFocusReplace
+	historyFocusWorkers
 	historyFocusTrust
 	historyFocusCount
 )
@@ -82,6 +83,8 @@ type dumpScreen struct {
 	restoreDir             string
 	restoreDirCursor       int
 	restoreDirFocus        bool
+	restoreWorkersFocus    bool
+	restoreWorkersCursor   int
 	historyFocus           int
 	logTailOffset          int
 	fileListOffset         int
@@ -208,8 +211,9 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	if d.nav.InInside() && k.Code == tea.KeyEscape {
-		if d.nav.Section == dumpSectionHistory && d.restoreDirFocus {
+		if d.nav.Section == dumpSectionHistory && (d.restoreDirFocus || d.restoreWorkersFocus) {
 			d.restoreDirFocus = false
+			d.restoreWorkersFocus = false
 			return nil
 		}
 		d.nav.Exit()
@@ -218,13 +222,16 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 
 	if d.nav.InInside() && d.nav.Section == dumpSectionHistory {
 		if k.Code == tea.KeyTab {
-			if d.restoreDirFocus {
-				d.restoreDirFocus = false
-			}
+			d.restoreDirFocus = false
+			d.restoreWorkersFocus = false
 			d.historyFocus = (d.historyFocus + 1) % historyFocusCount
 			if d.historyFocus == historyFocusPath {
 				d.restoreDirFocus = true
 				d.restoreDirCursor = len(d.restoreDir)
+			}
+			if d.historyFocus == historyFocusWorkers {
+				d.restoreWorkersFocus = true
+				d.restoreWorkersCursor = len(d.draft.RestoreWorkersText)
 			}
 			return nil
 		}
@@ -240,7 +247,14 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 			d.restoreDirFocus = false
 			return nil
 		}
-		if k.Code == tea.KeySpace && !d.restoreDirFocus {
+		if d.restoreWorkersFocus && handleFieldCursorKey(k, &d.draft.RestoreWorkersText, &d.restoreWorkersCursor) {
+			return nil
+		}
+		if d.restoreWorkersFocus && k.Code == tea.KeyEscape {
+			d.restoreWorkersFocus = false
+			return nil
+		}
+		if k.Code == tea.KeySpace && !d.restoreDirFocus && !d.restoreWorkersFocus {
 			switch d.historyFocus {
 			case historyFocusConflict:
 				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
@@ -256,7 +270,7 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 		}
-		if k.Code == tea.KeyEnter && !d.restoreDirFocus {
+		if k.Code == tea.KeyEnter && !d.restoreDirFocus && !d.restoreWorkersFocus {
 			if d.historyFocus == historyFocusConflict {
 				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
 				return nil
@@ -766,7 +780,7 @@ func (d *dumpScreen) toggleRestoreReplace() {
 }
 
 func (d *dumpScreen) moveHistoryFocus(delta int) {
-	if d.restoreDirFocus {
+	if d.restoreDirFocus || d.restoreWorkersFocus {
 		return
 	}
 	d.historyFocus += delta
@@ -795,6 +809,13 @@ func (d *dumpScreen) restoreReplaceLabel() string {
 	return "off"
 }
 
+func (d *dumpScreen) restoreWorkersLabel() string {
+	if strings.TrimSpace(d.draft.RestoreWorkersText) == "" {
+		return "config"
+	}
+	return d.draft.RestoreWorkersText
+}
+
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
@@ -810,12 +831,17 @@ func (d *dumpScreen) historySection(maxLines int) []string {
 	lines = append(lines, d.historyControlLine(historyFocusConflict, "On conflict:", conflictVal))
 	replaceVal := d.restoreReplaceLabel()
 	lines = append(lines, d.historyControlLine(historyFocusReplace, "Replace:", replaceVal))
+	workersVal := d.restoreWorkersLabel()
+	if d.historyFocus == historyFocusWorkers && d.restoreWorkersFocus {
+		workersVal = renderEditableField(d.draft.RestoreWorkersText, d.restoreWorkersCursor, false, true)
+	}
+	lines = append(lines, d.historyControlLine(historyFocusWorkers, "Workers:", workersVal))
 	trusted := "[ ]"
 	if d.trustedSchemaSQL {
 		trusted = "[x]"
 	}
 	lines = append(lines, d.historyControlLine(historyFocusTrust, "", trusted+" Trust schema.sql for this restore"))
-	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-5)...)
+	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-6)...)
 	return lines
 }
 
@@ -825,6 +851,9 @@ func (d *dumpScreen) historyControlLine(focus int, label, value string) string {
 		prefix = "> "
 	}
 	if focus == historyFocusPath && d.restoreDirFocus {
+		prefix = "> "
+	}
+	if focus == historyFocusWorkers && d.restoreWorkersFocus {
 		prefix = "> "
 	}
 	line := prefix

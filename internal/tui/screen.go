@@ -152,6 +152,7 @@ type DumpDraft struct {
 	RestoreOnConflict   string
 	RestoreReplace      bool
 	RestoreReplaceSet   bool
+	RestoreWorkersText  string
 }
 
 // DumpHistoryEntry is one row in the dump history list.
