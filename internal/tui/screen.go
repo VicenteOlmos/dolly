@@ -140,6 +140,9 @@ type DumpDraft struct {
 	ChunkSizeText       string
 	RetryMaxText        string
 	RetryBaseText       string
+	IncludeTableFile    string
+	ExcludeTableFile    string
+	ChunkTableFile      string
 	Workers             int
 	WorkersSet          bool
 	SchemaPicker        SchemaPickerState
@@ -208,6 +211,9 @@ type CloneDraft struct {
 	Replace           bool
 	ReplaceSet        bool
 	OnConflict        string
+	TargetDir         string
+	SkipCreate        bool
+	SkipCreateSet     bool
 }
 
 // TargetSource selects where the clone target DSN comes from.

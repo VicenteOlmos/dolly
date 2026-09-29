@@ -7,6 +7,31 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
+func TestCloneTargetDirectoryAcceptsTargetShortcutCharacter(t *testing.T) {
+	draft := &CloneDraft{TargetSource: TargetSourceCurrent}
+	status := CloneStatusIdle
+	cs := &cloneScreen{draft: draft, cloneStatus: &status, nav: NewSectionNav(cloneSectionCount), getConnDSN: func() string { return "postgres://example/db" }}
+	cs.nav.EnterInside(cloneSectionForm)
+	cs.formField = cloneFieldTargetDir
+	for _, r := range "/tmp/target" {
+		cs.Update(keyPress(string(r), r, 0))
+	}
+	if draft.TargetDir != "/tmp/target" || draft.TargetSource != TargetSourceCurrent {
+		t.Fatalf("TargetDir = %q, TargetSource = %v", draft.TargetDir, draft.TargetSource)
+	}
+	cs.formField = cloneFieldStrategy
+	cs.Update(keyPress("t", 't', 0))
+	if draft.TargetSource != TargetSourceSaved {
+		t.Fatalf("non-editable field TargetSource = %v, want saved", draft.TargetSource)
+	}
+	cs.formField = cloneFieldTarget
+	draft.TargetSource = TargetSourceManual
+	cs.Update(keyPress("t", 't', 0))
+	if draft.TargetDSN != "t" || draft.TargetSource != TargetSourceManual {
+		t.Fatalf("manual target = %q, source = %v", draft.TargetDSN, draft.TargetSource)
+	}
+}
+
 func TestResolveCloneDraftTargetDSNCurrentRefreshesStaleDSN(t *testing.T) {
 	t.Parallel()
 	current := "postgres://u:secret@fresh-host/db_stub"
