@@ -149,6 +149,28 @@ func TestBuildInsertAlwaysIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildInsertUpsertSkipsGeneratedColumn(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "orders",
+		Columns: []db.Column{
+			{Name: "id", DataType: "integer", PrimaryKey: true},
+			{Name: "total", DataType: "integer", Generated: true},
+			{Name: "note", DataType: "text"},
+		},
+	}
+	q, _, err := buildInsert(table, ConflictUpsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, `"total" = EXCLUDED."total"`) {
+		t.Fatalf("generated column must not appear in upsert SET: %s", q)
+	}
+	if !strings.Contains(q, `"note" = EXCLUDED."note"`) {
+		t.Fatalf("writable column must update: %s", q)
+	}
+}
+
 func TestParseConflictPolicy(t *testing.T) {
 	p, err := ParseConflictPolicy("skip")
 	if err != nil || p != ConflictSkip {

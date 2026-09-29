@@ -113,7 +113,7 @@ func finishInsert(base string, table db.Table, policy ConflictPolicy, pkCols []s
 			if _, isPK := pkSet[c.Name]; isPK {
 				continue
 			}
-			if c.Identity == "ALWAYS" {
+			if c.Identity == "ALWAYS" || c.Generated {
 				continue
 			}
 			ident := pgx.Identifier{c.Name}.Sanitize()
