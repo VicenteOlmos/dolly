@@ -688,6 +688,55 @@ func applyColumnStorageOverrides(ctx context.Context, tgtDB execer, rows []colum
 	return nil
 }
 
+type columnCompressionRow struct {
+	schema string
+	table  string
+	column string
+	codec  string
+}
+
+func loadColumnCompressionOverrides(ctx context.Context, q *sql.DB, schemas []string) ([]columnCompressionRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, a.attname, a.attcompression::text
+		FROM pg_attribute a
+		INNER JOIN pg_class c ON c.oid = a.attrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE a.attnum > 0 AND NOT a.attisdropped
+		  AND c.relkind IN ('r', 'p')
+		  AND a.attcompression IN ('l', 'p')
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, a.attnum`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list column compression overrides: %w", err)
+	}
+	defer rows.Close()
+
+	var out []columnCompressionRow
+	for rows.Next() {
+		var row columnCompressionRow
+		if err := rows.Scan(&row.schema, &row.table, &row.column, &row.codec); err != nil {
+			return nil, fmt.Errorf("scan column compression: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyColumnCompressionOverrides(ctx context.Context, tgtDB execer, rows []columnCompressionRow) error {
+	for _, row := range rows {
+		stmt, ok := formatAlterColumnCompression(row.schema, row.table, row.column, row.codec)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("column compression on %s.%s.%s: %w", row.schema, row.table, row.column, err)
+		}
+	}
+	return nil
+}
+
 func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`

@@ -185,6 +185,20 @@ func TestFormatCreateCollation(t *testing.T) {
 	}
 }
 
+func TestFormatAlterColumnCompression(t *testing.T) {
+	t.Parallel()
+	got, ok := formatAlterColumnCompression("app", "events", "payload", "l")
+	want := `ALTER TABLE ONLY "app"."events" ALTER COLUMN "payload" SET COMPRESSION lz4`
+	if !ok || got != want {
+		t.Fatalf("lz4: got (%q, %v), want (%q, true)", got, ok, want)
+	}
+	got, ok = formatAlterColumnCompression("app", "events", "payload", "p")
+	want = `ALTER TABLE ONLY "app"."events" ALTER COLUMN "payload" SET COMPRESSION pglz`
+	if !ok || got != want {
+		t.Fatalf("pglz: got (%q, %v), want (%q, true)", got, ok, want)
+	}
+}
+
 func TestFormatAlterColumnStorage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

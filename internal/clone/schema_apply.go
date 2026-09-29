@@ -251,6 +251,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	columnCompression, err := loadColumnCompressionOverrides(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyColumnCompressionOverrides(ctx, tgtDB, columnCompression); err != nil {
+		return err
+	}
+
 	indexes, err := loadIndexes(ctx, srcDB, schemas)
 	if err != nil {
 		return err

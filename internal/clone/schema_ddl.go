@@ -191,6 +191,25 @@ func formatCreateCollation(schema, name, provider, icuLocale, libcCollate, libcC
 	}
 }
 
+// formatAlterColumnCompression emits ALTER TABLE ... SET COMPRESSION.
+func formatAlterColumnCompression(schema, table, column, code string) (string, bool) {
+	var compression string
+	switch code {
+	case "l":
+		compression = "lz4"
+	case "p":
+		compression = "pglz"
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(
+		"ALTER TABLE ONLY %s ALTER COLUMN %s SET COMPRESSION %s",
+		quoteQualifiedTable(schema, table),
+		quoteIdentifier(column),
+		compression,
+	), true
+}
+
 // formatAlterColumnStorage emits ALTER TABLE ... ALTER COLUMN ... SET STORAGE.
 func formatAlterColumnStorage(schema, table, column, storageCode string) (string, bool) {
 	var storage string
