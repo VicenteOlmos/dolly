@@ -421,7 +421,10 @@ func annotateLoadedTables(ctx context.Context, q queryer, tables []Table, schema
 	if err := annotatePartitions(ctx, q, tables, schemas); err != nil {
 		return err
 	}
-	return annotateGeneratedColumns(ctx, q, tables, schemas)
+	if err := annotateGeneratedColumns(ctx, q, tables, schemas); err != nil {
+		return err
+	}
+	return annotateIdentityColumns(ctx, q, tables, schemas)
 }
 
 func annotatePartitions(ctx context.Context, q queryer, tables []Table, schemas []string) error {
@@ -517,6 +520,48 @@ func annotateGeneratedColumns(ctx context.Context, q queryer, tables []Table, sc
 			col := &tables[i].Columns[j]
 			if _, ok := generated[colKey{tables[i].Schema, tables[i].Name, col.Name}]; ok {
 				col.Generated = true
+			}
+		}
+	}
+	return nil
+}
+
+func annotateIdentityColumns(ctx context.Context, q queryer, tables []Table, schemas []string) error {
+	placeholders := make([]string, len(schemas))
+	args := make([]any, len(schemas))
+	for i, schema := range schemas {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = schema
+	}
+	query := fmt.Sprintf(`
+		SELECT table_schema, table_name, column_name, identity_generation
+		FROM information_schema.columns
+		WHERE is_identity = 'YES'
+		  AND table_schema IN (%s)
+	`, strings.Join(placeholders, ", "))
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("annotate identity columns: %w", err)
+	}
+	defer rows.Close()
+
+	type colKey struct{ schema, table, column string }
+	identity := map[colKey]string{}
+	for rows.Next() {
+		var schema, table, column, generation string
+		if err := rows.Scan(&schema, &table, &column, &generation); err != nil {
+			return fmt.Errorf("annotate identity columns: %w", err)
+		}
+		identity[colKey{schema, table, column}] = generation
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("annotate identity columns: %w", err)
+	}
+	for i := range tables {
+		for j := range tables[i].Columns {
+			col := &tables[i].Columns[j]
+			if gen, ok := identity[colKey{tables[i].Schema, tables[i].Name, col.Name}]; ok {
+				col.Identity = gen
 			}
 		}
 	}
