@@ -45,6 +45,7 @@ const (
 	modeFieldRetryMax
 	modeFieldRetryBase
 	modeFieldIncludeTableFile
+	modeFieldExcludeTableFile
 	modeFieldCount
 )
 
@@ -74,6 +75,7 @@ type dumpScreen struct {
 	retryMaxCursor         int
 	retryBaseCursor        int
 	includeTableFileCursor int
+	excludeTableFileCursor int
 	restoreDir             string
 	restoreDirCursor       int
 	restoreDirFocus        bool
@@ -380,7 +382,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
 		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase,
-		modeFieldIncludeTableFile:
+		modeFieldIncludeTableFile, modeFieldExcludeTableFile:
 		return true
 	default:
 		return false
@@ -401,6 +403,7 @@ func (d *dumpScreen) syncModeCursors() {
 	d.retryMaxCursor = len(d.draft.RetryMaxText)
 	d.retryBaseCursor = len(d.draft.RetryBaseText)
 	d.includeTableFileCursor = len(d.draft.IncludeTableFile)
+	d.excludeTableFileCursor = len(d.draft.ExcludeTableFile)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -443,6 +446,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.RetryBaseText, &d.retryBaseCursor)
 		case modeFieldIncludeTableFile:
 			return handleFieldCursorKey(k, &d.draft.IncludeTableFile, &d.includeTableFileCursor)
+		case modeFieldExcludeTableFile:
+			return handleFieldCursorKey(k, &d.draft.ExcludeTableFile, &d.excludeTableFileCursor)
 		}
 	}
 	switch d.modeField {
@@ -515,6 +520,9 @@ func (d *dumpScreen) modeSummary() string {
 	}
 	if strings.TrimSpace(d.draft.IncludeTableFile) != "" {
 		parts = append(parts, "include-file")
+	}
+	if strings.TrimSpace(d.draft.ExcludeTableFile) != "" {
+		parts = append(parts, "exclude-file")
 	}
 	if d.draft.WorkersSet {
 		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
@@ -675,6 +683,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldRetryMax, "Retry max", d.modeFieldValue(d.draft.RetryMaxText, d.retryMaxCursor, modeFieldRetryMax)},
 		{modeFieldRetryBase, "Retry base", d.modeFieldValue(d.draft.RetryBaseText, d.retryBaseCursor, modeFieldRetryBase)},
 		{modeFieldIncludeTableFile, "Include table file", d.modeFieldValue(d.draft.IncludeTableFile, d.includeTableFileCursor, modeFieldIncludeTableFile)},
+		{modeFieldExcludeTableFile, "Exclude table file", d.modeFieldValue(d.draft.ExcludeTableFile, d.excludeTableFileCursor, modeFieldExcludeTableFile)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))

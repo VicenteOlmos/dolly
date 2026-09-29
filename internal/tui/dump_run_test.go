@@ -220,3 +220,13 @@ func TestDumpOverridesFromDraftIncludeTableFile(t *testing.T) {
 		t.Fatalf("whitespace-only IncludeTableFiles = %v, want none", empty.IncludeTableFiles)
 	}
 }
+
+func TestDumpOverridesFromDraftExcludeTableFile(t *testing.T) {
+	overrides, err := dumpOverridesFromDraft(DumpDraft{ExcludeTableFile: "tables/exclude.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overrides.ExcludeTableFiles) != 1 || overrides.ExcludeTableFiles[0] != "tables/exclude.txt" {
+		t.Fatalf("ExcludeTableFiles = %v", overrides.ExcludeTableFiles)
+	}
+}

@@ -137,6 +137,10 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if strings.TrimSpace(draft.IncludeTableFile) != "" {
 		includeTableFiles = splitChunkTables(draft.IncludeTableFile)
 	}
+	var excludeTableFiles []string
+	if strings.TrimSpace(draft.ExcludeTableFile) != "" {
+		excludeTableFiles = splitChunkTables(draft.ExcludeTableFile)
+	}
 	return runopts.DumpOverrides{
 		NoTransaction:     draft.NoTransaction,
 		SlowConnection:    draft.SlowConnection,
@@ -151,6 +155,7 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		IncludeTables:     splitChunkTables(draft.IncludeTables),
 		ExcludeTables:     splitChunkTables(draft.ExcludeTables),
 		IncludeTableFiles: includeTableFiles,
+		ExcludeTableFiles: excludeTableFiles,
 		ChunkSize:         chunkSize,
 		RetryMax:          retryMax,
 		RetryMaxSet:       strings.TrimSpace(draft.RetryMaxText) != "",

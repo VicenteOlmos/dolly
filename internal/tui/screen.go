@@ -141,6 +141,7 @@ type DumpDraft struct {
 	RetryMaxText        string
 	RetryBaseText       string
 	IncludeTableFile    string
+	ExcludeTableFile    string
 	Workers             int
 	WorkersSet          bool
 	SchemaPicker        SchemaPickerState
