@@ -74,10 +74,11 @@ func WithSchemas(schemas []string) Option {
 }
 
 // WithDSN provides a PostgreSQL connection string for the CopyFrom fast path.
-// When set and the conflict policy allows it (error-conflict or replace), COPY is
-// used instead of INSERT-per-row for a ~10-100x throughput improvement.
-// COPY runs on a separate pgx.Conn and does not participate in the sql.DB
-// transaction. Without this option, INSERT-per-row is always used.
+// When set and the conflict policy is error, COPY replaces INSERT-per-row.
+// A transactional restore checks out one connection and runs COPY on that
+// session, so truncates and sequence updates stay in the same transaction.
+// WithoutTransaction COPY uses a separate pgx connection per table.
+// Skip and upsert stay on INSERT. Without this option, INSERT-per-row is used.
 func WithDSN(dsn string) Option {
 	return func(c *config) {
 		c.dsn = dsn
@@ -235,9 +236,20 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 
 	var q execQuerier = dbConn
 	var tx *sql.Tx
+	var txConn *sql.Conn
 
+	transactionalCopy := !cfg.withoutTransaction && canUseCopy(insertPolicy) && cfg.dsn != ""
 	if !cfg.withoutTransaction {
-		tx, err = dbConn.BeginTx(ctx, nil)
+		if transactionalCopy {
+			txConn, err = dbConn.Conn(ctx)
+			if err != nil {
+				return fmt.Errorf("checkout restore connection: %w", err)
+			}
+			defer txConn.Close()
+			tx, err = txConn.BeginTx(ctx, nil)
+		} else {
+			tx, err = dbConn.BeginTx(ctx, nil)
+		}
 		if err != nil {
 			return fmt.Errorf("begin transaction: %w", err)
 		}
@@ -264,11 +276,11 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 			Elapsed: time.Since(startedAt),
 		})
 
-		// ponytail: COPY fast path when withoutTransaction and policy allows it.
-		// COPY on a fresh pgx.Conn is atomic per-table at the PG level but does
-		// not participate in the sql.DB transaction. For WITH-transaction mode,
-		// fall back to INSERT-per-row so truncation and inserts stay in the tx.
-		if cfg.withoutTransaction && canUseCopy(insertPolicy) && cfg.dsn != "" {
+		if transactionalCopy {
+			if err := loadTableCopyInTx(ctx, txConn, table, dataPaths[i]); err != nil {
+				return err
+			}
+		} else if cfg.withoutTransaction && canUseCopy(insertPolicy) && cfg.dsn != "" {
 			if err := loadTableCopy(ctx, cfg.dsn, table, dataPaths[i]); err != nil {
 				return err
 			}
