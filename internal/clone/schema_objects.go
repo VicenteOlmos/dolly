@@ -196,24 +196,38 @@ type collationRow struct {
 	name            string
 	provider        string
 	icuLocale       string
+	icuRules        string
 	libcCollate     string
 	libcCtype       string
 	isDeterministic bool
 }
 
 func loadCollations(ctx context.Context, q *sql.DB, schemas []string) ([]collationRow, error) {
+	major, err := scanServerMajor(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	icuLocale := "coll.collcollate"
+	icuRules := "''"
+	if major >= 15 {
+		icuLocale = "coll.colliculocale"
+		icuRules = "COALESCE(coll.collicurules, '')"
+	}
+	if major >= 17 {
+		icuLocale = "coll.colllocale"
+	}
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
 		SELECT n.nspname, coll.collname, coll.collprovider::text,
-		       COALESCE(coll.colliculocale, ''),
+		       COALESCE(%s, ''), %s,
 		       COALESCE(coll.collcollate, ''),
 		       COALESCE(coll.collctype, ''),
 		       coll.collisdeterministic
 		FROM pg_collation coll
 		INNER JOIN pg_namespace n ON n.oid = coll.collnamespace
-		WHERE coll.collprovider <> 'd'
+		WHERE coll.collprovider IN ('c', 'i')
 		  AND n.nspname IN (%s)
-		ORDER BY n.nspname, coll.collname`, inClause)
+		ORDER BY n.nspname, coll.collname`, icuLocale, icuRules, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list collations: %w", err)
@@ -225,7 +239,7 @@ func loadCollations(ctx context.Context, q *sql.DB, schemas []string) ([]collati
 		var row collationRow
 		if err := rows.Scan(
 			&row.schema, &row.name, &row.provider,
-			&row.icuLocale, &row.libcCollate, &row.libcCtype, &row.isDeterministic,
+			&row.icuLocale, &row.icuRules, &row.libcCollate, &row.libcCtype, &row.isDeterministic,
 		); err != nil {
 			return nil, fmt.Errorf("scan collation: %w", err)
 		}
@@ -238,7 +252,7 @@ func applyCollations(ctx context.Context, tgtDB execer, rows []collationRow) err
 	for _, row := range rows {
 		stmt, ok := formatCreateCollation(
 			row.schema, row.name, row.provider,
-			row.icuLocale, row.libcCollate, row.libcCtype, row.isDeterministic,
+			row.icuLocale, row.icuRules, row.libcCollate, row.libcCtype, row.isDeterministic,
 		)
 		if !ok {
 			continue
@@ -1004,7 +1018,7 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
 		WHERE d.classoid = 'pg_type'::regclass AND d.objsubid = 0
 		  AND t.typtype = 'c'
-		  AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid)
+		  AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid AND c.relkind = 'c')
 		  AND n.nspname IN (%s)
 		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)

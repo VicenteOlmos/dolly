@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,9 +21,10 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
+	srcMock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(160000))
 	srcMock.ExpectQuery(`pg_collation`).WillReturnRows(
 		sqlmock.NewRows([]string{
-			"nspname", "collname", "collprovider", "colliculocale", "collcollate", "collctype", "collisdeterministic",
+			"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
 		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
@@ -167,6 +169,44 @@ func TestColumnSQLType(t *testing.T) {
 		if got != tt.want {
 			t.Fatalf("columnSQLType() = %q, want %q", got, tt.want)
 		}
+	}
+}
+
+func TestLoadCollationsCatalogVersions(t *testing.T) {
+	for _, tt := range []struct {
+		major  int
+		locale string
+		rules  string
+	}{
+		{14, "coll.collcollate", "''"},
+		{16, "coll.colliculocale", "COALESCE(coll.collicurules, '')"},
+		{17, "coll.colllocale", "COALESCE(coll.collicurules, '')"},
+	} {
+		t.Run(strconv.Itoa(tt.major), func(t *testing.T) {
+			src, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = src.Close() })
+			wantRules := "&V << w"
+			if tt.major == 14 {
+				wantRules = ""
+			}
+			mock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(tt.major * 10000))
+			mock.ExpectQuery(regexp.QuoteMeta("COALESCE("+tt.locale+", ''), "+tt.rules) + `(?s).*coll\.collprovider IN \('c', 'i'\)`).
+				WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "provider", "locale", "rules", "collate", "ctype", "deterministic"}).
+					AddRow("app", "custom", "i", "und", wantRules, "", "", true))
+			rows, err := loadCollations(context.Background(), src, []string{"app"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].icuLocale != "und" || rows[0].icuRules != wantRules {
+				t.Fatalf("collations = %+v", rows)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -376,9 +416,10 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
+	srcMock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(160000))
 	srcMock.ExpectQuery(`pg_collation`).WillReturnRows(
 		sqlmock.NewRows([]string{
-			"nspname", "collname", "collprovider", "colliculocale", "collcollate", "collctype", "collisdeterministic",
+			"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
 		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
@@ -457,8 +498,9 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`t\.typtype = 'e'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "label"}))
 	mock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "base", "notnull", "default"}).AddRow("app", "positive", "integer", false, ""))
 	mock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "domain", "name", "def"}).AddRow("app", "positive", "valid", "CHECK (app.valid_value(VALUE))"))
+	mock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(160000))
 	mock.ExpectQuery(`pg_collation`).WillReturnRows(sqlmock.NewRows([]string{
-		"nspname", "collname", "collprovider", "colliculocale", "collcollate", "collctype", "collisdeterministic",
+		"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
 	}))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))

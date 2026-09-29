@@ -58,6 +58,41 @@ func reviewDBPair(t *testing.T) (*sql.DB, *sql.DB, string, string) {
 	return connections[0], connections[1], dsns[0], dsns[1]
 }
 
+func TestCatalogReplayCollationRulesAndCompositeComment(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	major, err := scanServerMajor(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if major < 16 {
+		t.Skip("ICU collation rules require PostgreSQL 16")
+	}
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE COLLATION app.custom (provider = icu, locale = 'und', rules = '&V << w <<< W');
+		CREATE TYPE app.address AS (street text);
+		COMMENT ON TYPE app.address IS 'mailing address';
+		CREATE TABLE app.people (id integer, address app.address);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var sourceRules, rules, comment string
+	query := `SELECT collicurules FROM pg_collation WHERE oid = 'app.custom'::regcollation`
+	if err := src.QueryRowContext(ctx, query).Scan(&sourceRules); err != nil {
+		t.Fatal(err)
+	}
+	if err := tgt.QueryRowContext(ctx, query).Scan(&rules); err != nil || rules != sourceRules {
+		t.Fatalf("collation rules = %q, err = %v, want %q", rules, err, sourceRules)
+	}
+	if err := tgt.QueryRowContext(ctx, `SELECT obj_description('app.address'::regtype, 'pg_type')`).Scan(&comment); err != nil || comment != "mailing address" {
+		t.Fatalf("composite type comment = %q, err = %v", comment, err)
+	}
+}
+
 func TestCatalogReplayFunctionDefaultsIndexesAndModesPG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, _, _ := reviewDBPair(t)

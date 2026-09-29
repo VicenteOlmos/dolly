@@ -170,17 +170,22 @@ func TestFormatAlterTableReplicaIdentity(t *testing.T) {
 
 func TestFormatCreateCollation(t *testing.T) {
 	t.Parallel()
-	libc, ok := formatCreateCollation("app", "en_us", "c", "", "en_US.UTF-8", "en_US.UTF-8", true)
+	libc, ok := formatCreateCollation("app", "en_us", "c", "", "", "en_US.UTF-8", "en_US.UTF-8", true)
 	wantLibc := `CREATE COLLATION "app"."en_us" (PROVIDER = libc, LC_COLLATE = 'en_US.UTF-8', LC_CTYPE = 'en_US.UTF-8')`
 	if !ok || libc != wantLibc {
 		t.Fatalf("libc: got (%q, %v), want (%q, true)", libc, ok, wantLibc)
 	}
-	icu, ok := formatCreateCollation("app", "und", "i", "und", "", "", false)
+	icu, ok := formatCreateCollation("app", "und", "i", "und", "", "", "", false)
 	wantICU := `CREATE COLLATION "app"."und" (PROVIDER = icu, LOCALE = 'und', DETERMINISTIC = false)`
 	if !ok || icu != wantICU {
 		t.Fatalf("icu: got (%q, %v), want (%q, true)", icu, ok, wantICU)
 	}
-	if _, ok := formatCreateCollation("app", "bad", "c", "", "", "en_US.UTF-8", true); ok {
+	icu, ok = formatCreateCollation("app", "custom", "i", "und", "&V << w <<< W's", "", "", true)
+	wantICU = `CREATE COLLATION "app"."custom" (PROVIDER = icu, LOCALE = 'und', DETERMINISTIC = true, RULES = '&V << w <<< W''s')`
+	if !ok || icu != wantICU {
+		t.Fatalf("icu rules: got (%q, %v), want (%q, true)", icu, ok, wantICU)
+	}
+	if _, ok := formatCreateCollation("app", "bad", "c", "", "", "", "en_US.UTF-8", true); ok {
 		t.Fatal("expected skip when libc locale empty")
 	}
 }

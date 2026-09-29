@@ -159,7 +159,7 @@ func formatAlterTableReplicaIdentity(schema, table, ident, indexName string) (st
 }
 
 // formatCreateCollation emits CREATE COLLATION for libc or ICU user collations.
-func formatCreateCollation(schema, name, provider, icuLocale, libcCollate, libcCtype string, deterministic bool) (string, bool) {
+func formatCreateCollation(schema, name, provider, icuLocale, icuRules, libcCollate, libcCtype string, deterministic bool) (string, bool) {
 	qual := quoteQualifiedType(schema, name)
 	switch provider {
 	case "c":
@@ -180,11 +180,16 @@ func formatCreateCollation(schema, name, provider, icuLocale, libcCollate, libcC
 		if !deterministic {
 			det = "false"
 		}
+		rules := ""
+		if icuRules != "" {
+			rules = ", RULES = " + quoteLiteral(icuRules)
+		}
 		return fmt.Sprintf(
-			"CREATE COLLATION %s (PROVIDER = icu, LOCALE = %s, DETERMINISTIC = %s)",
+			"CREATE COLLATION %s (PROVIDER = icu, LOCALE = %s, DETERMINISTIC = %s%s)",
 			qual,
 			quoteLiteral(icuLocale),
 			det,
+			rules,
 		), true
 	default:
 		return "", false
