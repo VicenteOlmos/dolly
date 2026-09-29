@@ -432,7 +432,7 @@ func annotatePartitions(ctx context.Context, q queryer, tables []Table, schemas 
 		args[i] = schema
 	}
 	query := fmt.Sprintf(`
-		SELECT n.nspname, c.relname, c.relkind::text, c.relispartition,
+		SELECT n.nspname, c.relname, c.relkind::text, c.relispartition, c.relpersistence::text,
 		       COALESCE(pg_get_partkeydef(c.oid), ''),
 		       CASE WHEN c.relispartition THEN COALESCE(pg_get_expr(c.relpartbound, c.oid), '') ELSE '' END,
 		       CASE WHEN c.relispartition THEN COALESCE(pn.nspname, '') ELSE '' END,
@@ -456,9 +456,9 @@ func annotatePartitions(ctx context.Context, q queryer, tables []Table, schemas 
 		byName[tables[i].Schema+"."+tables[i].Name] = &tables[i]
 	}
 	for rows.Next() {
-		var schema, name, relkind, partBy, bound, parentSchema, parentName string
+		var schema, name, relkind, persistence, partBy, bound, parentSchema, parentName string
 		var isPartition bool
-		if err := rows.Scan(&schema, &name, &relkind, &isPartition, &partBy, &bound, &parentSchema, &parentName); err != nil {
+		if err := rows.Scan(&schema, &name, &relkind, &isPartition, &persistence, &partBy, &bound, &parentSchema, &parentName); err != nil {
 			return fmt.Errorf("annotate partitions: %w", err)
 		}
 		table := byName[schema+"."+name]
@@ -466,6 +466,7 @@ func annotatePartitions(ctx context.Context, q queryer, tables []Table, schemas 
 			continue
 		}
 		table.RelKind = relkind
+		table.Unlogged = persistence == "u"
 		if relkind == "p" {
 			table.PartitionBy = partBy
 		}
