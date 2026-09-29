@@ -61,6 +61,8 @@ type Table struct {
 	PartitionBound string `json:"partition_bound,omitempty"`
 	// PartitionBy is pg_get_partkeydef (for example RANGE (id)) on a partitioned parent.
 	PartitionBy string `json:"partition_by,omitempty"`
+	// Unlogged is true for UNLOGGED tables (relpersistence 'u'). Partition children inherit persistence from the parent.
+	Unlogged bool `json:"unlogged,omitempty"`
 }
 
 // WithoutPartitionParents drops partitioned parents. Selecting a parent returns

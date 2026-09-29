@@ -649,7 +649,11 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 		parts = append(parts, formatTableCheckConstraint(chk.name, chk.def))
 	}
 
-	stmt := fmt.Sprintf("CREATE TABLE %s (%s)", qual, strings.Join(parts, ", "))
+	createKind := "CREATE TABLE"
+	if table.Unlogged && table.PartitionOf == "" {
+		createKind = "CREATE UNLOGGED TABLE"
+	}
+	stmt := fmt.Sprintf("%s %s (%s)", createKind, qual, strings.Join(parts, ", "))
 	if table.RelKind == "p" {
 		partBy := strings.TrimSpace(table.PartitionBy)
 		if partBy == "" {

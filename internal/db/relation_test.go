@@ -32,9 +32,9 @@ func TestAnnotatePartitionsAndGeneratedColumns(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"}))
 	emptyUniqueIndexMock(mock)
 	mock.ExpectQuery(`pg_get_partkeydef`).
-		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relkind", "relispartition", "partkey", "bound", "parent_schema", "parent_name"}).
-			AddRow("public", "events", "p", false, "RANGE (id)", "", "", "").
-			AddRow("public", "events_2024", "r", true, "", "FOR VALUES FROM (1) TO (2)", "public", "events"))
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relkind", "relispartition", "relpersistence", "partkey", "bound", "parent_schema", "parent_name"}).
+			AddRow("public", "events", "p", false, "p", "RANGE (id)", "", "", "").
+			AddRow("public", "events_2024", "r", true, "p", "", "FOR VALUES FROM (1) TO (2)", "public", "events"))
 	mock.ExpectQuery(`is_generated = 'ALWAYS'`).
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
 			AddRow("public", "events_2024", "total"))
