@@ -415,6 +415,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if err != nil {
 		return fmt.Errorf("load schema: %w", err)
 	}
+	if cfg.selection != nil {
+		if err := rejectIncludedPartitionParents(tables, cfg.selection); err != nil {
+			return err
+		}
+	}
 	tables = db.WithoutPartitionParents(tables)
 
 	if cfg.selection != nil {
