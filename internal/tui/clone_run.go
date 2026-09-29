@@ -102,11 +102,12 @@ func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas 
 		}
 	}
 	return clonework.Run(ctx, clonework.Params{
-		SourceDSN: draft.SourceDSN,
-		CloneName: draft.CloneName,
-		TargetDSN: draft.TargetDSN,
-		Strategy:  draft.Strategy,
-		Schemas:   schemas,
+		SourceDSN:         draft.SourceDSN,
+		CloneName:         draft.CloneName,
+		TargetDSN:         draft.TargetDSN,
+		Strategy:          draft.Strategy,
+		Schemas:           schemas,
+		IncludePrivileges: draft.IncludePrivileges,
 	}, wrapped)
 }
 

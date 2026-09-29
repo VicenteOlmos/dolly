@@ -12,14 +12,20 @@ import (
 
 func TestDumpOverridesFromDraft(t *testing.T) {
 	got, err := dumpOverridesFromDraft(DumpDraft{
-		NoTransaction:  true,
-		SlowConnection: true,
-		RequireSafeKey: true,
-		PercentText:    " 25 ",
-		SeedFile:       " seeds.json ",
-		ChunkTables:    "public.orders, public.events",
-		Workers:        4,
-		WorkersSet:     true,
+		NoTransaction:       true,
+		SlowConnection:      true,
+		RequireSafeKey:      true,
+		PercentText:         " 25 ",
+		SeedFile:            " seeds.json ",
+		ChunkTables:         "public.orders, public.events",
+		MaxDepthText:        "3",
+		MaxTablesText:       "4",
+		MaxRowsText:         "100",
+		MaxRowsPerTableText: "50",
+		IncludeTables:       "public.users",
+		ExcludeTables:       "public.audit",
+		Workers:             4,
+		WorkersSet:          true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +38,12 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 	}
 	if len(got.ChunkTables) != 2 || got.ChunkTables[0] != "public.orders" || got.ChunkTables[1] != "public.events" {
 		t.Fatalf("chunk tables = %v", got.ChunkTables)
+	}
+	if got.MaxDepth != 3 || got.MaxTables != 4 || got.MaxRows != 100 || got.MaxRowsPerTable != 50 {
+		t.Fatalf("subset limits = %+v", got)
+	}
+	if len(got.IncludeTables) != 1 || got.IncludeTables[0] != "public.users" || len(got.ExcludeTables) != 1 || got.ExcludeTables[0] != "public.audit" {
+		t.Fatalf("selectors = include %v exclude %v", got.IncludeTables, got.ExcludeTables)
 	}
 	if _, err := dumpOverridesFromDraft(DumpDraft{PercentText: "0"}); err == nil {
 		t.Fatal("percent 0 text should be rejected")

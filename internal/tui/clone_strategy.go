@@ -33,6 +33,7 @@ var cloneFormFieldHints = [cloneFormFieldCount]string{
 	"Target server; Tab cycles Current / Saved / Manual",
 	"", // strategy: use cloneStrategyDescription for the active choice
 	"Preflight: table count and DB size before clone starts",
+	"Pass --with-privileges so owners and ACLs are replayed",
 }
 
 func strategyNames(opts []cloneStrategyOption) []string {

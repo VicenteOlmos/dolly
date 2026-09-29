@@ -20,11 +20,12 @@ type ProgressEvent = clone.ProgressEvent
 
 // Params configures a controlled clone run from the TUI.
 type Params struct {
-	SourceDSN string
-	CloneName string
-	TargetDSN string
-	Strategy  string
-	Schemas   []string
+	SourceDSN         string
+	CloneName         string
+	TargetDSN         string
+	Strategy          string
+	Schemas           []string
+	IncludePrivileges bool
 }
 
 // Run executes clone through the controlled clone runner using selected schemas.
@@ -116,17 +117,18 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	}
 
 	opts := clone.Options{
-		SourceDSN:       sourceDSN,
-		CloneName:       cloneName,
-		TargetDSN:       targetURL,
-		SkipCreate:      cfg.Clone.SkipCreate,
-		DumpDir:         cfg.Clone.DumpDir,
-		TargetDir:       cfg.Clone.TargetDir,
-		DumpOpts:        dumpOpts,
-		RestoreOpts:     restoreOpts,
-		Strategy:        strategy,
-		PermissionCache: permCache,
-		MaxOpenConns:    maxConns,
+		SourceDSN:         sourceDSN,
+		CloneName:         cloneName,
+		TargetDSN:         targetURL,
+		SkipCreate:        cfg.Clone.SkipCreate,
+		DumpDir:           cfg.Clone.DumpDir,
+		TargetDir:         cfg.Clone.TargetDir,
+		DumpOpts:          dumpOpts,
+		RestoreOpts:       restoreOpts,
+		Strategy:          strategy,
+		PermissionCache:   permCache,
+		MaxOpenConns:      maxConns,
+		IncludePrivileges: p.IncludePrivileges,
 	}
 
 	return runInProcess(ctx, opts, onProgress)

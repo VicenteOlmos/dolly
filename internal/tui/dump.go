@@ -26,6 +26,13 @@ const (
 	modeFieldPercent
 	modeFieldSeed
 	modeFieldChunk
+	modeFieldMaxDepth
+	modeFieldMaxTables
+	modeFieldMaxRows
+	modeFieldMaxRowsPerTable
+	modeFieldInclude
+	modeFieldExclude
+	modeFieldCount
 )
 
 type dumpScreen struct {
@@ -44,6 +51,12 @@ type dumpScreen struct {
 	percentCursor    int
 	seedCursor       int
 	chunkCursor      int
+	depthCursor      int
+	tablesCursor     int
+	rowsCursor       int
+	rowsPerCursor    int
+	includeCursor    int
+	excludeCursor    int
 	restoreDir       string
 	restoreDirCursor int
 	restoreDirFocus  bool
@@ -304,7 +317,9 @@ func (d *dumpScreen) modeTextFocused() bool {
 		return false
 	}
 	switch d.modeField {
-	case modeFieldPercent, modeFieldSeed, modeFieldChunk:
+	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
+		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
+		modeFieldInclude, modeFieldExclude:
 		return true
 	default:
 		return false
@@ -315,6 +330,12 @@ func (d *dumpScreen) syncModeCursors() {
 	d.percentCursor = len(d.draft.PercentText)
 	d.seedCursor = len(d.draft.SeedFile)
 	d.chunkCursor = len(d.draft.ChunkTables)
+	d.depthCursor = len(d.draft.MaxDepthText)
+	d.tablesCursor = len(d.draft.MaxTablesText)
+	d.rowsCursor = len(d.draft.MaxRowsText)
+	d.rowsPerCursor = len(d.draft.MaxRowsPerTableText)
+	d.includeCursor = len(d.draft.IncludeTables)
+	d.excludeCursor = len(d.draft.ExcludeTables)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -322,8 +343,8 @@ func (d *dumpScreen) moveModeField(delta int) {
 	if d.modeField < modeFieldSlow {
 		d.modeField = modeFieldSlow
 	}
-	if d.modeField > modeFieldChunk {
-		d.modeField = modeFieldChunk
+	if d.modeField >= modeFieldCount {
+		d.modeField = modeFieldCount - 1
 	}
 	d.syncModeCursors()
 }
@@ -337,6 +358,18 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.SeedFile, &d.seedCursor)
 		case modeFieldChunk:
 			return handleFieldCursorKey(k, &d.draft.ChunkTables, &d.chunkCursor)
+		case modeFieldMaxDepth:
+			return handleFieldCursorKey(k, &d.draft.MaxDepthText, &d.depthCursor)
+		case modeFieldMaxTables:
+			return handleFieldCursorKey(k, &d.draft.MaxTablesText, &d.tablesCursor)
+		case modeFieldMaxRows:
+			return handleFieldCursorKey(k, &d.draft.MaxRowsText, &d.rowsCursor)
+		case modeFieldMaxRowsPerTable:
+			return handleFieldCursorKey(k, &d.draft.MaxRowsPerTableText, &d.rowsPerCursor)
+		case modeFieldInclude:
+			return handleFieldCursorKey(k, &d.draft.IncludeTables, &d.includeCursor)
+		case modeFieldExclude:
+			return handleFieldCursorKey(k, &d.draft.ExcludeTables, &d.excludeCursor)
 		}
 	}
 	switch d.modeField {
@@ -400,6 +433,12 @@ func (d *dumpScreen) modeSummary() string {
 	}
 	if strings.TrimSpace(d.draft.ChunkTables) != "" {
 		parts = append(parts, "chunk")
+	}
+	if strings.TrimSpace(d.draft.IncludeTables) != "" {
+		parts = append(parts, "include")
+	}
+	if strings.TrimSpace(d.draft.ExcludeTables) != "" {
+		parts = append(parts, "exclude")
 	}
 	if d.draft.WorkersSet {
 		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
@@ -550,6 +589,12 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldPercent, "Percent", d.modeFieldValue(d.draft.PercentText, d.percentCursor, modeFieldPercent)},
 		{modeFieldSeed, "Seed file", d.modeFieldValue(d.draft.SeedFile, d.seedCursor, modeFieldSeed)},
 		{modeFieldChunk, "Chunk tables", d.modeFieldValue(d.draft.ChunkTables, d.chunkCursor, modeFieldChunk)},
+		{modeFieldMaxDepth, "Max depth", d.modeFieldValue(d.draft.MaxDepthText, d.depthCursor, modeFieldMaxDepth)},
+		{modeFieldMaxTables, "Max tables", d.modeFieldValue(d.draft.MaxTablesText, d.tablesCursor, modeFieldMaxTables)},
+		{modeFieldMaxRows, "Max rows", d.modeFieldValue(d.draft.MaxRowsText, d.rowsCursor, modeFieldMaxRows)},
+		{modeFieldMaxRowsPerTable, "Max rows/table", d.modeFieldValue(d.draft.MaxRowsPerTableText, d.rowsPerCursor, modeFieldMaxRowsPerTable)},
+		{modeFieldInclude, "Include tables", d.modeFieldValue(d.draft.IncludeTables, d.includeCursor, modeFieldInclude)},
+		{modeFieldExclude, "Exclude tables", d.modeFieldValue(d.draft.ExcludeTables, d.excludeCursor, modeFieldExclude)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))
@@ -566,7 +611,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		}
 		lines = append(lines, prefix+label+"  "+val)
 	}
-	lines = append(lines, StyleMuted.Render("↑/↓ field · s slow · k safe key · ←/→ workers · type percent, seed, chunk · Esc back"))
+	lines = append(lines, StyleMuted.Render("↑/↓ field · s slow · k safe key · ←/→ workers · type limits and tables · Esc back"))
 	return lines
 }
 
