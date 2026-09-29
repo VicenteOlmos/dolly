@@ -106,6 +106,7 @@ func NewAppFromConfig(store connections.ConnectionStore, saveConnections bool, c
 	if cfg != nil {
 		app.dump.OutputDir = cfg.Dump.OutputDir
 		app.clone.Replace = cfg.Clone.Replace
+		app.clone.TargetDir = cfg.Clone.TargetDir
 		if cfg.TUI.SectionEntry != "" {
 			app.sectionEntry = ParseSectionEntry(cfg.TUI.SectionEntry)
 		}

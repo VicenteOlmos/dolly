@@ -30,6 +30,7 @@ type Params struct {
 	Replace           bool
 	ReplaceSet        bool
 	OnConflict        string
+	TargetDir         string
 }
 
 // Run executes clone through the controlled clone runner using selected schemas.
@@ -121,6 +122,10 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	if p.OnConflict != "" {
 		onConflict = p.OnConflict
 	}
+	targetDir := cfg.Clone.TargetDir
+	if trimmed := strings.TrimSpace(p.TargetDir); trimmed != "" {
+		targetDir = trimmed
+	}
 	policy, err := restore.ParseConflictPolicy(onConflict)
 	if err != nil {
 		return fmt.Errorf("invalid restore_on_conflict %q: %w", onConflict, err)
@@ -143,7 +148,7 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 		TargetDSN:         targetURL,
 		SkipCreate:        cfg.Clone.SkipCreate,
 		DumpDir:           cfg.Clone.DumpDir,
-		TargetDir:         cfg.Clone.TargetDir,
+		TargetDir:         targetDir,
 		DumpOpts:          dumpOpts,
 		RestoreOpts:       restoreOpts,
 		Strategy:          strategy,

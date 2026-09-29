@@ -18,6 +18,7 @@ const (
 	cloneFieldPrivileges
 	cloneFieldReplace
 	cloneFieldOnConflict
+	cloneFieldTargetDir
 	cloneFormFieldCount
 )
 
@@ -100,16 +101,15 @@ func (c *cloneScreen) scrollLog(delta int) {
 
 func (c *cloneScreen) activeField() *string {
 	switch c.formField {
-	case 0:
+	case cloneFieldName:
 		return &c.draft.CloneName
-	case 1:
+	case cloneFieldTarget:
 		if c.draft.TargetSource == TargetSourceManual {
 			return &c.draft.TargetDSN
 		}
 		return nil
-	case 2:
-		// Strategy is a cycler; don't return editable field.
-		return nil
+	case cloneFieldTargetDir:
+		return &c.draft.TargetDir
 	default:
 		return nil
 	}
@@ -362,7 +362,7 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 		}
 	}
 	if c.sectionActive(cloneSectionForm) {
-		if c.formField >= cloneFieldStrategy && len(k.Text) == 1 && k.Text[0] >= 32 {
+		if c.activeField() == nil && c.formField >= cloneFieldStrategy && len(k.Text) == 1 && k.Text[0] >= 32 {
 			return nil
 		}
 		field := c.activeField()
@@ -494,6 +494,7 @@ func (c *cloneScreen) formSection(hint string, width int) []string {
 	lines = append(lines, c.renderPrivilegesLine())
 	lines = append(lines, c.renderReplaceLine())
 	lines = append(lines, c.renderOnConflictLine())
+	lines = append(lines, c.fieldLine("Target directory:", c.draft.TargetDir, cloneFieldTargetDir, width))
 	return lines
 }
 

@@ -56,6 +56,28 @@ func TestRunPropagatesSchemasToCloneOptions(t *testing.T) {
 	}
 }
 
+func TestRunPropagatesParamTargetDirOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"clone":{"target_dir":"/data/from-config"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error { got = opts; return nil }
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src",
+		Schemas:   []string{"public"},
+		TargetDir: "/data/from-tui",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetDir != "/data/from-tui" {
+		t.Fatalf("TargetDir = %q, want /data/from-tui", got.TargetDir)
+	}
+}
+
 func TestRunPropagatesConfiguredTargetDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"clone":{"target_dir":"/data/clone"}}`), 0o644); err != nil {
