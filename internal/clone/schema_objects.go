@@ -419,16 +419,26 @@ func applyForeignKeyConstraints(ctx context.Context, tgtDB execer, schema, table
 }
 
 type indexRow struct {
-	schema string
-	table  string
-	name   string
-	def    string
+	schema    string
+	table     string
+	name      string
+	def       string
+	inherited bool
 }
 
 func loadIndexes(ctx context.Context, q *sql.DB, schemas []string) ([]indexRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT i.schemaname, i.tablename, i.indexname, i.indexdef
+		SELECT i.schemaname, i.tablename, i.indexname, i.indexdef,
+		  EXISTS (
+		    SELECT 1
+		    FROM pg_class ic
+		    JOIN pg_namespace in ON in.oid = ic.relnamespace
+		    JOIN pg_inherits inh ON inh.inhrelid = ic.oid
+		    WHERE ic.relkind = 'i'
+		      AND in.nspname = i.schemaname
+		      AND ic.relname = i.indexname
+		  ) AS inherited
 		FROM pg_indexes i
 		WHERE i.schemaname IN (%s)
 		  AND NOT EXISTS (
@@ -451,7 +461,7 @@ func loadIndexes(ctx context.Context, q *sql.DB, schemas []string) ([]indexRow, 
 	var out []indexRow
 	for rows.Next() {
 		var idx indexRow
-		if err := rows.Scan(&idx.schema, &idx.table, &idx.name, &idx.def); err != nil {
+		if err := rows.Scan(&idx.schema, &idx.table, &idx.name, &idx.def, &idx.inherited); err != nil {
 			return nil, fmt.Errorf("scan index: %w", err)
 		}
 		out = append(out, idx)

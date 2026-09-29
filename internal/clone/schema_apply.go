@@ -44,7 +44,6 @@ type uniqueConstraint struct {
 // Limitations (prefer pg_dump when it is on PATH):
 //   - Ordered-set and hypothetical aggregates, exclusion constraints, and operator classes are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
-//   - Indexes that exist only on a partition (not the parent) are omitted.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
 }
@@ -816,19 +815,10 @@ func orderPartitionParentsFirst(tables []db.Table) []db.Table {
 	return order
 }
 
-func indexesForReplay(indexes []indexRow, tables []db.Table) []indexRow {
-	skip := map[string]bool{}
-	for _, table := range tables {
-		if table.PartitionOf != "" {
-			skip[table.Schema+"."+table.Name] = true
-		}
-	}
-	if len(skip) == 0 {
-		return indexes
-	}
+func indexesForReplay(indexes []indexRow, _ []db.Table) []indexRow {
 	out := make([]indexRow, 0, len(indexes))
 	for _, idx := range indexes {
-		if skip[idx.schema+"."+idx.table] {
+		if idx.inherited {
 			continue
 		}
 		out = append(out, idx)

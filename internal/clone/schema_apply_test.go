@@ -75,7 +75,7 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
-		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
+		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
@@ -364,7 +364,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
 
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
-		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
+		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}).
 			AddRow("app", "active_users", "SELECT id FROM users", false))
@@ -462,13 +462,21 @@ func TestOrderPartitionParentsFirst(t *testing.T) {
 
 func TestIndexesForReplaySkipsPartitionChildren(t *testing.T) {
 	indexes := []indexRow{
-		{schema: "public", table: "events", name: "events_id_idx", def: "CREATE INDEX events_id_idx"},
+		{schema: "public", table: "events", name: "events_id_idx", def: "CREATE INDEX events_id_idx", inherited: true},
 		{schema: "public", table: "events_2024", name: "events_2024_id_idx", def: "CREATE INDEX events_2024_id_idx"},
 	}
 	tables := []db.Table{{Schema: "public", Name: "events_2024", PartitionOf: "public.events"}}
 	got := indexesForReplay(indexes, tables)
-	if len(got) != 1 || got[0].table != "events" {
+	if len(got) != 1 || got[0].table != "events_2024" {
 		t.Fatalf("indexes = %+v", got)
+	}
+	local := []indexRow{
+		{schema: "public", table: "events_2024", name: "events_2024_local_idx", def: "CREATE INDEX events_2024_local_idx"},
+		{schema: "public", table: "events_2024", name: "events_2024_inh_idx", def: "CREATE INDEX events_2024_inh_idx", inherited: true},
+	}
+	got = indexesForReplay(local, tables)
+	if len(got) != 1 || got[0].name != "events_2024_local_idx" {
+		t.Fatalf("local indexes = %+v", got)
 	}
 }
 
