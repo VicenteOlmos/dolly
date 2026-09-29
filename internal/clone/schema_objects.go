@@ -157,8 +157,9 @@ func loadCompositeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]str
 		SELECT n.nspname, t.typname
 		FROM pg_type t
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		INNER JOIN pg_class c ON c.oid = t.typrelid
 		WHERE t.typtype = 'c'
-		  AND t.typrelid <> 0
+		  AND c.relkind = 'c'
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, t.typname`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -573,7 +574,6 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		  AND c.relkind = 'S'
 		  AND n.nspname IN (%s)
 		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause)
-	args = append(append(append(append([]any{}, args...), args...), args...), args...)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)
@@ -624,7 +624,6 @@ func loadGrants(ctx context.Context, q *sql.DB, schemas []string) ([]grantRow, e
 		FROM information_schema.usage_privileges
 		WHERE object_type = 'SCHEMA' AND object_schema IN (%s)
 		ORDER BY 1, 2, 3`, inClause, inClause)
-	args = append(append([]any{}, args...), args...)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list grants: %w", err)

@@ -70,18 +70,14 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
-	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
-		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
-	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
-		sqlmock.NewRows([]string{"oid", "oid"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(
-		sqlmock.NewRows([]string{"pg_get_triggerdef"}))
+		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(
-		sqlmock.NewRows([]string{"pg_get_ruledef"}))
+		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`FROM pg_description`).WillReturnRows(
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
 	srcMock.ExpectQuery(`FROM information_schema.table_privileges`).WillReturnRows(
@@ -92,6 +88,14 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{
 			"nspname", "relname", "polname", "polcmd", "polpermissive", "polqual", "polwithcheck", "roles",
 		}))
+}
+
+func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`p\.prokind = 'a'`).WillReturnRows(sqlmock.NewRows([]string{"aggregate"}))
+	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
+		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
+	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
+		sqlmock.NewRows([]string{"oid", "oid"}))
 }
 
 func TestColumnSQLType(t *testing.T) {
@@ -149,6 +153,7 @@ func TestApplySchemasFromSourceCreatesSchemaAndTable(t *testing.T) {
 	t.Cleanup(func() { _ = tgt.Close() })
 
 	expectEmptySchemaCatalog(srcMock)
+	expectRoutineCatalog(srcMock)
 
 	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
 		AddRow("app", "users", int64(0))
@@ -204,6 +209,7 @@ func TestApplySchemasFromSourceRichDDL(t *testing.T) {
 	const schema = "billing"
 
 	expectEmptySchemaCatalog(srcMock)
+	expectRoutineCatalog(srcMock)
 
 	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
 		AddRow(schema, "accounts", int64(0))
@@ -263,6 +269,7 @@ func TestApplySchemasFromSourceForeignKeyQualified(t *testing.T) {
 	t.Cleanup(func() { _ = tgt.Close() })
 
 	expectEmptySchemaCatalog(srcMock)
+	expectRoutineCatalog(srcMock)
 
 	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
 		AddRow("app", "users", int64(0)).
@@ -345,24 +352,21 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	srcMock.ExpectQuery(`dep\.deptype = 'a'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname"}))
 
+	expectRoutineCatalog(srcMock)
 	srcMock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
 
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
-	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
-		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
-	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
-		sqlmock.NewRows([]string{"oid", "oid"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}).
 			AddRow("app", "active_users", "SELECT id FROM users", false))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(
-		sqlmock.NewRows([]string{"pg_get_triggerdef"}))
+		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(
-		sqlmock.NewRows([]string{"pg_get_ruledef"}))
+		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`FROM pg_description`).WillReturnRows(
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
 	srcMock.ExpectQuery(`FROM information_schema.table_privileges`).WillReturnRows(

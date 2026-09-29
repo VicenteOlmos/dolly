@@ -49,6 +49,36 @@ func (c *pgxCopyConn) CopyFromSource(ctx context.Context, schema, table string, 
 	return c.conn.CopyFrom(ctx, pgx.Identifier{schema, table}, columns, src)
 }
 
+func (c *pgxCopyConn) registerEnums(ctx context.Context) error {
+	rows, err := c.conn.Query(ctx, `SELECT n.nspname, t.typname FROM pg_type t
+		JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typtype = 'e'`)
+	if err != nil {
+		return err
+	}
+	var names []string
+	for rows.Next() {
+		var schema, name string
+		if err := rows.Scan(&schema, &name); err != nil {
+			rows.Close()
+			return err
+		}
+		names = append(names, quoteQualifiedTable(schema, name))
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		typ, err := c.conn.LoadType(ctx, name)
+		if err != nil {
+			return fmt.Errorf("load enum %s: %w", name, err)
+		}
+		c.conn.TypeMap().RegisterType(typ)
+	}
+	return nil
+}
+
 // openCopyConn opens a pgx connection for COPY streaming.
 // Overridable for testing.
 var openCopyConn = func(ctx context.Context, dsn string) (copyConn, error) {
@@ -243,6 +273,13 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 		return fmt.Errorf("open target copy connection: %w", err)
 	}
 	defer tgtConn.Close(ctx)
+	if opts.RowTransform != nil {
+		if conn, ok := tgtConn.(*pgxCopyConn); ok {
+			if err := conn.registerEnums(ctx); err != nil {
+				return fmt.Errorf("register target enums: %w", err)
+			}
+		}
+	}
 
 	// Stream each table in FK-safe order
 	for _, table := range sorted {

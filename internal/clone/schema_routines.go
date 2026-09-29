@@ -20,12 +20,27 @@ type depEdge struct {
 
 func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRow, error) {
 	inClause, args := schemaINClause(schemas)
+	aggregateQuery := fmt.Sprintf(`
+		SELECT format('%%I.%%I(%%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))
+		FROM pg_proc p
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname IN (%s) AND p.prokind = 'a'
+		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+		ORDER BY n.nspname, p.proname LIMIT 1`, inClause)
+	var aggregate string
+	switch err := q.QueryRowContext(ctx, aggregateQuery, args...).Scan(&aggregate); err {
+	case nil:
+		return nil, fmt.Errorf("catalog schema replay does not support aggregate %s; install pg_dump to clone this schema", aggregate)
+	case sql.ErrNoRows:
+	default:
+		return nil, fmt.Errorf("list aggregates: %w", err)
+	}
 	query := fmt.Sprintf(`
 		SELECT p.oid, n.nspname || '.' || p.proname, pg_get_functiondef(p.oid)
 		FROM pg_proc p
 		JOIN pg_namespace n ON n.oid = p.pronamespace
 		WHERE n.nspname IN (%s)
-		  AND p.prokind IN ('f', 'p', 'a', 'w')
+		  AND p.prokind IN ('f', 'p', 'w')
 		  AND NOT EXISTS (
 		    SELECT 1 FROM pg_depend d
 		    WHERE d.objid = p.oid AND d.deptype = 'e'
@@ -102,30 +117,30 @@ func loadViewDeps(ctx context.Context, q *sql.DB, schemas []string) (map[string]
 func loadTriggers(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT pg_get_triggerdef(t.oid, true)
+		SELECT n.nspname, c.relname, t.tgname, t.tgenabled, pg_get_triggerdef(t.oid, true)
 		FROM pg_trigger t
 		JOIN pg_class c ON c.oid = t.tgrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE NOT t.tgisinternal
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, t.tgname`, inClause)
-	return loadSQLDefs(ctx, q, query, args, "triggers")
+	return loadEnabledDefs(ctx, q, query, args, "triggers", "TRIGGER")
 }
 
 func loadRules(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT pg_get_ruledef(r.oid, true)
+		SELECT n.nspname, c.relname, r.rulename, r.ev_enabled, pg_get_ruledef(r.oid, true)
 		FROM pg_rewrite r
 		JOIN pg_class c ON c.oid = r.ev_class
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE r.rulename <> '_RETURN'
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, r.rulename`, inClause)
-	return loadSQLDefs(ctx, q, query, args, "rules")
+	return loadEnabledDefs(ctx, q, query, args, "rules", "RULE")
 }
 
-func loadSQLDefs(ctx context.Context, q *sql.DB, query string, args []any, label string) ([]string, error) {
+func loadEnabledDefs(ctx context.Context, q *sql.DB, query string, args []any, label, kind string) ([]string, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", label, err)
@@ -133,11 +148,18 @@ func loadSQLDefs(ctx context.Context, q *sql.DB, query string, args []any, label
 	defer rows.Close()
 	var out []string
 	for rows.Next() {
-		var def string
-		if err := rows.Scan(&def); err != nil {
+		var schema, table, name, mode, def string
+		if err := rows.Scan(&schema, &table, &name, &mode, &def); err != nil {
 			return nil, fmt.Errorf("scan %s: %w", label, err)
 		}
 		out = append(out, def)
+		if mode != "O" {
+			verb := map[string]string{"D": "DISABLE", "R": "ENABLE REPLICA", "A": "ENABLE ALWAYS"}[mode]
+			if verb == "" {
+				return nil, fmt.Errorf("unknown %s mode %q for %s.%s.%s", kind, mode, schema, table, name)
+			}
+			out = append(out, fmt.Sprintf("ALTER TABLE %s %s %s %s", quoteQualifiedTable(schema, table), verb, kind, quoteIdentifier(name)))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list %s: %w", label, err)

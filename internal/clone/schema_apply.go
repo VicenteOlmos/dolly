@@ -27,11 +27,11 @@ type uniqueConstraint struct {
 // source introspection, without invoking pg_dump or psql subprocesses.
 //
 // Ordering mirrors pg_dump --schema-only where practical: extensions, types, sequences,
-// tables (with inline checks), foreign keys, indexes, functions, views (dependency
+// functions, tables (with inline checks), foreign keys, indexes, views (dependency
 // order), triggers, rules, comments, grants, and RLS.
 //
 // Limitations (prefer pg_dump when it is on PATH):
-//   - Exclusion constraints and operator classes are not replayed.
+//   - Aggregates, exclusion constraints, and operator classes are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
@@ -85,6 +85,26 @@ func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, i
 		return err
 	}
 
+	routines, err := loadRoutines(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	routineDeps, err := loadRoutineDeps(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	routines, err = orderRoutines(routines, routineDeps)
+	if err != nil {
+		return err
+	}
+	routineDefs := make([]string, len(routines))
+	for i, routine := range routines {
+		routineDefs[i] = routine.def
+	}
+	if err := applySQLDefs(ctx, tgtDB, routineDefs, "function"); err != nil {
+		return err
+	}
+
 	tables, err := db.LoadPostgresSchemasBatched(ctx, srcDB, schemas)
 	if err != nil {
 		return fmt.Errorf("load source schema: %w", err)
@@ -132,26 +152,6 @@ func applySchemas(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, i
 		return err
 	}
 	if err := applyIndexes(ctx, tgtDB, indexes); err != nil {
-		return err
-	}
-
-	routines, err := loadRoutines(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-	routineDeps, err := loadRoutineDeps(ctx, srcDB, schemas)
-	if err != nil {
-		return err
-	}
-	routines, err = orderRoutines(routines, routineDeps)
-	if err != nil {
-		return err
-	}
-	routineDefs := make([]string, len(routines))
-	for i, routine := range routines {
-		routineDefs[i] = routine.def
-	}
-	if err := applySQLDefs(ctx, tgtDB, routineDefs, "function"); err != nil {
 		return err
 	}
 
