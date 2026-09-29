@@ -175,6 +175,9 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if fn != wantFn {
 		t.Fatalf("function target = %q, want %q", fn, wantFn)
 	}
+	if got := commentTarget("procedure", "app", "my_proc(integer)", ""); got != `PROCEDURE "app"."my_proc"(integer)` {
+		t.Fatalf("procedure target = %q", got)
+	}
 	idx := commentTarget("index", "app", "users_email_idx", "")
 	wantIdx := `INDEX "app"."users_email_idx"`
 	if idx != wantIdx {
@@ -194,7 +197,7 @@ func TestFormatGrantTable(t *testing.T) {
 func TestFormatGrantColumn(t *testing.T) {
 	t.Parallel()
 	got := formatGrantColumn("SELECT, UPDATE", "app", "users", "email", "app_reader")
-	want := `GRANT SELECT, UPDATE ("email") ON TABLE "app"."users" TO "app_reader"`
+	want := `GRANT SELECT ("email"), UPDATE ("email") ON TABLE "app"."users" TO "app_reader"`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -207,10 +210,13 @@ func TestFormatGrantSequenceAndRoutine(t *testing.T) {
 	if seq != wantSeq {
 		t.Fatalf("sequence grant = %q, want %q", seq, wantSeq)
 	}
-	routine := formatGrantRoutine("app", "my_sum", "integer", "app_reader")
+	routine := formatGrantRoutine("app", "my_sum", "integer", "FUNCTION", "app_reader")
 	wantRoutine := `GRANT EXECUTE ON FUNCTION "app"."my_sum"(integer) TO "app_reader"`
 	if routine != wantRoutine {
 		t.Fatalf("routine grant = %q, want %q", routine, wantRoutine)
+	}
+	if got := formatGrantRoutine("app", "my_proc", "integer", "PROCEDURE", "PUBLIC"); got != `GRANT EXECUTE ON PROCEDURE "app"."my_proc"(integer) TO PUBLIC` {
+		t.Fatalf("procedure grant = %q", got)
 	}
 }
 

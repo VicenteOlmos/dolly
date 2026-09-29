@@ -659,7 +659,7 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		  AND c.relkind = 'S'
 		  AND n.nspname IN (%s)
 		UNION ALL
-		SELECT 'function', n.nspname,
+		SELECT CASE WHEN p.prokind = 'p' THEN 'procedure' ELSE 'function' END, n.nspname,
 		       p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
 		       '', d.description
 		FROM pg_description d
@@ -792,16 +792,22 @@ type columnGrantRow struct {
 	column     string
 	grantee    string
 	privileges []string
+	grantable  bool
 }
 
 func loadColumnGrants(ctx context.Context, q *sql.DB, schemas []string) ([]columnGrantRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT table_schema, table_name, column_name, grantee, privilege_type
-		FROM information_schema.column_privileges
-		WHERE table_schema IN (%s)
-		  AND grantee <> 'PUBLIC'
-		ORDER BY table_schema, table_name, column_name, grantee`, inClause)
+		SELECT n.nspname, c.relname, a.attname, COALESCE(r.rolname, 'PUBLIC'),
+		       priv.privilege_type, priv.is_grantable
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL aclexplode(a.attacl) priv
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE c.relkind IN ('r', 'p', 'v', 'm') AND a.attnum > 0 AND NOT a.attisdropped
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, a.attname, 4`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list column grants: %w", err)
@@ -810,15 +816,17 @@ func loadColumnGrants(ctx context.Context, q *sql.DB, schemas []string) ([]colum
 
 	type key struct {
 		schema, table, column, grantee string
+		grantable                      bool
 	}
 	byKey := make(map[key][]string)
 	var order []key
 	for rows.Next() {
 		var schema, table, column, grantee, priv string
-		if err := rows.Scan(&schema, &table, &column, &grantee, &priv); err != nil {
+		var grantable bool
+		if err := rows.Scan(&schema, &table, &column, &grantee, &priv, &grantable); err != nil {
 			return nil, fmt.Errorf("scan column grant: %w", err)
 		}
-		k := key{schema: schema, table: table, column: column, grantee: grantee}
+		k := key{schema: schema, table: table, column: column, grantee: grantee, grantable: grantable}
 		if _, ok := byKey[k]; !ok {
 			order = append(order, k)
 		}
@@ -835,6 +843,7 @@ func loadColumnGrants(ctx context.Context, q *sql.DB, schemas []string) ([]colum
 			column:     k.column,
 			grantee:    k.grantee,
 			privileges: byKey[k],
+			grantable:  k.grantable,
 		})
 	}
 	return out, nil
@@ -844,6 +853,9 @@ func applyColumnGrants(ctx context.Context, tgtDB execer, grants []columnGrantRo
 	for _, g := range grants {
 		privs := strings.Join(g.privileges, ", ")
 		stmt := formatGrantColumn(privs, g.schema, g.table, g.column, g.grantee)
+		if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("grant on column %s.%s.%s: %w", g.schema, g.table, g.column, err)
 		}
@@ -856,17 +868,19 @@ type sequenceGrantRow struct {
 	sequence   string
 	grantee    string
 	privileges []string
+	grantable  bool
 }
 
 func loadSequenceGrants(ctx context.Context, q *sql.DB, schemas []string) ([]sequenceGrantRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT object_schema, object_name, grantee, privilege_type
-		FROM information_schema.usage_privileges
-		WHERE object_type = 'SEQUENCE'
-		  AND object_schema IN (%s)
-		  AND grantee <> 'PUBLIC'
-		ORDER BY object_schema, object_name, grantee`, inClause)
+		SELECT n.nspname, c.relname, COALESCE(r.rolname, 'PUBLIC'), priv.privilege_type, priv.is_grantable
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL aclexplode(c.relacl) priv
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE c.relkind = 'S' AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, 3`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list sequence grants: %w", err)
@@ -875,15 +889,17 @@ func loadSequenceGrants(ctx context.Context, q *sql.DB, schemas []string) ([]seq
 
 	type key struct {
 		schema, sequence, grantee string
+		grantable                 bool
 	}
 	byKey := make(map[key][]string)
 	var order []key
 	for rows.Next() {
 		var schema, sequence, grantee, priv string
-		if err := rows.Scan(&schema, &sequence, &grantee, &priv); err != nil {
+		var grantable bool
+		if err := rows.Scan(&schema, &sequence, &grantee, &priv, &grantable); err != nil {
 			return nil, fmt.Errorf("scan sequence grant: %w", err)
 		}
-		k := key{schema: schema, sequence: sequence, grantee: grantee}
+		k := key{schema: schema, sequence: sequence, grantee: grantee, grantable: grantable}
 		if _, ok := byKey[k]; !ok {
 			order = append(order, k)
 		}
@@ -899,6 +915,7 @@ func loadSequenceGrants(ctx context.Context, q *sql.DB, schemas []string) ([]seq
 			sequence:   k.sequence,
 			grantee:    k.grantee,
 			privileges: byKey[k],
+			grantable:  k.grantable,
 		})
 	}
 	return out, nil
@@ -908,6 +925,9 @@ func applySequenceGrants(ctx context.Context, tgtDB execer, grants []sequenceGra
 	for _, g := range grants {
 		privs := strings.Join(g.privileges, ", ")
 		stmt := formatGrantSequence(privs, g.schema, g.sequence, g.grantee)
+		if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("grant on sequence %s.%s: %w", g.schema, g.sequence, err)
 		}
@@ -916,23 +936,31 @@ func applySequenceGrants(ctx context.Context, tgtDB execer, grants []sequenceGra
 }
 
 type routineGrantRow struct {
-	schema  string
-	name    string
-	args    string
-	grantee string
+	schema       string
+	name         string
+	args         string
+	kind         string
+	grantee      string
+	grantable    bool
+	revokePublic bool
 }
 
 func loadRoutineGrants(ctx context.Context, q *sql.DB, schemas []string) ([]routineGrantRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), r.rolname, priv.privilege_type
+		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid),
+		       CASE WHEN p.prokind = 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END,
+		       COALESCE(r.rolname, 'PUBLIC'), COALESCE(priv.privilege_type, ''),
+		       COALESCE(priv.is_grantable, false),
+		       NOT EXISTS (SELECT 1 FROM aclexplode(p.proacl) acl
+		                   WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')
 		FROM pg_proc p
 		JOIN pg_namespace n ON n.oid = p.pronamespace
-		CROSS JOIN LATERAL aclexplode(p.proacl) priv
-		JOIN pg_roles r ON r.oid = priv.grantee
+		LEFT JOIN LATERAL aclexplode(p.proacl) priv ON true
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
 		WHERE p.proacl IS NOT NULL
 		  AND n.nspname IN (%s)
-		ORDER BY n.nspname, p.proname, r.rolname`, inClause)
+		ORDER BY n.nspname, p.proname, 3, 5`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list routine grants: %w", err)
@@ -940,12 +968,19 @@ func loadRoutineGrants(ctx context.Context, q *sql.DB, schemas []string) ([]rout
 	defer rows.Close()
 
 	var out []routineGrantRow
+	seen := make(map[string]bool)
 	for rows.Next() {
 		var g routineGrantRow
 		var priv string
-		if err := rows.Scan(&g.schema, &g.name, &g.args, &g.grantee, &priv); err != nil {
+		var missingPublic bool
+		if err := rows.Scan(&g.schema, &g.name, &g.args, &g.kind, &g.grantee, &priv, &g.grantable, &missingPublic); err != nil {
 			return nil, fmt.Errorf("scan routine grant: %w", err)
 		}
+		key := g.schema + "\x00" + g.name + "\x00" + g.args
+		if missingPublic && !seen[key] {
+			out = append(out, routineGrantRow{schema: g.schema, name: g.name, args: g.args, kind: g.kind, revokePublic: true})
+		}
+		seen[key] = true
 		if !strings.EqualFold(priv, "EXECUTE") {
 			continue
 		}
@@ -956,9 +991,14 @@ func loadRoutineGrants(ctx context.Context, q *sql.DB, schemas []string) ([]rout
 
 func applyRoutineGrants(ctx context.Context, tgtDB execer, grants []routineGrantRow) error {
 	for _, g := range grants {
-		stmt := formatGrantRoutine(g.schema, g.name, g.args, g.grantee)
+		stmt := formatGrantRoutine(g.schema, g.name, g.args, g.kind, g.grantee)
+		if g.revokePublic {
+			stmt = fmt.Sprintf("REVOKE EXECUTE ON %s %s(%s) FROM PUBLIC", g.kind, quoteQualifiedType(g.schema, g.name), g.args)
+		} else if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("grant execute on function %s.%s: %w", g.schema, g.name, err)
+			return fmt.Errorf("replay execute privileges on %s.%s: %w", g.schema, g.name, err)
 		}
 	}
 	return nil

@@ -169,13 +169,14 @@ func commentTarget(kind, schema, object, column string) string {
 		return "MATERIALIZED VIEW " + quoteQualifiedTable(schema, object)
 	case "sequence":
 		return "SEQUENCE " + quoteQualifiedTable(schema, object)
-	case "function":
+	case "function", "procedure":
+		target := strings.ToUpper(kind)
 		fn, argList, ok := strings.Cut(object, "(")
 		if !ok || !strings.HasSuffix(argList, ")") {
-			return "FUNCTION " + quoteQualifiedTable(schema, object)
+			return target + " " + quoteQualifiedTable(schema, object)
 		}
 		argList = strings.TrimSuffix(argList, ")")
-		return "FUNCTION " + quoteQualifiedType(schema, fn) + "(" + argList + ")"
+		return target + " " + quoteQualifiedType(schema, fn) + "(" + argList + ")"
 	case "index":
 		return "INDEX " + quoteQualifiedTable(schema, object)
 	default:
@@ -195,10 +196,13 @@ func formatGrantTable(privileges, schema, table, grantee string) string {
 
 // formatGrantColumn emits GRANT privileges (column) ON TABLE.
 func formatGrantColumn(privileges, schema, table, column, grantee string) string {
+	parts := strings.Split(privileges, ", ")
+	for i, priv := range parts {
+		parts[i] = priv + " (" + quoteIdentifier(column) + ")"
+	}
 	return fmt.Sprintf(
-		"GRANT %s (%s) ON TABLE %s TO %s",
-		privileges,
-		quoteIdentifier(column),
+		"GRANT %s ON TABLE %s TO %s",
+		strings.Join(parts, ", "),
 		quoteQualifiedTable(schema, table),
 		quoteGrantee(grantee),
 	)
@@ -214,10 +218,11 @@ func formatGrantSequence(privileges, schema, sequence, grantee string) string {
 	)
 }
 
-// formatGrantRoutine emits GRANT EXECUTE ON FUNCTION.
-func formatGrantRoutine(schema, name, identityArgs, grantee string) string {
+// formatGrantRoutine emits GRANT EXECUTE ON FUNCTION or PROCEDURE.
+func formatGrantRoutine(schema, name, identityArgs, kind, grantee string) string {
 	return fmt.Sprintf(
-		"GRANT EXECUTE ON FUNCTION %s(%s) TO %s",
+		"GRANT EXECUTE ON %s %s(%s) TO %s",
+		kind,
 		quoteQualifiedType(schema, name),
 		identityArgs,
 		quoteGrantee(grantee),

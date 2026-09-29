@@ -119,9 +119,6 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
-	if err := applyDomainCheckConstraints(ctx, tgtDB, domainChecks); err != nil {
-		return err
-	}
 
 	composites, err := loadCompositeTypes(ctx, srcDB, schemas)
 	if err != nil {
@@ -159,6 +156,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applySQLDefs(ctx, tgtDB, aggregates, "aggregate"); err != nil {
+		return err
+	}
+	if err := applyDomainCheckConstraints(ctx, tgtDB, domainChecks); err != nil {
 		return err
 	}
 
@@ -219,9 +219,6 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
-	if err := applyStatistics(ctx, tgtDB, stats); err != nil {
-		return err
-	}
 
 	views, err := loadViews(ctx, srcDB, schemas)
 	if err != nil {
@@ -236,6 +233,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyViews(ctx, tgtDB, views); err != nil {
+		return err
+	}
+	if err := applyStatistics(ctx, tgtDB, stats); err != nil {
 		return err
 	}
 
