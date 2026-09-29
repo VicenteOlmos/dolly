@@ -57,3 +57,41 @@ func TestDumpOverridesFromDraftChunkSize(t *testing.T) {
 		t.Fatal("expected config chunk size when override unset")
 	}
 }
+
+func TestDumpOverridesFromDraftRetryMax(t *testing.T) {
+	overrides, err := dumpOverridesFromDraft(DumpDraft{RetryMaxText: "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.RetryMax != 3 {
+		t.Fatalf("RetryMax = %d, want 3", overrides.RetryMax)
+	}
+
+	overrides, err = dumpOverridesFromDraft(DumpDraft{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.RetryMax != 0 {
+		t.Fatalf("empty retry max = %d, want 0", overrides.RetryMax)
+	}
+
+	_, err = dumpOverridesFromDraft(DumpDraft{RetryMaxText: "-1"})
+	if err == nil {
+		t.Fatal("expected error for negative retry max")
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Dump.SlowRetryMax = 2
+	overrides, err = dumpOverridesFromDraft(DumpDraft{RetryMaxText: "5", SlowConnection: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := runopts.BuildDumpOptions(overrides, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	max, _ := dump.InspectSlowRetry(opts...)
+	if max != 5 {
+		t.Fatalf("retry max = %d, want 5", max)
+	}
+}

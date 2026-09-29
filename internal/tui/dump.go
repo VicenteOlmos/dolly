@@ -33,6 +33,7 @@ const (
 	modeFieldInclude
 	modeFieldExclude
 	modeFieldChunkSize
+	modeFieldRetryMax
 	modeFieldCount
 )
 
@@ -59,6 +60,7 @@ type dumpScreen struct {
 	includeCursor    int
 	excludeCursor    int
 	chunkSizeCursor  int
+	retryMaxCursor   int
 	restoreDir       string
 	restoreDirCursor int
 	restoreDirFocus  bool
@@ -321,7 +323,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	switch d.modeField {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
-		modeFieldInclude, modeFieldExclude, modeFieldChunkSize:
+		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax:
 		return true
 	default:
 		return false
@@ -339,6 +341,7 @@ func (d *dumpScreen) syncModeCursors() {
 	d.includeCursor = len(d.draft.IncludeTables)
 	d.excludeCursor = len(d.draft.ExcludeTables)
 	d.chunkSizeCursor = len(d.draft.ChunkSizeText)
+	d.retryMaxCursor = len(d.draft.RetryMaxText)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -375,6 +378,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.ExcludeTables, &d.excludeCursor)
 		case modeFieldChunkSize:
 			return handleFieldCursorKey(k, &d.draft.ChunkSizeText, &d.chunkSizeCursor)
+		case modeFieldRetryMax:
+			return handleFieldCursorKey(k, &d.draft.RetryMaxText, &d.retryMaxCursor)
 		}
 	}
 	switch d.modeField {
@@ -601,6 +606,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldInclude, "Include tables", d.modeFieldValue(d.draft.IncludeTables, d.includeCursor, modeFieldInclude)},
 		{modeFieldExclude, "Exclude tables", d.modeFieldValue(d.draft.ExcludeTables, d.excludeCursor, modeFieldExclude)},
 		{modeFieldChunkSize, "Chunk size", d.modeFieldValue(d.draft.ChunkSizeText, d.chunkSizeCursor, modeFieldChunkSize)},
+		{modeFieldRetryMax, "Retry max", d.modeFieldValue(d.draft.RetryMaxText, d.retryMaxCursor, modeFieldRetryMax)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))

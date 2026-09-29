@@ -124,6 +124,10 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	retryMax, err := parseOptionalNonNegative(draft.RetryMaxText, "retry max")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
 	return runopts.DumpOverrides{
 		NoTransaction:   draft.NoTransaction,
 		SlowConnection:  draft.SlowConnection,
@@ -138,6 +142,7 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		IncludeTables:   splitChunkTables(draft.IncludeTables),
 		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
 		ChunkSize:       chunkSize,
+		RetryMax:        retryMax,
 		Workers:         draft.Workers,
 		WorkersSet:      draft.WorkersSet,
 	}, nil
