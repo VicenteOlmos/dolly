@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -128,6 +129,10 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	retryBase, err := parseDraftRetryBase(draft.RetryBaseText)
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
 	return runopts.DumpOverrides{
 		NoTransaction:   draft.NoTransaction,
 		SlowConnection:  draft.SlowConnection,
@@ -143,9 +148,25 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		ExcludeTables:   splitChunkTables(draft.ExcludeTables),
 		ChunkSize:       chunkSize,
 		RetryMax:        retryMax,
+		RetryBase:       retryBase,
 		Workers:         draft.Workers,
 		WorkersSet:      draft.WorkersSet,
 	}, nil
+}
+
+func parseDraftRetryBase(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return "", fmt.Errorf("retry base must be a duration: %w", err)
+	}
+	if d <= 0 {
+		return "", fmt.Errorf("retry base must be positive")
+	}
+	return raw, nil
 }
 
 func parseOptionalPositiveInt(raw, label string) (int, error) {

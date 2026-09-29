@@ -139,6 +139,7 @@ type DumpDraft struct {
 	ExcludeTables       string
 	ChunkSizeText       string
 	RetryMaxText        string
+	RetryBaseText       string
 	Workers             int
 	WorkersSet          bool
 	SchemaPicker        SchemaPickerState

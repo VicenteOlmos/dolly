@@ -2,6 +2,7 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dump"
@@ -93,5 +94,50 @@ func TestDumpOverridesFromDraftRetryMax(t *testing.T) {
 	max, _ := dump.InspectSlowRetry(opts...)
 	if max != 5 {
 		t.Fatalf("retry max = %d, want 5", max)
+	}
+}
+
+func TestDumpOverridesFromDraftRetryBase(t *testing.T) {
+	overrides, err := dumpOverridesFromDraft(DumpDraft{RetryBaseText: "750ms"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.RetryBase != "750ms" {
+		t.Fatalf("RetryBase = %q, want 750ms", overrides.RetryBase)
+	}
+
+	overrides, err = dumpOverridesFromDraft(DumpDraft{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.RetryBase != "" {
+		t.Fatalf("empty retry base = %q, want empty", overrides.RetryBase)
+	}
+
+	_, err = dumpOverridesFromDraft(DumpDraft{RetryBaseText: "nope"})
+	if err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+	_, err = dumpOverridesFromDraft(DumpDraft{RetryBaseText: "0s"})
+	if err == nil {
+		t.Fatal("expected error for non-positive duration")
+	}
+
+	cfg := config.DefaultConfig()
+	overrides, err = dumpOverridesFromDraft(DumpDraft{
+		RetryMaxText:   "2",
+		RetryBaseText:  "1s",
+		SlowConnection: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := runopts.BuildDumpOptions(overrides, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	max, base := dump.InspectSlowRetry(opts...)
+	if max != 2 || base != time.Second {
+		t.Fatalf("retry = %d %v, want 2 1s", max, base)
 	}
 }

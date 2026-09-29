@@ -34,6 +34,7 @@ const (
 	modeFieldExclude
 	modeFieldChunkSize
 	modeFieldRetryMax
+	modeFieldRetryBase
 	modeFieldCount
 )
 
@@ -61,6 +62,7 @@ type dumpScreen struct {
 	excludeCursor    int
 	chunkSizeCursor  int
 	retryMaxCursor   int
+	retryBaseCursor  int
 	restoreDir       string
 	restoreDirCursor int
 	restoreDirFocus  bool
@@ -323,7 +325,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	switch d.modeField {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
-		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax:
+		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase:
 		return true
 	default:
 		return false
@@ -342,6 +344,7 @@ func (d *dumpScreen) syncModeCursors() {
 	d.excludeCursor = len(d.draft.ExcludeTables)
 	d.chunkSizeCursor = len(d.draft.ChunkSizeText)
 	d.retryMaxCursor = len(d.draft.RetryMaxText)
+	d.retryBaseCursor = len(d.draft.RetryBaseText)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -380,6 +383,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.ChunkSizeText, &d.chunkSizeCursor)
 		case modeFieldRetryMax:
 			return handleFieldCursorKey(k, &d.draft.RetryMaxText, &d.retryMaxCursor)
+		case modeFieldRetryBase:
+			return handleFieldCursorKey(k, &d.draft.RetryBaseText, &d.retryBaseCursor)
 		}
 	}
 	switch d.modeField {
@@ -607,6 +612,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldExclude, "Exclude tables", d.modeFieldValue(d.draft.ExcludeTables, d.excludeCursor, modeFieldExclude)},
 		{modeFieldChunkSize, "Chunk size", d.modeFieldValue(d.draft.ChunkSizeText, d.chunkSizeCursor, modeFieldChunkSize)},
 		{modeFieldRetryMax, "Retry max", d.modeFieldValue(d.draft.RetryMaxText, d.retryMaxCursor, modeFieldRetryMax)},
+		{modeFieldRetryBase, "Retry base", d.modeFieldValue(d.draft.RetryBaseText, d.retryBaseCursor, modeFieldRetryBase)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))
