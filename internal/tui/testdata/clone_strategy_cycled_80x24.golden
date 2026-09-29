@@ -11,8 +11,8 @@
 │   1 connect                ││ Strategy: ← template →                    │
 │   2 schema                 ││ Analyze: [ ]                              │
 │   3 dump                   ││ Privileges: [ ]                           │
-│ > 4 clone                  ││                                           │
-│   5 config                 ││                                           │
+│ > 4 clone                  ││ Replace: config                           │
+│   5 config                 ││ On conflict: config                       │
 │                            ││                                           │
 │                            ││                                           │
 │                            ││                                           │

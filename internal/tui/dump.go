@@ -11,6 +11,15 @@ import (
 const dumpLogMaxLines = 50
 
 const (
+	historyFocusList = iota
+	historyFocusPath
+	historyFocusConflict
+	historyFocusReplace
+	historyFocusTrust
+	historyFocusCount
+)
+
+const (
 	dumpSectionPath = iota
 	dumpSectionMode
 	dumpSectionPicker
@@ -32,6 +41,9 @@ const (
 	modeFieldMaxRowsPerTable
 	modeFieldInclude
 	modeFieldExclude
+	modeFieldChunkSize
+	modeFieldRetryMax
+	modeFieldRetryBase
 	modeFieldCount
 )
 
@@ -57,9 +69,13 @@ type dumpScreen struct {
 	rowsPerCursor    int
 	includeCursor    int
 	excludeCursor    int
+	chunkSizeCursor  int
+	retryMaxCursor   int
+	retryBaseCursor  int
 	restoreDir       string
 	restoreDirCursor int
 	restoreDirFocus  bool
+	historyFocus     int
 	logTailOffset    int
 	fileListOffset   int
 	spinnerFrame     *int
@@ -194,16 +210,50 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	if d.nav.InInside() && d.nav.Section == dumpSectionHistory {
+		if k.Code == tea.KeyTab {
+			if d.restoreDirFocus {
+				d.restoreDirFocus = false
+			}
+			d.historyFocus = (d.historyFocus + 1) % historyFocusCount
+			if d.historyFocus == historyFocusPath {
+				d.restoreDirFocus = true
+				d.restoreDirCursor = len(d.restoreDir)
+			}
+			return nil
+		}
 		if !d.restoreDirFocus && k.String() == "p" {
+			d.historyFocus = historyFocusPath
 			d.restoreDirFocus = true
 			return nil
 		}
 		if d.restoreDirFocus && handleFieldCursorKey(k, &d.restoreDir, &d.restoreDirCursor) {
 			return nil
 		}
-		if k.Code == tea.KeySpace && !d.restoreDirFocus {
-			d.trustedSchemaSQL = !d.trustedSchemaSQL
+		if d.restoreDirFocus && k.Code == tea.KeyEscape {
+			d.restoreDirFocus = false
 			return nil
+		}
+		if k.Code == tea.KeySpace && !d.restoreDirFocus {
+			switch d.historyFocus {
+			case historyFocusConflict:
+				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
+				return nil
+			case historyFocusReplace:
+				d.toggleRestoreReplace()
+				return nil
+			case historyFocusTrust:
+				d.trustedSchemaSQL = !d.trustedSchemaSQL
+				return nil
+			case historyFocusList:
+				d.trustedSchemaSQL = !d.trustedSchemaSQL
+				return nil
+			}
+		}
+		if k.Code == tea.KeyEnter && !d.restoreDirFocus {
+			if d.historyFocus == historyFocusConflict {
+				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
+				return nil
+			}
 		}
 		switch k.String() {
 		case "r":
@@ -262,7 +312,11 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 		case dumpSectionPicker:
 			d.draft.SchemaPicker.MoveCursor(1)
 		case dumpSectionHistory:
-			d.draft.History.MoveCursor(1)
+			if d.historyFocus == historyFocusList && !d.restoreDirFocus {
+				d.draft.History.MoveCursor(1)
+			} else {
+				d.moveHistoryFocus(1)
+			}
 		case dumpSectionLog:
 			d.scrollLog(-1)
 		}
@@ -274,7 +328,11 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 		case dumpSectionPicker:
 			d.draft.SchemaPicker.MoveCursor(-1)
 		case dumpSectionHistory:
-			d.draft.History.MoveCursor(-1)
+			if d.historyFocus == historyFocusList && !d.restoreDirFocus {
+				d.draft.History.MoveCursor(-1)
+			} else {
+				d.moveHistoryFocus(-1)
+			}
 		case dumpSectionLog:
 			d.scrollLog(1)
 		}
@@ -319,7 +377,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	switch d.modeField {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
-		modeFieldInclude, modeFieldExclude:
+		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase:
 		return true
 	default:
 		return false
@@ -336,6 +394,9 @@ func (d *dumpScreen) syncModeCursors() {
 	d.rowsPerCursor = len(d.draft.MaxRowsPerTableText)
 	d.includeCursor = len(d.draft.IncludeTables)
 	d.excludeCursor = len(d.draft.ExcludeTables)
+	d.chunkSizeCursor = len(d.draft.ChunkSizeText)
+	d.retryMaxCursor = len(d.draft.RetryMaxText)
+	d.retryBaseCursor = len(d.draft.RetryBaseText)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -370,6 +431,12 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.IncludeTables, &d.includeCursor)
 		case modeFieldExclude:
 			return handleFieldCursorKey(k, &d.draft.ExcludeTables, &d.excludeCursor)
+		case modeFieldChunkSize:
+			return handleFieldCursorKey(k, &d.draft.ChunkSizeText, &d.chunkSizeCursor)
+		case modeFieldRetryMax:
+			return handleFieldCursorKey(k, &d.draft.RetryMaxText, &d.retryMaxCursor)
+		case modeFieldRetryBase:
+			return handleFieldCursorKey(k, &d.draft.RetryBaseText, &d.retryBaseCursor)
 		}
 	}
 	switch d.modeField {
@@ -595,6 +662,9 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldMaxRowsPerTable, "Max rows/table", d.modeFieldValue(d.draft.MaxRowsPerTableText, d.rowsPerCursor, modeFieldMaxRowsPerTable)},
 		{modeFieldInclude, "Include tables", d.modeFieldValue(d.draft.IncludeTables, d.includeCursor, modeFieldInclude)},
 		{modeFieldExclude, "Exclude tables", d.modeFieldValue(d.draft.ExcludeTables, d.excludeCursor, modeFieldExclude)},
+		{modeFieldChunkSize, "Chunk size", d.modeFieldValue(d.draft.ChunkSizeText, d.chunkSizeCursor, modeFieldChunkSize)},
+		{modeFieldRetryMax, "Retry max", d.modeFieldValue(d.draft.RetryMaxText, d.retryMaxCursor, modeFieldRetryMax)},
+		{modeFieldRetryBase, "Retry base", d.modeFieldValue(d.draft.RetryBaseText, d.retryBaseCursor, modeFieldRetryBase)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))
@@ -622,24 +692,96 @@ func (d *dumpScreen) modeFieldValue(value string, cursor, field int) string {
 	return renderEditableField(value, cursor, false, true)
 }
 
+func cycleRestoreOnConflict(current string) string {
+	switch current {
+	case "", "error":
+		return "skip"
+	case "skip":
+		return "upsert"
+	default:
+		return "error"
+	}
+}
+
+func (d *dumpScreen) toggleRestoreReplace() {
+	if !d.draft.RestoreReplaceSet {
+		d.draft.RestoreReplace = !d.draft.RestoreReplace
+		d.draft.RestoreReplaceSet = true
+		return
+	}
+	d.draft.RestoreReplace = !d.draft.RestoreReplace
+}
+
+func (d *dumpScreen) moveHistoryFocus(delta int) {
+	if d.restoreDirFocus {
+		return
+	}
+	d.historyFocus += delta
+	if d.historyFocus < historyFocusList {
+		d.historyFocus = historyFocusList
+	}
+	if d.historyFocus >= historyFocusCount {
+		d.historyFocus = historyFocusCount - 1
+	}
+}
+
+func (d *dumpScreen) restoreConflictLabel() string {
+	if d.draft.RestoreOnConflict == "" {
+		return "config"
+	}
+	return d.draft.RestoreOnConflict
+}
+
+func (d *dumpScreen) restoreReplaceLabel() string {
+	if !d.draft.RestoreReplaceSet {
+		return "config"
+	}
+	if d.draft.RestoreReplace {
+		return "on"
+	}
+	return "off"
+}
+
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
-	hint := "(p path · ↑/↓ move · Space trust schema.sql · Enter/r restore · Esc back)"
+	hint := "(Tab field · p path · ↑/↓ · Space edit · Enter restore · Esc back)"
 	lines = append(lines, label+" "+StyleMuted.Render(hint))
 	pathLabel := "Restore directory:"
 	pathVal := renderEditableField(d.restoreDir, d.restoreDirCursor, false, d.restoreDirFocus)
 	if pathVal == "" {
 		pathVal = StyleMuted.Render("(empty — use the selected history dump)")
 	}
-	lines = append(lines, StyleAccent.Render(pathLabel)+" "+pathVal)
+	lines = append(lines, d.historyControlLine(historyFocusPath, pathLabel, pathVal))
+	conflictVal := d.restoreConflictLabel()
+	lines = append(lines, d.historyControlLine(historyFocusConflict, "On conflict:", conflictVal))
+	replaceVal := d.restoreReplaceLabel()
+	lines = append(lines, d.historyControlLine(historyFocusReplace, "Replace:", replaceVal))
 	trusted := "[ ]"
 	if d.trustedSchemaSQL {
 		trusted = "[x]"
 	}
-	lines = append(lines, StyleMuted.Render(trusted+" Trust schema.sql for this restore"))
-	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-1)...)
+	lines = append(lines, d.historyControlLine(historyFocusTrust, "", trusted+" Trust schema.sql for this restore"))
+	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-5)...)
 	return lines
+}
+
+func (d *dumpScreen) historyControlLine(focus int, label, value string) string {
+	prefix := "  "
+	if d.historyFocus == focus && (focus != historyFocusPath || d.restoreDirFocus) {
+		prefix = "> "
+	}
+	if focus == historyFocusPath && d.restoreDirFocus {
+		prefix = "> "
+	}
+	line := prefix
+	if label != "" {
+		line += StyleAccent.Render(label) + " "
+	}
+	if value == "" {
+		value = StyleMuted.Render("(empty)")
+	}
+	return line + value
 }
 
 func (d *dumpScreen) logSectionLines(height, headerUsed int) []string {

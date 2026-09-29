@@ -38,12 +38,27 @@ type RestoreRunner interface {
 
 type productionRestoreRunner struct{}
 
+// restoreHistoryOverrides carries optional TUI history restore settings for one run.
+type restoreHistoryOverrides struct {
+	OnConflict string
+	Replace    bool
+	ReplaceSet bool
+}
+
 func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, onProgress func(restore.ProgressEvent)) error {
+	return runProductionRestoreHistory(ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress, restoreHistoryOverrides{})
+}
+
+func runProductionRestoreHistory(ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, onProgress func(restore.ProgressEvent), history restoreHistoryOverrides) error {
 	cfg, err := config.LoadConfig(config.ResolveConfigPath())
 	if err != nil {
 		return err
 	}
-	opts, err := runopts.RestoreHistoryOptions(cfg, inputDir, schemas, trustedSchemaSQL, dsn)
+	opts, err := runopts.RestoreHistoryOptionsWithOverrides(cfg, inputDir, schemas, trustedSchemaSQL, dsn, runopts.RestoreHistoryUserOverrides{
+		OnConflict: history.OnConflict,
+		Replace:    history.Replace,
+		ReplaceSet: history.ReplaceSet,
+	})
 	if err != nil {
 		return err
 	}
@@ -51,6 +66,13 @@ func (productionRestoreRunner) Run(ctx context.Context, db *sql.DB, inputDir str
 		opts = append(opts, restore.WithProgress(onProgress))
 	}
 	return restore.Restore(ctx, db, inputDir, opts...)
+}
+
+func invokeRestoreRunner(runner RestoreRunner, ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, onProgress func(restore.ProgressEvent), history restoreHistoryOverrides) error {
+	if _, ok := runner.(productionRestoreRunner); ok {
+		return runProductionRestoreHistory(ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress, history)
+	}
+	return runner.Run(ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress)
 }
 
 func formatRestoreProgress(ev restore.ProgressEvent) string {
@@ -64,7 +86,7 @@ func formatRestoreProgress(ev restore.ProgressEvent) string {
 	}
 }
 
-func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
+func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, history restoreHistoryOverrides) (tea.Cmd, <-chan tea.Msg, context.CancelFunc) {
 	ch := make(chan tea.Msg, 32)
 	ctx, cancel := context.WithCancel(ctx)
 	go func() {
@@ -80,7 +102,7 @@ func startRestoreCmd(runner RestoreRunner, ctx context.Context, db *sql.DB, inpu
 			}
 			sendProgress(ctx, ch, restoreProgressMsg{line: line, ev: localEv})
 		}
-		err := runner.Run(ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress)
+		err := invokeRestoreRunner(runner, ctx, db, inputDir, schemas, trustedSchemaSQL, dsn, onProgress, history)
 		deliverResult(ctx, ch, restoreResultMsg{err: err})
 	}()
 	return waitRestoreCmd(ch), ch, cancel

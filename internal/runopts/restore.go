@@ -81,36 +81,65 @@ func ValidateParallelRestoreCLI(o RestoreOverrides, workers int, policy restore.
 }
 
 func validateParallelRestoreConfig(cfg *config.Config, workers int, trustedSchemaSQL bool) error {
+	replace := cfg.Restore.Replace
+	onConflict := cfg.Restore.RestoreOnConflict
+	if onConflict == "" {
+		onConflict = "error"
+	}
+	return validateParallelRestoreConfigEffective(cfg, workers, trustedSchemaSQL, replace, onConflict)
+}
+
+func validateParallelRestoreConfigEffective(cfg *config.Config, workers int, trustedSchemaSQL bool, replace bool, onConflict string) error {
 	if workers <= 1 {
 		return nil
 	}
 	if trustedSchemaSQL {
 		return errors.New("parallel restore is incompatible with trusted schema.sql")
 	}
-	if cfg.Restore.Replace {
+	if replace {
 		return errors.New("parallel restore is incompatible with restore.replace")
 	}
-	policy, err := restore.ParseConflictPolicy(cfg.Restore.RestoreOnConflict)
+	policy, err := restore.ParseConflictPolicy(onConflict)
 	if err != nil {
 		return err
 	}
 	if policy != restore.ConflictError {
-		return fmt.Errorf("parallel restore requires restore.on_conflict error, got %q", cfg.Restore.RestoreOnConflict)
+		return fmt.Errorf("parallel restore requires restore.on_conflict error, got %q", onConflict)
 	}
 	return nil
 }
 
+// RestoreHistoryUserOverrides carries optional per-run overrides for TUI history restore.
+// Zero value uses restore.* config for all fields.
+type RestoreHistoryUserOverrides struct {
+	OnConflict string
+	Replace    bool
+	ReplaceSet bool
+}
+
 // RestoreHistoryOptions builds restore options for TUI history restore from restore.* config keys.
 func RestoreHistoryOptions(cfg *config.Config, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string) ([]restore.Option, error) {
+	return RestoreHistoryOptionsWithOverrides(cfg, inputDir, schemas, trustedSchemaSQL, dsn, RestoreHistoryUserOverrides{})
+}
+
+// RestoreHistoryOptionsWithOverrides merges optional TUI overrides before building restore options.
+func RestoreHistoryOptionsWithOverrides(cfg *config.Config, inputDir string, schemas []string, trustedSchemaSQL bool, dsn string, o RestoreHistoryUserOverrides) ([]restore.Option, error) {
 	onConflict := cfg.Restore.RestoreOnConflict
 	if onConflict == "" {
 		onConflict = "error"
+	}
+	if o.OnConflict != "" {
+		onConflict = o.OnConflict
 	}
 	policy, err := restore.ParseConflictPolicy(onConflict)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Restore.Replace && policy != restore.ConflictError {
+	replace := cfg.Restore.Replace
+	if o.ReplaceSet {
+		replace = o.Replace
+	}
+	if replace && policy != restore.ConflictError {
 		return nil, errors.New("restore.replace cannot be combined with restore.on_conflict other than error")
 	}
 
@@ -118,7 +147,7 @@ func RestoreHistoryOptions(cfg *config.Config, inputDir string, schemas []string
 	if err := ValidateRestoreWorkers(workers); err != nil {
 		return nil, err
 	}
-	if err := validateParallelRestoreConfig(cfg, workers, trustedSchemaSQL); err != nil {
+	if err := validateParallelRestoreConfigEffective(cfg, workers, trustedSchemaSQL, replace, onConflict); err != nil {
 		return nil, err
 	}
 	partialStatePath := ResolveRestorePartialStatePath(RestoreOverrides{}, cfg, inputDir)
@@ -129,7 +158,7 @@ func RestoreHistoryOptions(cfg *config.Config, inputDir string, schemas []string
 	}
 
 	var opts []restore.Option
-	if cfg.Restore.Replace {
+	if replace {
 		opts = append(opts, restore.WithReplace())
 	} else {
 		opts = append(opts, restore.WithConflictPolicy(policy))

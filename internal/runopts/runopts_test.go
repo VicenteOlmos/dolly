@@ -80,3 +80,48 @@ func TestRestoreHistoryOptionsUseRestoreSection(t *testing.T) {
 		t.Fatal("clone settings must not enable parallel restore workers")
 	}
 }
+
+func TestRestoreHistoryOptionsWithOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultConfig()
+
+	opts, err := RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		OnConflict: "skip",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restore.InspectConflictPolicy(opts...) != restore.ConflictSkip {
+		t.Fatalf("policy = %v, want skip", restore.InspectConflictPolicy(opts...))
+	}
+
+	opts, err = RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		OnConflict: "upsert",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restore.InspectConflictPolicy(opts...) != restore.ConflictUpsert {
+		t.Fatalf("policy = %v, want upsert", restore.InspectConflictPolicy(opts...))
+	}
+
+	opts, err = RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		Replace:    true,
+		ReplaceSet: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restore.InspectReplace(opts...) {
+		t.Fatal("expected replace from overrides")
+	}
+
+	_, err = RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		OnConflict: "skip",
+		Replace:    true,
+		ReplaceSet: true,
+	})
+	if err == nil {
+		t.Fatal("expected replace with skip conflict to fail")
+	}
+}

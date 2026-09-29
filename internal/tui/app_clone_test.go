@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/clonework"
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
@@ -515,5 +516,36 @@ func TestAppCloneStrategyCycleRefreshesTargetBeforeStart(t *testing.T) {
 	want := app.conn.DSN()
 	if runner.lastDraft.TargetDSN != want {
 		t.Fatalf("runner TargetDSN = %q, want refreshed %q", runner.lastDraft.TargetDSN, want)
+	}
+}
+
+func TestProductionCloneRunnerPassesReplaceAndOnConflict(t *testing.T) {
+	var gotReplaceSet bool
+	var gotReplace bool
+	var gotOnConflict string
+	orig := cloneworkRun
+	cloneworkRun = func(_ context.Context, p clonework.Params, _ func(clonework.ProgressEvent)) error {
+		gotReplaceSet = p.ReplaceSet
+		gotReplace = p.Replace
+		gotOnConflict = p.OnConflict
+		return nil
+	}
+	defer func() { cloneworkRun = orig }()
+
+	draft := CloneDraft{
+		SourceDSN:  "postgres://u:p@h/db",
+		CloneName:  "db_dolly_1",
+		TargetDSN:  "postgres://u:p@h/target",
+		Strategy:   "schema-replay",
+		Replace:    true,
+		ReplaceSet: true,
+		OnConflict: "skip",
+	}
+	runner := productionCloneRunner{}
+	if err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !gotReplaceSet || !gotReplace || gotOnConflict != "skip" {
+		t.Fatalf("params = replaceSet %v replace %v onConflict %q", gotReplaceSet, gotReplace, gotOnConflict)
 	}
 }

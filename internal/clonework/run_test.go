@@ -11,6 +11,7 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/clone"
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/restore"
 )
 
 func TestRunRequiresSchemas(t *testing.T) {
@@ -362,6 +363,107 @@ func TestRunRejectsInvalidPermissionCacheTTLBeforeClone(t *testing.T) {
 	}
 	if called {
 		t.Fatal("clone runner should not run when TTL is invalid")
+	}
+}
+
+func TestRunCloneRestoreReplaceAndOnConflictOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgJSON := `{"clone":{"replace":false,"restore_on_conflict":"error"}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	orig := runInProcess
+	defer func() { runInProcess = orig }()
+
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error {
+		got = opts
+		return nil
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN:  "postgres://u:p@h/src",
+		Schemas:    []string{"public"},
+		OnConflict: "upsert",
+		Replace:    true,
+		ReplaceSet: true,
+	}, nil); err == nil {
+		t.Fatal("expected replace with upsert to fail")
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN:  "postgres://u:p@h/src",
+		Schemas:    []string{"public"},
+		OnConflict: "skip",
+		ReplaceSet: false,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if restore.InspectConflictPolicy(got.RestoreOpts...) != restore.ConflictSkip {
+		t.Fatalf("policy = %v, want skip", restore.InspectConflictPolicy(got.RestoreOpts...))
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN:  "postgres://u:p@h/src",
+		Schemas:    []string{"public"},
+		Replace:    true,
+		ReplaceSet: true,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !restore.InspectReplace(got.RestoreOpts...) {
+		t.Fatal("expected replace in restore opts")
+	}
+}
+
+func TestRunRejectsUnsupportedClonePolicies(t *testing.T) {
+	called := false
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	runInProcess = func(_ context.Context, _ clone.Options, _ func(clone.ProgressEvent)) error {
+		called = true
+		return nil
+	}
+	for _, strategy := range []string{"template", "logical-stream", "physical-backup"} {
+		for _, tc := range []struct {
+			name   string
+			params Params
+		}{
+			{"replace", Params{Replace: true, ReplaceSet: true}},
+			{"skip", Params{OnConflict: "skip"}},
+			{"upsert", Params{OnConflict: "upsert"}},
+		} {
+			t.Run(strategy+"/"+tc.name, func(t *testing.T) {
+				p := tc.params
+				p.SourceDSN = "postgres://u:p@h/src"
+				p.Schemas = []string{"public"}
+				p.Strategy = strategy
+				err := Run(context.Background(), p, nil)
+				if err == nil || !strings.Contains(err.Error(), "does not support") {
+					t.Fatalf("error = %v, want unsupported policy", err)
+				}
+				if called {
+					t.Fatal("clone runner called with unsupported policy")
+				}
+			})
+		}
+	}
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src", Schemas: []string{"public"}, Strategy: "template",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("default policies should allow template clone")
 	}
 }
 

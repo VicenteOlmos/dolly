@@ -18,6 +18,8 @@
                               │ replay                │
                               │ Analyze: [✓]          │
                               │ Privileges: [ ]       │
+                              │ Replace: config       │
+                              │ On conflict: config   │
                               ╰───────────────────────╯
 U@U dump · restore · clone · tui · history restore
 ↑↓ section · Enter open · g/F5 clone · ?/F1

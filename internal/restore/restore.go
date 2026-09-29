@@ -153,6 +153,24 @@ func InspectWorkers(opts ...Option) int {
 	return c.workers
 }
 
+// InspectConflictPolicy returns the conflict policy captured from opts.
+func InspectConflictPolicy(opts ...Option) ConflictPolicy {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.policy
+}
+
+// InspectReplace reports whether opts enable truncate-before-insert.
+func InspectReplace(opts ...Option) bool {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.replace
+}
+
 // InspectPartialStateManifest returns the partial-state manifest path from opts.
 func InspectPartialStateManifest(opts ...Option) string {
 	var c config
