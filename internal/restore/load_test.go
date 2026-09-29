@@ -119,3 +119,30 @@ func TestLoadTableValidateTableNameRejectsEmpty(t *testing.T) {
 		t.Fatalf("error = %v, want validate table error", err)
 	}
 }
+
+func TestWritableTableRetainsAlwaysIdentity(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "invoices",
+		Columns: []db.Column{
+			{Name: "id", Identity: "ALWAYS", PrimaryKey: true},
+			{Name: "total", Generated: true},
+			{Name: "note"},
+		},
+	}
+	got, err := writableTable(table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Columns) != 2 || got.Columns[0].Name != "id" || got.Columns[0].Identity != "ALWAYS" {
+		t.Fatalf("writable columns = %+v", got.Columns)
+	}
+	// COPY uses the explicit column list above; INSERT fallback uses OVERRIDING SYSTEM VALUE.
+	q, _, err := buildInsert(got, ConflictError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, "OVERRIDING SYSTEM VALUE") {
+		t.Fatalf("insert fallback query = %s", q)
+	}
+}

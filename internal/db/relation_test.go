@@ -38,6 +38,9 @@ func TestAnnotatePartitionsAndGeneratedColumns(t *testing.T) {
 	mock.ExpectQuery(`is_generated = 'ALWAYS'`).
 		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
 			AddRow("public", "events_2024", "total"))
+	mock.ExpectQuery(`is_identity = 'YES'`).
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "identity_generation"}).
+			AddRow("public", "events_2024", "id", "ALWAYS"))
 
 	got, err := LoadPostgresSchemas(context.Background(), conn, []string{"public"})
 	if err != nil {
@@ -52,6 +55,9 @@ func TestAnnotatePartitionsAndGeneratedColumns(t *testing.T) {
 	}
 	if child.PartitionOf != "public.events" || child.PartitionBound != "FOR VALUES FROM (1) TO (2)" {
 		t.Fatalf("child partition = %+v", child)
+	}
+	if child.Columns[0].Identity != "ALWAYS" || child.Columns[0].Generated {
+		t.Fatalf("identity column = %+v", child.Columns[0])
 	}
 	if child.Columns[1].Name != "total" || !child.Columns[1].Generated {
 		t.Fatalf("generated column = %+v", child.Columns)

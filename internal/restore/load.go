@@ -122,6 +122,8 @@ func copyFromPGX(ctx context.Context, conn *pgx.Conn, table db.Table, path strin
 	for i, c := range table.Columns {
 		colNames[i] = c.Name
 	}
+	// PostgreSQL COPY with an explicit column list accepts dumped identity values;
+	// OVERRIDING SYSTEM VALUE applies only to the INSERT fallback (buildInsert).
 
 	src, err := newNDJSONCopySource(path, table, validNames)
 	if err != nil {
