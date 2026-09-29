@@ -169,6 +169,15 @@ func commentTarget(kind, schema, object, column string) string {
 		return "MATERIALIZED VIEW " + quoteQualifiedTable(schema, object)
 	case "sequence":
 		return "SEQUENCE " + quoteQualifiedTable(schema, object)
+	case "function":
+		fn, argList, ok := strings.Cut(object, "(")
+		if !ok || !strings.HasSuffix(argList, ")") {
+			return "FUNCTION " + quoteQualifiedTable(schema, object)
+		}
+		argList = strings.TrimSuffix(argList, ")")
+		return "FUNCTION " + quoteQualifiedType(schema, fn) + "(" + argList + ")"
+	case "index":
+		return "INDEX " + quoteQualifiedTable(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}

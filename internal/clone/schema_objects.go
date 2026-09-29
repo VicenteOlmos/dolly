@@ -658,7 +658,24 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		WHERE d.classoid = 'pg_class'::regclass AND d.objsubid = 0
 		  AND c.relkind = 'S'
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'function', n.nspname,
+		       p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
+		       '', d.description
+		FROM pg_description d
+		INNER JOIN pg_proc p ON p.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE d.classoid = 'pg_proc'::regclass AND d.objsubid = 0
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'index', n.nspname, c.relname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_class c ON c.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE d.classoid = 'pg_class'::regclass AND d.objsubid = 0
+		  AND c.relkind = 'i'
+		  AND n.nspname IN (%s)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)

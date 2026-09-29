@@ -168,6 +168,20 @@ func TestFormatCommentOn(t *testing.T) {
 	}
 }
 
+func TestCommentTargetFunctionAndIndex(t *testing.T) {
+	t.Parallel()
+	fn := commentTarget("function", "app", "my_sum(integer)", "")
+	wantFn := `FUNCTION "app"."my_sum"(integer)`
+	if fn != wantFn {
+		t.Fatalf("function target = %q, want %q", fn, wantFn)
+	}
+	idx := commentTarget("index", "app", "users_email_idx", "")
+	wantIdx := `INDEX "app"."users_email_idx"`
+	if idx != wantIdx {
+		t.Fatalf("index target = %q, want %q", idx, wantIdx)
+	}
+}
+
 func TestFormatGrantTable(t *testing.T) {
 	t.Parallel()
 	got := formatGrantTable("SELECT, INSERT", "app", "users", "app_reader")
