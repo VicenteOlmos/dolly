@@ -11,6 +11,7 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/clone"
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
+	"github.com/VicenteOlmos/dolly/internal/restore"
 )
 
 func TestRunRequiresSchemas(t *testing.T) {
@@ -362,6 +363,65 @@ func TestRunRejectsInvalidPermissionCacheTTLBeforeClone(t *testing.T) {
 	}
 	if called {
 		t.Fatal("clone runner should not run when TTL is invalid")
+	}
+}
+
+func TestRunCloneRestoreReplaceAndOnConflictOverrides(t *testing.T) {
+	dir := t.TempDir()
+	cfgJSON := `{"clone":{"replace":false,"restore_on_conflict":"error"}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	orig := runInProcess
+	defer func() { runInProcess = orig }()
+
+	var got clone.Options
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error {
+		got = opts
+		return nil
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN:  "postgres://u:p@h/src",
+		Schemas:    []string{"public"},
+		OnConflict: "upsert",
+		Replace:    true,
+		ReplaceSet: true,
+	}, nil); err == nil {
+		t.Fatal("expected replace with upsert to fail")
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN:  "postgres://u:p@h/src",
+		Schemas:    []string{"public"},
+		OnConflict: "skip",
+		ReplaceSet: false,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if restore.InspectConflictPolicy(got.RestoreOpts...) != restore.ConflictSkip {
+		t.Fatalf("policy = %v, want skip", restore.InspectConflictPolicy(got.RestoreOpts...))
+	}
+
+	if err := Run(context.Background(), Params{
+		SourceDSN:  "postgres://u:p@h/src",
+		Schemas:    []string{"public"},
+		Replace:    true,
+		ReplaceSet: true,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !restore.InspectReplace(got.RestoreOpts...) {
+		t.Fatal("expected replace in restore opts")
 	}
 }
 

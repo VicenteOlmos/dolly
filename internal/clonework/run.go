@@ -4,6 +4,7 @@ package clonework
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -26,6 +27,9 @@ type Params struct {
 	Strategy          string
 	Schemas           []string
 	IncludePrivileges bool
+	Replace           bool
+	ReplaceSet        bool
+	OnConflict        string
 }
 
 // Run executes clone through the controlled clone runner using selected schemas.
@@ -105,14 +109,28 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	dumpOpts = append(dumpOpts, dump.WithSchemas(p.Schemas))
 	dumpOpts = append(dumpOpts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
 	restoreOpts = append(restoreOpts, restore.WithSchemas(p.Schemas))
-	if cfg.Clone.Replace {
-		restoreOpts = append(restoreOpts, restore.WithReplace())
+
+	replace := cfg.Clone.Replace
+	if p.ReplaceSet {
+		replace = p.Replace
 	}
-	if cfg.Clone.RestoreOnConflict != "" && cfg.Clone.RestoreOnConflict != "error" {
-		policy, err := restore.ParseConflictPolicy(cfg.Clone.RestoreOnConflict)
-		if err != nil {
-			return fmt.Errorf("invalid restore_on_conflict %q: %w", cfg.Clone.RestoreOnConflict, err)
-		}
+	onConflict := cfg.Clone.RestoreOnConflict
+	if onConflict == "" {
+		onConflict = "error"
+	}
+	if p.OnConflict != "" {
+		onConflict = p.OnConflict
+	}
+	policy, err := restore.ParseConflictPolicy(onConflict)
+	if err != nil {
+		return fmt.Errorf("invalid restore_on_conflict %q: %w", onConflict, err)
+	}
+	if replace && policy != restore.ConflictError {
+		return errors.New("restore.replace cannot be combined with restore.on_conflict other than error")
+	}
+	if replace {
+		restoreOpts = append(restoreOpts, restore.WithReplace())
+	} else if policy != restore.ConflictError {
 		restoreOpts = append(restoreOpts, restore.WithConflictPolicy(policy))
 	}
 

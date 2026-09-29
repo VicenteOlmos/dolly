@@ -205,6 +205,9 @@ type CloneDraft struct {
 	AnalyzeEnabled    bool
 	AnalyzeState      AnalyzeState
 	IncludePrivileges bool
+	Replace           bool
+	ReplaceSet        bool
+	OnConflict        string
 }
 
 // TargetSource selects where the clone target DSN comes from.

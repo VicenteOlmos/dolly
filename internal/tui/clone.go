@@ -16,6 +16,8 @@ const (
 	cloneFieldStrategy
 	cloneFieldAnalyze
 	cloneFieldPrivileges
+	cloneFieldReplace
+	cloneFieldOnConflict
 	cloneFormFieldCount
 )
 
@@ -345,6 +347,14 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 			c.draft.IncludePrivileges = !c.draft.IncludePrivileges
 			return nil
 		}
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldReplace {
+			c.toggleCloneReplace()
+			return nil
+		}
+		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldOnConflict {
+			c.draft.OnConflict = cycleCloneOnConflict(c.draft.OnConflict)
+			return nil
+		}
 	}
 	if c.sectionActive(cloneSectionPicker) {
 		if c.draft.SchemaPicker.HandleActionKey(k) {
@@ -482,7 +492,78 @@ func (c *cloneScreen) formSection(hint string, width int) []string {
 	lines = append(lines, c.renderStrategyField(width))
 	lines = append(lines, c.renderAnalyzeLine())
 	lines = append(lines, c.renderPrivilegesLine())
+	lines = append(lines, c.renderReplaceLine())
+	lines = append(lines, c.renderOnConflictLine())
 	return lines
+}
+
+func cycleCloneOnConflict(current string) string {
+	switch current {
+	case "", "error":
+		return "skip"
+	case "skip":
+		return "upsert"
+	default:
+		return "error"
+	}
+}
+
+func (c *cloneScreen) toggleCloneReplace() {
+	if !c.draft.ReplaceSet {
+		c.draft.Replace = !c.draft.Replace
+		c.draft.ReplaceSet = true
+		return
+	}
+	c.draft.Replace = !c.draft.Replace
+}
+
+func (c *cloneScreen) cloneReplaceLabel() string {
+	if !c.draft.ReplaceSet {
+		return "config"
+	}
+	if c.draft.Replace {
+		return "on"
+	}
+	return "off"
+}
+
+func (c *cloneScreen) cloneOnConflictLabel() string {
+	if c.draft.OnConflict == "" {
+		return "config"
+	}
+	return c.draft.OnConflict
+}
+
+func (c *cloneScreen) renderReplaceLine() string {
+	focused := c.sectionActive(cloneSectionForm) && c.formField == cloneFieldReplace
+	if !c.draft.ReplaceSet {
+		val := StyleMuted.Render("config")
+		if focused {
+			val = StyleAccent.Render("config")
+		}
+		return StyleMuted.Render("Replace:") + " " + val
+	}
+	toggle := "[ ]"
+	if c.draft.Replace {
+		toggle = "[✓]"
+	}
+	if focused {
+		toggle = StyleAccent.Render(toggle)
+	} else {
+		toggle = StyleBase.Render(toggle)
+	}
+	return StyleMuted.Render("Replace:") + " " + toggle
+}
+
+func (c *cloneScreen) renderOnConflictLine() string {
+	focused := c.sectionActive(cloneSectionForm) && c.formField == cloneFieldOnConflict
+	val := c.cloneOnConflictLabel()
+	if focused {
+		val = StyleAccent.Render(val)
+	} else {
+		val = StyleBase.Render(val)
+	}
+	return StyleMuted.Render("On conflict:") + " " + val
 }
 
 // renderTargetField renders the Target DSN field with a source badge.
