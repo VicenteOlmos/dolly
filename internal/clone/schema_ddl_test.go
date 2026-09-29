@@ -220,6 +220,11 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if got := commentTarget("procedure", "app", "my_proc(integer)", ""); got != `PROCEDURE "app"."my_proc"(integer)` {
 		t.Fatalf("procedure target = %q", got)
 	}
+	constraint := commentTarget("constraint", "app", "orders", "orders_total_check")
+	wantConstraint := `CONSTRAINT "orders_total_check" ON "app"."orders"`
+	if constraint != wantConstraint {
+		t.Fatalf("constraint target = %q, want %q", constraint, wantConstraint)
+	}
 	idx := commentTarget("index", "app", "users_email_idx", "")
 	wantIdx := `INDEX "app"."users_email_idx"`
 	if idx != wantIdx {

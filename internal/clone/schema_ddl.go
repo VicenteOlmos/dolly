@@ -229,6 +229,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return target + " " + quoteQualifiedType(schema, fn) + "(" + argList + ")"
 	case "index":
 		return "INDEX " + quoteQualifiedTable(schema, object)
+	case "constraint":
+		return "CONSTRAINT " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
