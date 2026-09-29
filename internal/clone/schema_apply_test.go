@@ -92,6 +92,10 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"table_schema", "table_name", "grantee", "privilege_type"}))
 	srcMock.ExpectQuery(`FROM information_schema.column_privileges`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`object_type = 'SEQUENCE'`).WillReturnRows(
+		sqlmock.NewRows([]string{"object_schema", "object_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`aclexplode\(p\.proacl\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "proname", "pg_get_function_identity_arguments", "rolname", "privilege_type"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
@@ -388,6 +392,10 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"table_schema", "table_name", "grantee", "privilege_type"}))
 	srcMock.ExpectQuery(`FROM information_schema.column_privileges`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`object_type = 'SEQUENCE'`).WillReturnRows(
+		sqlmock.NewRows([]string{"object_schema", "object_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`aclexplode\(p\.proacl\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "proname", "pg_get_function_identity_arguments", "rolname", "privilege_type"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(

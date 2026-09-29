@@ -204,6 +204,26 @@ func formatGrantColumn(privileges, schema, table, column, grantee string) string
 	)
 }
 
+// formatGrantSequence emits GRANT privileges ON SEQUENCE.
+func formatGrantSequence(privileges, schema, sequence, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT %s ON SEQUENCE %s TO %s",
+		privileges,
+		quoteQualifiedTable(schema, sequence),
+		quoteGrantee(grantee),
+	)
+}
+
+// formatGrantRoutine emits GRANT EXECUTE ON FUNCTION.
+func formatGrantRoutine(schema, name, identityArgs, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT EXECUTE ON FUNCTION %s(%s) TO %s",
+		quoteQualifiedType(schema, name),
+		identityArgs,
+		quoteGrantee(grantee),
+	)
+}
+
 // formatGrantSchema emits GRANT privileges ON SCHEMA.
 func formatGrantSchema(privileges, schema, grantee string) string {
 	return fmt.Sprintf(

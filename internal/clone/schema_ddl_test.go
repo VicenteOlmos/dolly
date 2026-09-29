@@ -200,6 +200,20 @@ func TestFormatGrantColumn(t *testing.T) {
 	}
 }
 
+func TestFormatGrantSequenceAndRoutine(t *testing.T) {
+	t.Parallel()
+	seq := formatGrantSequence("SELECT, USAGE", "app", "users_id_seq", "app_reader")
+	wantSeq := `GRANT SELECT, USAGE ON SEQUENCE "app"."users_id_seq" TO "app_reader"`
+	if seq != wantSeq {
+		t.Fatalf("sequence grant = %q, want %q", seq, wantSeq)
+	}
+	routine := formatGrantRoutine("app", "my_sum", "integer", "app_reader")
+	wantRoutine := `GRANT EXECUTE ON FUNCTION "app"."my_sum"(integer) TO "app_reader"`
+	if routine != wantRoutine {
+		t.Fatalf("routine grant = %q, want %q", routine, wantRoutine)
+	}
+}
+
 func TestFormatEnableRLSAndPolicy(t *testing.T) {
 	t.Parallel()
 	rls := formatEnableRLS("app", "users", false)

@@ -277,6 +277,20 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		if err := applyColumnGrants(ctx, tgtDB, columnGrants); err != nil {
 			return err
 		}
+		sequenceGrants, err := loadSequenceGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applySequenceGrants(ctx, tgtDB, sequenceGrants); err != nil {
+			return err
+		}
+		routineGrants, err := loadRoutineGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyRoutineGrants(ctx, tgtDB, routineGrants); err != nil {
+			return err
+		}
 	}
 
 	rlsTables, err := loadRLSTables(ctx, srcDB, schemas)
