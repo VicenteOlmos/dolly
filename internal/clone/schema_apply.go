@@ -234,9 +234,6 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
-	if err := applyReplicaIdentities(ctx, tgtDB, replicaIdentities); err != nil {
-		return err
-	}
 
 	columnStorage, err := loadColumnStorageOverrides(ctx, srcDB, schemas)
 	if err != nil {
@@ -251,6 +248,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyIndexes(ctx, tgtDB, indexesForReplay(indexes, sorted)); err != nil {
+		return err
+	}
+	if err := applyReplicaIdentities(ctx, tgtDB, replicaIdentities); err != nil {
 		return err
 	}
 

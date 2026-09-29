@@ -106,3 +106,28 @@ func TestLoadProcedureComment(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLoadConstraintCommentsOnlyForReplayedConstraints(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`con\.contype = 'u' AND con\.conparentid = 0[\s\S]*con\.contype = 'c' AND con\.coninhcount = 0[\s\S]*con\.contype = 'f' AND con\.conparentid = 0[\s\S]*SELECT 'domain_constraint'[\s\S]*t\.typtype = 'd' AND con\.contype = 'c'`).WillReturnRows(
+		sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).
+			AddRow("domain_constraint", "app", "email", "email_check", "valid email"))
+	comments, err := loadComments(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyComments(context.Background(), rec, comments); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.String(); got != `COMMENT ON CONSTRAINT "email_check" ON DOMAIN "app"."email" IS 'valid email';`+"\n" {
+		t.Fatalf("comment SQL = %q", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

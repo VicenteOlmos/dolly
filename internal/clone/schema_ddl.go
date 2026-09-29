@@ -174,7 +174,7 @@ func formatAlterColumnStorage(schema, table, column, storageCode string) (string
 		return "", false
 	}
 	return fmt.Sprintf(
-		"ALTER TABLE %s ALTER COLUMN %s SET STORAGE %s",
+		"ALTER TABLE ONLY %s ALTER COLUMN %s SET STORAGE %s",
 		quoteQualifiedTable(schema, table),
 		quoteIdentifier(column),
 		storage,
@@ -231,6 +231,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return "INDEX " + quoteQualifiedTable(schema, object)
 	case "constraint":
 		return "CONSTRAINT " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
+	case "domain_constraint":
+		return "CONSTRAINT " + quoteIdentifier(column) + " ON DOMAIN " + quoteQualifiedType(schema, object)
 	case "domain":
 		return "DOMAIN " + quoteQualifiedType(schema, object)
 	default:

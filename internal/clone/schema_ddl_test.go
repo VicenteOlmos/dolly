@@ -175,10 +175,10 @@ func TestFormatAlterColumnStorage(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"p", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE PLAIN`, true},
-		{"e", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE EXTERNAL`, true},
-		{"x", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE EXTENDED`, true},
-		{"m", `ALTER TABLE "app"."docs" ALTER COLUMN "body" SET STORAGE MAIN`, true},
+		{"p", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE PLAIN`, true},
+		{"e", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE EXTERNAL`, true},
+		{"x", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE EXTENDED`, true},
+		{"m", `ALTER TABLE ONLY "app"."docs" ALTER COLUMN "body" SET STORAGE MAIN`, true},
 		{"z", "", false},
 	}
 	for _, tt := range tests {
@@ -224,6 +224,9 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	wantConstraint := `CONSTRAINT "orders_total_check" ON "app"."orders"`
 	if constraint != wantConstraint {
 		t.Fatalf("constraint target = %q, want %q", constraint, wantConstraint)
+	}
+	if got := commentTarget("domain_constraint", "app", "email", "email_check"); got != `CONSTRAINT "email_check" ON DOMAIN "app"."email"` {
+		t.Fatalf("domain constraint target = %q", got)
 	}
 	domain := commentTarget("domain", "app", "email", "")
 	wantDomain := `DOMAIN "app"."email"`
