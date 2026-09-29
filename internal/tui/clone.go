@@ -284,8 +284,10 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 		case "t":
-			c.cycleTargetSource(1)
-			return nil
+			if c.activeField() == nil {
+				c.cycleTargetSource(1)
+				return nil
+			}
 		case "j":
 			if c.formField == 1 && c.draft.TargetSource == TargetSourceSaved {
 				c.cycleSavedProfile(1)

@@ -77,6 +77,7 @@ type dumpScreen struct {
 	retryBaseCursor        int
 	includeTableFileCursor int
 	excludeTableFileCursor int
+	chunkTableFileCursor   int
 	restoreDir             string
 	restoreDirCursor       int
 	restoreDirFocus        bool
@@ -383,7 +384,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
 		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
 		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase,
-		modeFieldIncludeTableFile, modeFieldExcludeTableFile:
+		modeFieldIncludeTableFile, modeFieldExcludeTableFile, modeFieldChunkTableFile:
 		return true
 	default:
 		return false
@@ -405,6 +406,7 @@ func (d *dumpScreen) syncModeCursors() {
 	d.retryBaseCursor = len(d.draft.RetryBaseText)
 	d.includeTableFileCursor = len(d.draft.IncludeTableFile)
 	d.excludeTableFileCursor = len(d.draft.ExcludeTableFile)
+	d.chunkTableFileCursor = len(d.draft.ChunkTableFile)
 }
 
 func (d *dumpScreen) moveModeField(delta int) {
@@ -449,6 +451,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.IncludeTableFile, &d.includeTableFileCursor)
 		case modeFieldExcludeTableFile:
 			return handleFieldCursorKey(k, &d.draft.ExcludeTableFile, &d.excludeTableFileCursor)
+		case modeFieldChunkTableFile:
+			return handleFieldCursorKey(k, &d.draft.ChunkTableFile, &d.chunkTableFileCursor)
 		}
 	}
 	switch d.modeField {
@@ -524,6 +528,9 @@ func (d *dumpScreen) modeSummary() string {
 	}
 	if strings.TrimSpace(d.draft.ExcludeTableFile) != "" {
 		parts = append(parts, "exclude-file")
+	}
+	if strings.TrimSpace(d.draft.ChunkTableFile) != "" {
+		parts = append(parts, "chunk-file")
 	}
 	if d.draft.WorkersSet {
 		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
@@ -685,6 +692,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldRetryBase, "Retry base", d.modeFieldValue(d.draft.RetryBaseText, d.retryBaseCursor, modeFieldRetryBase)},
 		{modeFieldIncludeTableFile, "Include table file", d.modeFieldValue(d.draft.IncludeTableFile, d.includeTableFileCursor, modeFieldIncludeTableFile)},
 		{modeFieldExcludeTableFile, "Exclude table file", d.modeFieldValue(d.draft.ExcludeTableFile, d.excludeTableFileCursor, modeFieldExcludeTableFile)},
+		{modeFieldChunkTableFile, "Chunk table file", d.modeFieldValue(d.draft.ChunkTableFile, d.chunkTableFileCursor, modeFieldChunkTableFile)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))
