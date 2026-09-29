@@ -49,6 +49,9 @@ type Options struct {
 	// IncludePrivileges keeps owners and ACLs in schema replay. The target must
 	// already have the referenced roles. Default omits both.
 	IncludePrivileges bool
+	// RowTransform rewrites logical-stream rows before they are copied. Set from
+	// sanitization so large clones can redact without an NDJSON dump.
+	RowTransform dump.RowTransform
 }
 
 func schemaOnlyDumpArgs(cleanDSN string, schemas []string, includePrivileges bool) []string {

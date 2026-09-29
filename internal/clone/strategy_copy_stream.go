@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
@@ -38,6 +39,14 @@ func (c *pgxCopyConn) CopyFrom(ctx context.Context, r io.Reader, sql string) err
 
 func (c *pgxCopyConn) Close(ctx context.Context) error {
 	return c.conn.Close(ctx)
+}
+
+func (c *pgxCopyConn) Query(ctx context.Context, sql string) (copyQueryRows, error) {
+	return c.conn.Query(ctx, sql)
+}
+
+func (c *pgxCopyConn) CopyFromSource(ctx context.Context, schema, table string, columns []string, src pgx.CopyFromSource) (int64, error) {
+	return c.conn.CopyFrom(ctx, pgx.Identifier{schema, table}, columns, src)
 }
 
 // openCopyConn opens a pgx connection for COPY streaming.
@@ -246,6 +255,12 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 			Total:   totalSteps,
 			Elapsed: time.Since(startedAt),
 		})
+		if opts.RowTransform != nil {
+			if err := copyTableSanitized(ctx, srcConn, tgtConn, table, opts.RowTransform); err != nil {
+				return fmt.Errorf("copy table %q: %w", quoteQualifiedTable(table.Schema, table.Name), err)
+			}
+			continue
+		}
 		if err := copyTable(ctx, srcConn, tgtConn, table.Schema, table.Name); err != nil {
 			return fmt.Errorf("copy table %q: %w", quoteQualifiedTable(table.Schema, table.Name), err)
 		}
@@ -277,6 +292,98 @@ func (s *CopyStreamStrategy) postCreate(ctx context.Context, opts Options, srcDB
 func quoteQualifiedTable(schema, name string) string {
 	return quoteIdentifier(schema) + "." + quoteIdentifier(name)
 }
+
+// copyQueryRows is the subset of pgx.Rows used to redact one table.
+type copyQueryRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close()
+}
+
+type queryCopyConn interface {
+	Query(ctx context.Context, sql string) (copyQueryRows, error)
+	CopyFromSource(ctx context.Context, schema, table string, columns []string, src pgx.CopyFromSource) (int64, error)
+}
+
+func copyTableSanitized(ctx context.Context, srcConn, tgtConn copyConn, table db.Table, transform dump.RowTransform) error {
+	src, ok := srcConn.(queryCopyConn)
+	if !ok {
+		return fmt.Errorf("source connection cannot read rows for sanitization")
+	}
+	tgt, ok := tgtConn.(queryCopyConn)
+	if !ok {
+		return fmt.Errorf("target connection cannot load sanitized rows")
+	}
+	if len(table.Columns) == 0 {
+		return fmt.Errorf("table %s has no columns", quoteQualifiedTable(table.Schema, table.Name))
+	}
+	cols := make([]string, len(table.Columns))
+	quoted := make([]string, len(table.Columns))
+	for i, col := range table.Columns {
+		cols[i] = col.Name
+		quoted[i] = quoteIdentifier(col.Name)
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(quoted, ", "), quoteQualifiedTable(table.Schema, table.Name))
+	rows, err := src.Query(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	source := &sanitizedCopySource{rows: rows, table: table, transform: transform}
+	if _, err := tgt.CopyFromSource(ctx, table.Schema, table.Name, cols, source); err != nil {
+		if source.err != nil {
+			return source.err
+		}
+		return err
+	}
+	return source.err
+}
+
+type sanitizedCopySource struct {
+	rows      copyQueryRows
+	table     db.Table
+	transform dump.RowTransform
+	vals      []any
+	err       error
+}
+
+func (s *sanitizedCopySource) Next() bool {
+	if s.err != nil || !s.rows.Next() {
+		if s.err == nil {
+			s.err = s.rows.Err()
+		}
+		return false
+	}
+	raw := make([]any, len(s.table.Columns))
+	dest := make([]any, len(raw))
+	for i := range raw {
+		dest[i] = &raw[i]
+	}
+	if err := s.rows.Scan(dest...); err != nil {
+		s.err = err
+		return false
+	}
+	row := make(map[string]any, len(s.table.Columns))
+	for i, col := range s.table.Columns {
+		row[col.Name] = raw[i]
+	}
+	row, err := s.transform(s.table.Schema, s.table.Name, s.table.Columns, row)
+	if err != nil {
+		s.err = err
+		return false
+	}
+	out := make([]any, len(s.table.Columns))
+	for i, col := range s.table.Columns {
+		out[i] = row[col.Name]
+	}
+	s.vals = out
+	return true
+}
+
+func (s *sanitizedCopySource) Values() ([]any, error) { return s.vals, nil }
+
+func (s *sanitizedCopySource) Err() error { return s.err }
 
 func copyTable(ctx context.Context, srcConn, tgtConn copyConn, schema, tableName string) error {
 	pr, pw := io.Pipe()
