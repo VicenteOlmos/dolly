@@ -25,6 +25,13 @@ func rejectIncludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 		for _, leaf := range nestedPartitionLeaves(qualifiedName(table.Schema, table.Name), tables) {
 			leaves = append(leaves, selectorIdent(leaf.Schema)+"."+selectorIdent(leaf.Name))
 		}
+		if len(leaves) == 0 {
+			return fmt.Errorf(
+				"%w: include partitioned table %q is not supported; there are no leaf partitions in scope",
+				ErrTableSelection,
+				inc.Table.Normalized(),
+			)
+		}
 		return fmt.Errorf(
 			"%w: include partitioned table %q is not supported; include leaf partitions: %s",
 			ErrTableSelection,
@@ -99,6 +106,22 @@ func expandExcludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 		excludes = append(excludes, exc)
 	}
 	return &SelectionPolicy{Includes: policy.Includes, Excludes: excludes}
+}
+
+func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) []db.Table {
+	var omitted []string
+	for _, table := range tables {
+		if table.RelKind == "p" {
+			omitted = append(omitted, qualifiedName(table.Schema, table.Name))
+		}
+	}
+	if len(omitted) > 0 {
+		sort.Strings(omitted)
+		if prov != nil {
+			prov.OmittedPartitionParents = omitted
+		}
+	}
+	return db.WithoutPartitionParents(tables)
 }
 
 func nestedPartitionLeaves(parentKey string, tables []db.Table) []db.Table {

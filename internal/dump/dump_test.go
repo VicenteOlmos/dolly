@@ -79,6 +79,74 @@ func TestDumpFullFlow(t *testing.T) {
 	}
 }
 
+func TestDumpFullRecordsOmittedPartitionParents(t *testing.T) {
+	prev := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = prev })
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "events", int64(0)).
+		AddRow("public", "events_2024", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "events", "id", "integer", "NO", 1, true).
+		AddRow("public", "events_2024", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
+	mock.ExpectQuery(`pg_get_partkeydef`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relkind", "relispartition", "relpersistence", "partkey", "bound", "parent_schema", "parent_name"}).
+			AddRow("public", "events", "p", false, "p", "RANGE (id)", "", "", "").
+			AddRow("public", "events_2024", "r", true, "p", "", "FOR VALUES FROM (1) TO (2)", "public", "events"))
+	mock.ExpectQuery(`is_generated = 'ALWAYS'`).
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}))
+	mock.ExpectQuery(`is_identity = 'YES'`).
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "identity_generation"}))
+
+	streamRows := sqlmock.NewRows([]string{"id"}).AddRow(1)
+	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
+
+	mock.ExpectCommit()
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil || len(meta.Provenance.OmittedPartitionParents) != 1 ||
+		meta.Provenance.OmittedPartitionParents[0] != "public.events" {
+		t.Fatalf("omitted parents = %+v", meta.Provenance)
+	}
+	if len(meta.Tables) != 1 || meta.Tables[0].Name != "events_2024" {
+		t.Fatalf("tables = %+v", meta.Tables)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data", "7075626c6963.6576656e74735f32303234.ndjson")); err != nil {
+		t.Fatal("leaf partition data file not found")
+	}
+}
+
 func TestDumpWithSchemasMulti(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
