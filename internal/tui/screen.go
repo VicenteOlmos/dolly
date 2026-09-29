@@ -144,6 +144,9 @@ type DumpDraft struct {
 	WorkersSet          bool
 	SchemaPicker        SchemaPickerState
 	History             DumpHistoryState
+	RestoreOnConflict   string
+	RestoreReplace      bool
+	RestoreReplaceSet   bool
 }
 
 // DumpHistoryEntry is one row in the dump history list.

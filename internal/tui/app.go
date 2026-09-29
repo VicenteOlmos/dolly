@@ -535,12 +535,19 @@ func (a *App) restoreNeedsConfirm(trustedSchemaSQL bool) (bool, string) {
 	if trustedSchemaSQL {
 		parts = append(parts, "run a non-atomic restore (commits per table; schema.sql replay disables rollback)")
 	}
-	if a.cfg.Restore.Replace {
+	replace := a.cfg.Restore.Replace
+	if a.dump.RestoreReplaceSet {
+		replace = a.dump.RestoreReplace
+	}
+	if replace {
 		parts = append(parts, "truncate existing tables before restore")
 	}
 	onConflict := a.cfg.Restore.RestoreOnConflict
 	if onConflict == "" {
 		onConflict = "error"
+	}
+	if a.dump.RestoreOnConflict != "" {
+		onConflict = a.dump.RestoreOnConflict
 	}
 	if onConflict == "upsert" {
 		parts = append(parts, "overwrite conflicting rows (upsert)")
@@ -596,7 +603,12 @@ func (a *App) handleRestoreRequested(msg restoreRequestedMsg) (tea.Model, tea.Cm
 	a.restoreProgress = nil
 	a.statusMsg = "Restoring…"
 	appendDumpLog(&a.dumpLog, "restore started: "+msg.inputDir)
-	cmd, ch, cancel := startRestoreCmd(runner, context.Background(), a.db, msg.inputDir, schemas, msg.trustedSchemaSQL, a.conn.DSN())
+	history := restoreHistoryOverrides{
+		OnConflict: a.dump.RestoreOnConflict,
+		Replace:    a.dump.RestoreReplace,
+		ReplaceSet: a.dump.RestoreReplaceSet,
+	}
+	cmd, ch, cancel := startRestoreCmd(runner, context.Background(), a.db, msg.inputDir, schemas, msg.trustedSchemaSQL, a.conn.DSN(), history)
 	a.restoreCh = ch
 	a.restoreCancel = cancel
 	return a, cmd
