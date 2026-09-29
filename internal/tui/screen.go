@@ -215,6 +215,7 @@ type CloneDraft struct {
 	ReplaceSet        bool
 	OnConflict        string
 	TargetDir         string
+	DumpDir           string
 	SkipCreate        bool
 	SkipCreateSet     bool
 }

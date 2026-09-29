@@ -114,6 +114,7 @@ func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas 
 		ReplaceSet:        draft.ReplaceSet,
 		OnConflict:        draft.OnConflict,
 		TargetDir:         draft.TargetDir,
+		DumpDir:           draft.DumpDir,
 		SkipCreate:        draft.SkipCreate,
 		SkipCreateSet:     true,
 	}, wrapped)

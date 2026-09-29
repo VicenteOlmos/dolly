@@ -31,6 +31,7 @@ type Params struct {
 	ReplaceSet        bool
 	OnConflict        string
 	TargetDir         string
+	DumpDir           string
 	SkipCreate        bool
 	SkipCreateSet     bool
 }
@@ -128,6 +129,10 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	if trimmed := strings.TrimSpace(p.TargetDir); trimmed != "" {
 		targetDir = trimmed
 	}
+	dumpDir := cfg.Clone.DumpDir
+	if trimmed := strings.TrimSpace(p.DumpDir); trimmed != "" {
+		dumpDir = trimmed
+	}
 	skipCreate := cfg.Clone.SkipCreate
 	if p.SkipCreateSet {
 		skipCreate = p.SkipCreate
@@ -153,7 +158,7 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 		CloneName:         cloneName,
 		TargetDSN:         targetURL,
 		SkipCreate:        skipCreate,
-		DumpDir:           cfg.Clone.DumpDir,
+		DumpDir:           dumpDir,
 		TargetDir:         targetDir,
 		DumpOpts:          dumpOpts,
 		RestoreOpts:       restoreOpts,
