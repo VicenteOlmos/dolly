@@ -8,10 +8,13 @@ import (
 	"os"
 	"strings"
 
+	"database/sql"
+
 	"github.com/VicenteOlmos/dolly/internal/db"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 func loadTable(ctx context.Context, q execQuerier, table db.Table, path string, policy ConflictPolicy) error {
@@ -69,37 +72,38 @@ func loadTable(ctx context.Context, q execQuerier, table db.Table, path string, 
 	return nil
 }
 
-// loadTableCopy loads an NDJSON file into the target table using pgx COPY.
-// COPY is atomic per-table at the PG level: it aborts entirely on first error.
+// loadTableCopy loads an NDJSON file into the target table using pgx COPY on a
+// fresh connection. That session cannot see an uncommitted restore transaction.
+// Conflict policies skip/upsert stay on loadTable because COPY has no ON CONFLICT.
 //
-// COPY does NOT participate in the parent sql.DB transaction because it uses a
-// separate pgx.Conn. This means:
-//   - WITH --replace: truncate happens on the main conn before COPY is called.
-//     When the main Restore is not wrapped in a global transaction (--no-transaction),
-//     truncates auto-commit and the COPY conn sees empty tables.
-//   - WITH a global transaction: truncate is in an uncommitted tx so the COPY conn
-//     cannot see the truncation. In this case, Restore uses the fallback
-//     INSERT-per-row path (loadTable) instead.
-//   - Conflict policies skip/upsert are not supported — they need ON CONFLICT,
-//     which COPY does not offer. Restore falls back to loadTable for those.
-//
-// ponytail: COPY is on a fresh pgx.Conn, not extracted from sql.DB. This avoids
-// complex driver-internals extraction and gets 10-100x speed for the common case
-// (bulk error-conflict or --replace with --no-transaction). Add driver-conn
-// extraction later if tx-preserving COPY is needed.
+// Transactional restore uses loadTableCopyInTx so COPY shares the sql.Tx session.
 func loadTableCopy(ctx context.Context, dsn string, table db.Table, path string) error {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("table %q: copy connect: %w", table.Name, err)
+	}
+	defer conn.Close(ctx)
+	return copyFromPGX(ctx, conn, table, path)
+}
+
+// loadTableCopyInTx runs COPY on the pgx connection that owns an open sql transaction.
+var loadTableCopyInTx = func(ctx context.Context, conn *sql.Conn, table db.Table, path string) error {
+	return conn.Raw(func(driverConn any) error {
+		std, ok := driverConn.(*stdlib.Conn)
+		if !ok {
+			return fmt.Errorf("table %q: transactional COPY requires the pgx database/sql driver", table.Name)
+		}
+		return copyFromPGX(ctx, std.Conn(), table, path)
+	})
+}
+
+func copyFromPGX(ctx context.Context, conn *pgx.Conn, table db.Table, path string) error {
 	if err := dump.ValidateTableName(table.Name); err != nil {
 		return fmt.Errorf("validate table: %w", err)
 	}
 	if len(table.Columns) == 0 {
 		return fmt.Errorf("table %q has no columns", table.Name)
 	}
-
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		return fmt.Errorf("table %q: copy connect: %w", table.Name, err)
-	}
-	defer conn.Close(ctx)
 
 	colNames := make([]string, len(table.Columns))
 	for i, c := range table.Columns {

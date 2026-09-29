@@ -33,6 +33,7 @@ type DumpOverrides struct {
 	ChunkTableFiles   []string
 	Workers           int
 	WorkersSet        bool
+	RequireSafeKey    bool
 }
 
 func (o DumpOverrides) HasChunkSelectors() bool {
@@ -149,6 +150,9 @@ func BuildDumpOptions(o DumpOverrides, cfg *config.Config) ([]dump.Option, error
 	workers := resolveDumpWorkers(o, cfg)
 	if err := validateDumpWorkers(o, cfg, workers); err != nil {
 		return nil, err
+	}
+	if o.RequireSafeKey {
+		opts = append(opts, dump.WithRequireSafeKey())
 	}
 	if o.SlowConnection || o.HasChunkSelectors() {
 		if o.SlowConnection {

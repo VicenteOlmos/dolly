@@ -140,7 +140,7 @@ Dolly does not inspect your database size or network conditions, and it does not
 | <!-- situation:maximum-restore-speed --> Maximum restore throughput | **ADVANCED — NON-ATOMIC** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Parallel table restore after acknowledging partial-state risk | No atomic rollback; `on-conflict` must be `error`; cannot use `--replace`, `--trust-schema-sql`, skip, or upsert |
 | <!-- situation:representative-sample --> Dev/test sample, not a full copy | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Recent-root selection plus FK closure | Not statistically representative; closure may exceed the target percent |
 | <!-- situation:same-instance-clone --> Fastest clone on the same instance | `dolly clone --strategy template` | Template database copy on one PostgreSQL server | Source must have no active connections; refuses when sanitization is enabled |
-| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Refuses when sanitization is enabled; not a physical cluster copy |
+| <!-- situation:cross-server-large-clone --> Large single-database cross-server copy | `dolly clone --strategy logical-stream` | Logical stream for large remote copies | Redacts when sanitization is enabled; not a physical cluster copy |
 
 `$WORKERS`, `$PERCENT`, and `$ROW_CAP` are operator-chosen values—Dolly does not set them automatically.
 
@@ -177,6 +177,8 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 Run `dolly <command> --help` for command-specific flags.
 
 **TUI and CLI restore:** the TUI history section restores the selected dump, or a directory you type there (`p` to edit the path). `dolly restore --input <dir>` remains the scripted path.
+
+**TUI dump mode:** the dump screen Mode section sets slow connection, `--require-safe-key`, workers, percent, seed file, and chunk tables for the next run. The same flags stay on `dolly dump`.
 
 When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility, including `CREATE SCHEMA IF NOT EXISTS` so `--trust-schema-sql` can replay into a fresh database that already has `public`. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
 
@@ -234,7 +236,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump \
 
 **Result/artifacts** numbered `{output}/{n}/` with per-table NDJSON, `metadata.json` chunk provenance, transient checkpoint files under the run directory during export, and final metadata published only after completion.
 
-**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key resumes with `ctid` and warns that VACUUM or updates can skip or duplicate rows. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
+**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key resumes with `ctid` and warns that VACUUM or updates can skip or duplicate rows. `--require-safe-key` refuses that ctid plan. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
 
 ### Shared-snapshot parallel dump
 
@@ -300,7 +302,9 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Faster bulk restore — advanced
 
-Default restore runs in one transaction. For trusted empty targets or very large loads:
+Default restore runs in one transaction. When the conflict policy is `error` and a DSN is set, Dolly loads each table with COPY on that same transaction, then updates sequences before commit. Skip and upsert stay on INSERT. `--no-transaction` COPY uses a separate connection and commits per table.
+
+For trusted empty targets or very large loads:
 
 ```bash
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
@@ -311,14 +315,14 @@ Serial `--no-transaction` mode can leave partial progress if it fails mid-way. P
 ### Clone strategies
 
 <!-- readme:fidelity:schema-replay -->
-Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and refreshes materialized views after the data load. Materialized-view contents are **not cloned** as a separate copy; they are refreshed from the restored tables. User triggers are disabled while rows load; cloned **triggers may fire** after they are re-enabled. Owners and **ACL**s are omitted unless you pass `--with-privileges` (the target must already have those roles). **Cluster-global** roles and tablespaces are not created. `template`, `logical-stream`, and `physical-backup` refuse to run when sanitization is enabled.
+Default `schema-replay` clone recreates schema and object definitions (including **trigger** and **materialized-view** definitions), restores regular **table data** and **sequence** state, and refreshes materialized views after the data load. Materialized-view contents are **not cloned** as a separate copy; they are refreshed from the restored tables. User triggers are disabled while rows load; cloned **triggers may fire** after they are re-enabled. Owners and **ACL**s are omitted unless you pass `--with-privileges` (the target must already have those roles). **Cluster-global** roles and tablespaces are not created. `template` and `physical-backup` refuse to run when sanitization is enabled. `logical-stream` redacts sensitive columns in that case. When `pg_dump` is not on PATH, schema-replay replays the catalog (functions, views, triggers, and rules included; aggregates require `pg_dump`, while exclusion constraints and operator classes stay omitted).
 <!-- /readme:fidelity:schema-replay -->
 
 | Strategy | When | Sanitization |
 |---|---|---|
 | `schema-replay` | Default cross-server or development clone | Supported |
 | `template` | Same PostgreSQL instance; fastest | Refuses when enabled |
-| `logical-stream` | Large cross-server logical copy | Refuses when enabled |
+| `logical-stream` | Large cross-server logical copy | Redacts when enabled |
 | `physical-backup` | Whole cluster directory copy | Refuses when enabled |
 
 `physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory rather than one database. Read [physical backup](docs/physical-backup.md) before using it.
@@ -331,8 +335,8 @@ Treat Dolly like a database administration tool:
 
 - `restore --replace` truncates target tables before insert.
 - `restore --no-transaction --yes` can leave partial table state.
-- Sanitization is pattern-based and only applies to `dump` and `schema-replay`; it is not a compliance guarantee.
-- `template`, `logical-stream`, and `physical-backup` refuse when sanitization is enabled. With sanitization off they copy unsanitized row data.
+- Sanitization is pattern-based and applies to `dump`, `schema-replay`, and `logical-stream`; it is not a compliance guarantee.
+- `template` and `physical-backup` refuse when sanitization is enabled. With sanitization off they copy unsanitized row data. `logical-stream` redacts rows when sanitization is enabled.
 
 Before using production or production-like data, use a least-privilege role, keep DSNs and dumps out of Git, confirm destructive targets are disposable, validate sanitization manually, and rehearse in staging. See [security](docs/security.md) and [physical backup](docs/physical-backup.md).
 

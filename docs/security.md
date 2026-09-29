@@ -47,7 +47,7 @@ Current strategy coverage:
 |----------|--------------|
 | `dump` | Applies when `sanitization.enabled` is true. |
 | `clone --strategy schema-replay` | Applies through the dump/restore path. |
-| `clone --strategy logical-stream` | Refuses when sanitization is enabled. COPY has no row rewrite hook. |
+| `clone --strategy logical-stream` | Redacts sensitive columns when sanitization is enabled, then COPY-loads the rewritten rows. |
 | `clone --strategy template` | Refuses when sanitization is enabled. Copies the database as stored. |
 | `clone --strategy physical-backup` | Refuses when sanitization is enabled. Copies the physical cluster directory. |
 
@@ -57,7 +57,7 @@ Logical single-database strategies (`template`, `schema-replay`, `logical-stream
 
 - `template` is fast on the same PostgreSQL instance. It refuses when sanitization is enabled. With sanitization off it copies the database as stored.
 - `schema-replay` is more portable and can use sanitization. It disables user triggers while rows load, refreshes materialized views afterward, and omits owners and ACLs unless `--with-privileges` is set. It still writes real data to the target.
-- `logical-stream` is faster for some large copies. It refuses when sanitization is enabled. With sanitization off it streams rows without redaction. `--with-privileges` keeps owners and ACLs; roles must already exist.
+- `logical-stream` is faster for some large copies. With sanitization on it redacts sensitive columns before COPY. With sanitization off it streams rows without redaction. `--with-privileges` keeps owners and ACLs; roles must already exist.
 - `physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory, not just one database. It refuses when sanitization is enabled.
 
 See [physical-backup.md](physical-backup.md) before using physical clone workflows.

@@ -50,7 +50,6 @@ func cloneNeedsUnsanitizedWarning(strategy string, sanitizationEnabled bool) boo
 	strategy = effectiveCloneStrategy(strategy)
 	return !sanitizationEnabled ||
 		strategy == "template" ||
-		strategy == "logical-stream" ||
 		strategy == "physical-backup"
 }
 

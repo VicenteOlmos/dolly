@@ -139,11 +139,11 @@ Dolly no inspecciona el tamaño de la base de datos ni las condiciones de red, n
 | <!-- situation:maximum-restore-speed --> Máximo rendimiento de restore | **AVANZADO — NO ATÓMICO** `dolly restore ... --workers "$WORKERS" --no-transaction --yes --ack-partial-state` | Restauración paralela de tablas tras reconocer riesgo de estado parcial | Sin reversión atómica; `on-conflict` debe ser `error`; no usar `--replace`, `--trust-schema-sql`, skip ni upsert |
 | <!-- situation:representative-sample --> Muestra para desarrollo/pruebas, no copia completa | `dolly dump ... --percent "$PERCENT" --max-rows-per-table "$ROW_CAP"` | Raíces recientes más cierre de claves foráneas | No es representación estadística; el cierre puede superar el porcentaje |
 | <!-- situation:same-instance-clone --> Clonación más rápida en la misma instancia | `dolly clone --strategy template` | Copia por plantilla en un solo servidor PostgreSQL | Sin conexiones activas en el origen; se niega si la sanitización está activada |
-| <!-- situation:cross-server-large-clone --> Copia grande entre servidores de una sola base | `dolly clone --strategy logical-stream` | Flujo lógico para copias remotas grandes | Se niega si la sanitización está activada; no es copia física del clúster |
+| <!-- situation:cross-server-large-clone --> Copia grande entre servidores de una sola base | `dolly clone --strategy logical-stream` | Flujo lógico para copias remotas grandes | Redacta si la sanitización está activada; no es copia física del clúster |
 
 `$WORKERS`, `$PERCENT` y `$ROW_CAP` son valores elegidos por el operador; Dolly no los establece automáticamente.
 
-En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, reanuda con `ctid` y advierte que VACUUM o actualizaciones pueden omitir o duplicar filas. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
+En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, reanuda con `ctid` y advierte que VACUUM o actualizaciones pueden omitir o duplicar filas. `--require-safe-key` rechaza ese plan con `ctid`. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
 
 Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para conocer los flags. Más detalle en [Flujos de trabajo y límites habituales](#flujos-de-trabajo-y-límites-habituales) y [Estrategias de clonación](#estrategias-de-clonación).
 
@@ -166,6 +166,8 @@ Ejecute `dolly <command> --help` para consultar los flags específicos de cada c
 
 **Restauración mediante TUI y CLI:** la sección de historial de la TUI restaura el volcado seleccionado, o un directorio que escribas ahí (`p` para editar la ruta). `dolly restore --input <dir>` sigue siendo la vía para scripts.
 
+**Modo de volcado en la TUI:** la sección Mode fija conexión lenta, `--require-safe-key`, workers, porcentaje, archivo de semillas y tablas en fragmentos para la siguiente ejecución. Los mismos flags siguen en `dolly dump`.
+
 Cuando `pg_dump` está en el `PATH`, Dolly captura `schema.sql` y lo sanitiza para permitir restauraciones compatibles entre versiones, incluyendo `CREATE SCHEMA IF NOT EXISTS` para que `--trust-schema-sql` pueda reproducirse en una base nueva que ya tiene `public`. Restore nunca ejecuta ese SQL a menos que pase explícitamente `--trust-schema-sql` para artefactos revisados.
 
 La reproducción de esquema de confianza se ejecuta fuera de la transacción de restore, así que confirme ambas condiciones explícitamente:
@@ -186,7 +188,9 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Restauración masiva más rápida — avanzado
 
-La restauración predeterminada se ejecuta en una sola transacción. Para destinos vacíos de confianza o cargas muy grandes:
+La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. Skip y upsert siguen en INSERT. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
+
+Para destinos vacíos de confianza o cargas muy grandes:
 
 ```bash
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
@@ -199,14 +203,14 @@ La restauración paralela (`--workers` mayor que 1) exige `--ack-partial-state` 
 ### Estrategias de clonación
 
 <!-- readme:fidelity:schema-replay -->
-La estrategia predeterminada `schema-replay` recrea definiciones de esquema y objetos (incluidas definiciones de disparadores y vistas materializadas), restaura datos de tablas regulares y el estado de secuencias, y refresca las vistas materializadas después de cargar los datos. El contenido de vistas materializadas no se clona como copia aparte; se refresca desde las tablas restauradas. Los disparadores de usuario se desactivan mientras se cargan las filas; los disparadores clonados pueden ejecutarse después de reactivarlos. Los propietarios y las ACL se omiten salvo que pases `--with-privileges` (el destino ya debe tener esos roles). Los roles y tablespaces de ámbito de clúster no se crean. `template`, `logical-stream` y `physical-backup` se niegan a ejecutarse cuando la sanitización está activada.
+La estrategia predeterminada `schema-replay` recrea definiciones de esquema y objetos (incluidas definiciones de disparadores y vistas materializadas), restaura datos de tablas regulares y el estado de secuencias, y refresca las vistas materializadas después de cargar los datos. El contenido de vistas materializadas no se clona como copia aparte; se refresca desde las tablas restauradas. Los disparadores de usuario se desactivan mientras se cargan las filas; los disparadores clonados pueden ejecutarse después de reactivarlos. Los propietarios y las ACL se omiten salvo que pases `--with-privileges` (el destino ya debe tener esos roles). Los roles y tablespaces de ámbito de clúster no se crean. `template` y `physical-backup` se niegan a ejecutarse cuando la sanitización está activada. `logical-stream` redacta columnas sensibles en ese caso. Si `pg_dump` no está en el PATH, schema-replay reproduce el catálogo (incluye funciones, vistas, disparadores y reglas; omite restricciones de exclusión y clases de operadores).
 <!-- /readme:fidelity:schema-replay -->
 
 | Estrategia | Cuándo usarla | Sanitización |
 |---|---|---|
 | `schema-replay` | Clonación predeterminada entre servidores o para desarrollo | Compatible |
 | `template` | Misma instancia de PostgreSQL; más rápida | Se niega si está activada |
-| `logical-stream` | Copia lógica grande entre servidores | Se niega si está activada |
+| `logical-stream` | Copia lógica grande entre servidores | Redacta si está activada |
 | `physical-backup` | Copia del directorio de todo el clúster | Se niega si está activada |
 
 `physical-backup` usa `pg_basebackup`, requiere privilegios de replicación y copia todo el directorio de datos del clúster en lugar de una sola base de datos. Lea [copia de seguridad física](docs/physical-backup.md) antes de usarla.
@@ -217,8 +221,8 @@ Trate a Dolly como una herramienta de administración de bases de datos:
 
 - `restore --replace` trunca las tablas de destino antes de insertar.
 - `restore --no-transaction --yes` puede dejar un estado parcial en las tablas.
-- La sanitización se basa en patrones y solo se aplica a `dump` y `schema-replay`; no garantiza el cumplimiento normativo.
-- `template`, `logical-stream` y `physical-backup` se niegan a ejecutarse cuando la sanitización está activada. Con la sanitización desactivada copian datos de filas sin sanitizar.
+- La sanitización se basa en patrones y se aplica a `dump`, `schema-replay` y `logical-stream`; no garantiza el cumplimiento normativo.
+- `template` y `physical-backup` se niegan a ejecutarse cuando la sanitización está activada. Con la sanitización desactivada copian datos de filas sin sanitizar. `logical-stream` redacta filas cuando la sanitización está activada.
 
 Antes de usar datos de producción o similares a producción, utilice un rol con privilegios mínimos, mantenga los DSN y los volcados fuera de Git, confirme que los destinos de operaciones destructivas sean descartables, valide manualmente la sanitización y ensaye en un entorno de preproducción. Consulte [seguridad](docs/security.md) y [copia de seguridad física](docs/physical-backup.md).
 

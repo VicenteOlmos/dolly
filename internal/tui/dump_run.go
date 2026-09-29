@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -60,7 +61,10 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 		return err
 	}
 
-	overrides := runopts.DumpOverrides{NoTransaction: draft.NoTransaction}
+	overrides, err := dumpOverridesFromDraft(draft)
+	if err != nil {
+		return err
+	}
 	opts, err := runopts.BuildDumpOptions(overrides, cfg)
 	if err != nil {
 		return err
@@ -93,6 +97,53 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 		}
 	}
 	return nil
+}
+
+func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
+	percent, err := parseDraftPercent(draft.PercentText)
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
+	return runopts.DumpOverrides{
+		NoTransaction:  draft.NoTransaction,
+		SlowConnection: draft.SlowConnection,
+		RequireSafeKey: draft.RequireSafeKey,
+		Percent:        percent,
+		SeedFile:       strings.TrimSpace(draft.SeedFile),
+		ChunkTables:    splitChunkTables(draft.ChunkTables),
+		Workers:        draft.Workers,
+		WorkersSet:     draft.WorkersSet,
+	}, nil
+}
+
+func parseDraftPercent(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > 100 {
+		return 0, fmt.Errorf("percent must be an integer from 1 to 100")
+	}
+	return n, nil
+}
+
+func splitChunkTables(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n'
+	})
+	var out []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func maxDumpWorkers() int {
+	return dump.MaxParallelWorkers()
 }
 
 func workerPoolHeadroom(cfg *config.Config) int {

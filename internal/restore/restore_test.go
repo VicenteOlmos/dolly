@@ -2,6 +2,7 @@ package restore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -156,6 +157,57 @@ func TestRestoreFullFlow(t *testing.T) {
 
 	if err := Restore(context.Background(), sqlDB, dir); err != nil {
 		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreTransactionalCopyUsesSameSession(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(0))
+	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(tablesRows)
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+	emptyUniqueIndexMock(mock)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
+		WithArgs("public", "users").
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
+			AddRow("public", "users", "id"))
+	mock.ExpectExec(`SELECT CASE WHEN m\.max_value IS NULL THEN NULL ELSE setval\(pg_get_serial_sequence\('"public"\."users"', 'id'\), m\.max_value, true\) END`).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	orig := loadTableCopyInTx
+	var copied []string
+	loadTableCopyInTx = func(ctx context.Context, conn *sql.Conn, table db.Table, path string) error {
+		copied = append(copied, table.Schema+"."+table.Name)
+		if conn == nil {
+			t.Fatal("transactional COPY needs the checked-out connection")
+		}
+		return nil
+	}
+	t.Cleanup(func() { loadTableCopyInTx = orig })
+
+	if err := Restore(context.Background(), sqlDB, dir, WithDSN("postgres://localhost/db")); err != nil {
+		t.Fatal(err)
+	}
+	if len(copied) != 1 || copied[0] != "public.users" {
+		t.Fatalf("copied = %v", copied)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

@@ -10,7 +10,7 @@ func TestCloneStrategyDescription(t *testing.T) {
 	}{
 		{"schema-replay", "DDL replay, then dump + restore (default; supports sanitization)"},
 		{"template", "CREATE DATABASE … TEMPLATE on same server (fast, same instance only)"},
-		{"logical-stream", "Table-by-table COPY streaming (best for large cross-server clones)"},
+		{"logical-stream", "Table-by-table COPY streaming (large cross-server clones; redacts when sanitization is on)"},
 		{"physical-backup", "pg_basebackup cluster copy (entire data directory; needs target_dir)"},
 		{"", "DDL replay, then dump + restore (default; supports sanitization)"},
 		{"unknown", ""},

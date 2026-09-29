@@ -134,7 +134,7 @@ func TestCloneNeedsUnsanitizedWarning(t *testing.T) {
 	}{
 		{"schema-replay sanitized", "schema-replay", true, false},
 		{"template with sanitization", "template", true, true},
-		{"logical-stream with sanitization", "logical-stream", true, true},
+		{"logical-stream with sanitization", "logical-stream", true, false},
 		{"physical-backup with sanitization", "physical-backup", true, true},
 		{"disabled sanitization", "schema-replay", false, true},
 		{"empty strategy sanitized", "", true, false},

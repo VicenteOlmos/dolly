@@ -2,12 +2,12 @@
 │              __            ││ Dump                                      │
 │       UooU\.'@@@@@@`.      ││                                           │
 │       \__/(@@@@@@@@@@)     ││ > Base directory  /tmp/dolly-dump         │
-│          (@@@@@@@@)        ││   Schemas  No schemas selected            │
-│          `YY~~~~YY'        ││   History  (no dumps yet)                 │
-│           ||    ||         ││   Log  (no messages yet)                  │
-│                            ││                                           │
-│            dolly           ││ ↑/↓ section · Enter open                  │
-│                            ││                                           │
+│          (@@@@@@@@)        ││   Mode  full                              │
+│          `YY~~~~YY'        ││   Schemas  No schemas selected            │
+│           ||    ||         ││   History  (no dumps yet)                 │
+│                            ││   Log  (no messages yet)                  │
+│            dolly           ││                                           │
+│                            ││ ↑/↓ section · Enter open                  │
 │   1 connect                ││                                           │
 │   2 schema                 ││                                           │
 │ > 3 dump                   ││                                           │

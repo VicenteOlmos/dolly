@@ -958,7 +958,7 @@ func (a *App) shouldDeferRunKey() bool {
 	switch a.screen {
 	case ScreenDump:
 		if ds, ok := a.screens[ScreenDump].(*dumpScreen); ok {
-			return ds.sectionActive(dumpSectionPath)
+			return ds.sectionActive(dumpSectionPath) || ds.modeTextFocused()
 		}
 	case ScreenClone:
 		if cs, ok := a.screens[ScreenClone].(*cloneScreen); ok {

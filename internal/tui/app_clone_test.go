@@ -432,8 +432,19 @@ func TestCloneSavedProfileDSNMasked(t *testing.T) {
 	}
 }
 
+func TestAppCloneLogicalStreamSanitizedOmitsWarning(t *testing.T) {
+	app := cloneAppWithSession(t, &schemasRecordingCloneRunner{})
+	app.cfg.Sanitization.Enabled = true
+	app.clone.Strategy = "logical-stream"
+	app = drainUpdate(app, ctrlEnter())
+	log := strings.Join(app.cloneLog, "\n")
+	if strings.Contains(log, "warning: clone will copy unsanitized data") {
+		t.Fatalf("logical-stream redacts when sanitization is on:\n%s", log)
+	}
+}
+
 func TestAppCloneUnsanitizedWarningStrategies(t *testing.T) {
-	strategies := []string{"template", "logical-stream", "physical-backup"}
+	strategies := []string{"template", "physical-backup"}
 	for _, strategy := range strategies {
 		t.Run(strategy, func(t *testing.T) {
 			t.Parallel()

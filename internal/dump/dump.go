@@ -48,6 +48,7 @@ type config struct {
 	chunkIgnored       []IgnoredFileLine
 	workers            int
 	planValidator      PlanValidator
+	requireSafeKey     bool
 }
 
 type slowRetryConfig struct {
@@ -115,6 +116,14 @@ type Option func(*config)
 func WithoutTransaction() Option {
 	return func(c *config) {
 		c.withoutTransaction = true
+	}
+}
+
+// WithRequireSafeKey rejects ctid resume. Chunk and slow dumps fail when a
+// table has no primary key or eligible unique key.
+func WithRequireSafeKey() Option {
+	return func(c *config) {
+		c.requireSafeKey = true
 	}
 }
 
@@ -487,6 +496,10 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		plan, hasPlan := dispatchPlans[tableKey(table.Schema, table.Name)]
 		if hasPlan && plan.Resumable {
 			if plan.Strategy == KeyStrategyCTID {
+				if cfg.requireSafeKey {
+					return fmt.Errorf("table %q has no safe key; --require-safe-key refuses ctid resume",
+						qualifiedName(table.Schema, table.Name))
+				}
 				fmt.Fprintf(os.Stderr, "warning: table %q has no safe key; resuming with ctid (VACUUM or updates can skip or duplicate rows)\n",
 					qualifiedName(table.Schema, table.Name))
 			}

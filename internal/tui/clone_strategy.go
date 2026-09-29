@@ -17,7 +17,7 @@ var cloneStrategyOptions = []cloneStrategyOption{
 	},
 	{
 		Name:        "logical-stream",
-		Description: "Table-by-table COPY streaming (best for large cross-server clones)",
+		Description: "Table-by-table COPY streaming (large cross-server clones; redacts when sanitization is on)",
 	},
 	{
 		Name:        "physical-backup",

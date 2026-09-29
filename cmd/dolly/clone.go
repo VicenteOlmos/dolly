@@ -413,8 +413,8 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		targetDir = flags.TargetDir
 	}
 
-	if cfg.Sanitization.Enabled && (strategy == "template" || strategy == "logical-stream" || strategy == "physical-backup") {
-		return fmt.Errorf("sanitization cannot rewrite %s clones; use schema-replay or disable sanitization", strategy)
+	if cfg.Sanitization.Enabled && (strategy == "template" || strategy == "physical-backup") {
+		return fmt.Errorf("sanitization cannot rewrite %s clones; use schema-replay or logical-stream, or disable sanitization", strategy)
 	}
 	if !cfg.Sanitization.Enabled {
 		fmt.Fprintf(os.Stderr, "warning: clone will copy unsanitized data (strategy=%s, sanitization=%v)\n", strategy, cfg.Sanitization.Enabled)
@@ -436,6 +436,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		PermissionCache:   permCache,
 		MaxOpenConns:      maxConns,
 		IncludePrivileges: flags.IncludePrivileges,
+		RowTransform:      dump.InspectRowTransform(dump.SanitizationOptions(cfg.Sanitization.Enabled && strategy == "logical-stream")...),
 		ProgressEvent: func(ev clone.ProgressEvent) {
 			if flags.JSON {
 				return

@@ -1107,6 +1107,33 @@ func TestRunCloneExecuteSanitizationEnabled(t *testing.T) {
 	}
 }
 
+func TestRunCloneExecuteLogicalStreamSanitizesRows(t *testing.T) {
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	cfg := config.DefaultConfig()
+	cfg.Sanitization.Enabled = true
+	err := runCloneExecute(context.Background(), cloneFlags{}, cfg, "postgres://u:p@h/db", "clone_x", "", []string{"public"}, "logical-stream")
+	if err != nil {
+		t.Fatalf("runCloneExecute: %v", err)
+	}
+	if capturedOpts.RowTransform == nil {
+		t.Fatal("logical-stream should receive a row transform when sanitization is enabled")
+	}
+	out, err := capturedOpts.RowTransform("public", "users", []db.Column{{Name: "email", DataType: "text"}}, map[string]any{"email": "a@b.c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["email"] != "redacted@example.com" {
+		t.Fatalf("email = %v", out["email"])
+	}
+}
+
 func TestRunCloneExecuteSanitizationDisabledDefault(t *testing.T) {
 	var capturedOpts clone.Options
 	origRun := cloneRun

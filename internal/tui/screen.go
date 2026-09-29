@@ -124,10 +124,17 @@ type SchemaDraft struct {
 }
 
 type DumpDraft struct {
-	OutputDir     string
-	NoTransaction bool
-	SchemaPicker  SchemaPickerState
-	History       DumpHistoryState
+	OutputDir      string
+	NoTransaction  bool
+	SlowConnection bool
+	RequireSafeKey bool
+	PercentText    string
+	SeedFile       string
+	ChunkTables    string
+	Workers        int
+	WorkersSet     bool
+	SchemaPicker   SchemaPickerState
+	History        DumpHistoryState
 }
 
 // DumpHistoryEntry is one row in the dump history list.

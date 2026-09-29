@@ -2,6 +2,7 @@ package clone
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,15 @@ import (
 
 // lookPath is overridable for testing precondition checks.
 var lookPath = exec.LookPath
+
+// schemaToolLookPath decides whether schema-replay can pipe pg_dump.
+// It is separate from lookPath so preflight stubs do not change schema replay.
+var schemaToolLookPath = exec.LookPath
+
+// applySchemasFromSourceFn replays catalog DDL when pg_dump is not on PATH.
+var applySchemasFromSourceFn = func(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string, includePrivileges bool) error {
+	return applySchemas(ctx, srcDB, tgtDB, schemas, includePrivileges)
+}
 
 var schemaReplayCleanupTimeout = 30 * time.Second
 
@@ -115,7 +125,12 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		Total:   totalSteps,
 		Elapsed: time.Since(startedAt),
 	})
-	if err := runner.PipeWithEnv(ctx, env, "pg_dump", srcArgs, "psql", tgtArgs); err != nil {
+	if _, lookErr := schemaToolLookPath("pg_dump"); lookErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: pg_dump not on PATH; replaying schema from the catalog\n")
+		if err := replaySchemaFromCatalog(ctx, opts, targetDSN); err != nil {
+			return fmt.Errorf("replay schema: %w", err)
+		}
+	} else if err := runner.PipeWithEnv(ctx, env, "pg_dump", srcArgs, "psql", tgtArgs); err != nil {
 		return fmt.Errorf("replay schema: %w", err)
 	}
 
@@ -184,6 +199,29 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 	}
 
 	return nil
+}
+
+func replaySchemaFromCatalog(ctx context.Context, opts Options, targetDSN string) error {
+	srcDB, err := sqlOpenDB(opts.SourceDSN)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+	defer srcDB.Close()
+	tgtDB, err := sqlOpenDB(targetDSN)
+	if err != nil {
+		return fmt.Errorf("open target: %w", err)
+	}
+	defer tgtDB.Close()
+
+	schemas := SchemasFromOptions(opts)
+	if len(schemas) == 0 {
+		names, err := listSchemaNamesFunc(ctx, srcDB)
+		if err != nil {
+			return fmt.Errorf("list schemas: %w", err)
+		}
+		schemas = names
+	}
+	return applySchemasFromSourceFn(ctx, srcDB, tgtDB, schemas, opts.IncludePrivileges)
 }
 
 // Ensure SchemaReplayStrategy implements Strategy.

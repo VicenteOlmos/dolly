@@ -46,6 +46,7 @@ func CLICatalog() []CLICommand {
 				{Name: "seed-file", Description: "JSON seed file for subset dump (omit for full-schema dump; table may be schema.table; conflicts with --percent/--slow-connection)"},
 				{Name: "percent", Description: "percent-based subset dump (1-100). Samples recent root rows, then FK closure may exceed percent. Conflicts with --seed-file/--slow-connection"},
 				{Name: "slow-connection", Description: "stream in resumable chunks; incompatible with subset modes"},
+				{Name: "require-safe-key", Description: "refuse ctid resume when a chunk or slow table has no primary or unique key"},
 				{Name: "chunk-size", Description: "rows per slow-connection chunk"},
 				{Name: "retry-max", Description: "slow-connection retry attempts"},
 				{Name: "retry-base", Description: "slow-connection retry delay"},
