@@ -128,6 +128,16 @@ func TestFormatTableCheckConstraint(t *testing.T) {
 	}
 }
 
+func TestFormatAlterDomainAddConstraint(t *testing.T) {
+	t.Parallel()
+	def := "CHECK (VALUE > 0)"
+	got := formatAlterDomainAddConstraint("app", "positive_int", "positive_int_check", def)
+	want := `ALTER DOMAIN "app"."positive_int" ADD CONSTRAINT "positive_int_check" CHECK (VALUE > 0)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatAlterTableAddConstraintForeignKey(t *testing.T) {
 	t.Parallel()
 	def := `FOREIGN KEY ("user_id") REFERENCES "app"."users" ("id") ON DELETE CASCADE`
@@ -158,12 +168,55 @@ func TestFormatCommentOn(t *testing.T) {
 	}
 }
 
+func TestCommentTargetFunctionAndIndex(t *testing.T) {
+	t.Parallel()
+	fn := commentTarget("function", "app", "my_sum(integer)", "")
+	wantFn := `FUNCTION "app"."my_sum"(integer)`
+	if fn != wantFn {
+		t.Fatalf("function target = %q, want %q", fn, wantFn)
+	}
+	if got := commentTarget("procedure", "app", "my_proc(integer)", ""); got != `PROCEDURE "app"."my_proc"(integer)` {
+		t.Fatalf("procedure target = %q", got)
+	}
+	idx := commentTarget("index", "app", "users_email_idx", "")
+	wantIdx := `INDEX "app"."users_email_idx"`
+	if idx != wantIdx {
+		t.Fatalf("index target = %q, want %q", idx, wantIdx)
+	}
+}
+
 func TestFormatGrantTable(t *testing.T) {
 	t.Parallel()
 	got := formatGrantTable("SELECT, INSERT", "app", "users", "app_reader")
 	want := `GRANT SELECT, INSERT ON TABLE "app"."users" TO "app_reader"`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatGrantColumn(t *testing.T) {
+	t.Parallel()
+	got := formatGrantColumn("SELECT, UPDATE", "app", "users", "email", "app_reader")
+	want := `GRANT SELECT ("email"), UPDATE ("email") ON TABLE "app"."users" TO "app_reader"`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatGrantSequenceAndRoutine(t *testing.T) {
+	t.Parallel()
+	seq := formatGrantSequence("SELECT, USAGE", "app", "users_id_seq", "app_reader")
+	wantSeq := `GRANT SELECT, USAGE ON SEQUENCE "app"."users_id_seq" TO "app_reader"`
+	if seq != wantSeq {
+		t.Fatalf("sequence grant = %q, want %q", seq, wantSeq)
+	}
+	routine := formatGrantRoutine("app", "my_sum", "integer", "FUNCTION", "app_reader")
+	wantRoutine := `GRANT EXECUTE ON FUNCTION "app"."my_sum"(integer) TO "app_reader"`
+	if routine != wantRoutine {
+		t.Fatalf("routine grant = %q, want %q", routine, wantRoutine)
+	}
+	if got := formatGrantRoutine("app", "my_proc", "integer", "PROCEDURE", "PUBLIC"); got != `GRANT EXECUTE ON PROCEDURE "app"."my_proc"(integer) TO PUBLIC` {
+		t.Fatalf("procedure grant = %q", got)
 	}
 }
 

@@ -113,6 +113,17 @@ func formatTableCheckConstraint(name, pgConstraintDef string) string {
 	return fmt.Sprintf("CONSTRAINT %s CHECK (%s)", quoteIdentifier(name), def)
 }
 
+// formatAlterDomainAddConstraint uses pg_get_constraintdef output for domain CHECK.
+func formatAlterDomainAddConstraint(schema, domain, constraintName, pgConstraintDef string) string {
+	def := strings.TrimSpace(pgConstraintDef)
+	return fmt.Sprintf(
+		"ALTER DOMAIN %s ADD CONSTRAINT %s %s",
+		quoteQualifiedType(schema, domain),
+		quoteIdentifier(constraintName),
+		def,
+	)
+}
+
 // formatAlterTableAddConstraint uses pg_get_constraintdef output for FOREIGN KEY.
 func formatAlterTableAddConstraint(schema, table, constraintName, pgConstraintDef string) string {
 	def := strings.TrimSpace(pgConstraintDef)
@@ -162,6 +173,16 @@ func commentTarget(kind, schema, object, column string) string {
 		return "MATERIALIZED VIEW " + quoteQualifiedTable(schema, object)
 	case "sequence":
 		return "SEQUENCE " + quoteQualifiedTable(schema, object)
+	case "function", "procedure":
+		target := strings.ToUpper(kind)
+		fn, argList, ok := strings.Cut(object, "(")
+		if !ok || !strings.HasSuffix(argList, ")") {
+			return target + " " + quoteQualifiedTable(schema, object)
+		}
+		argList = strings.TrimSuffix(argList, ")")
+		return target + " " + quoteQualifiedType(schema, fn) + "(" + argList + ")"
+	case "index":
+		return "INDEX " + quoteQualifiedTable(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
@@ -173,6 +194,41 @@ func formatGrantTable(privileges, schema, table, grantee string) string {
 		"GRANT %s ON TABLE %s TO %s",
 		privileges,
 		quoteQualifiedTable(schema, table),
+		quoteGrantee(grantee),
+	)
+}
+
+// formatGrantColumn emits GRANT privileges (column) ON TABLE.
+func formatGrantColumn(privileges, schema, table, column, grantee string) string {
+	parts := strings.Split(privileges, ", ")
+	for i, priv := range parts {
+		parts[i] = priv + " (" + quoteIdentifier(column) + ")"
+	}
+	return fmt.Sprintf(
+		"GRANT %s ON TABLE %s TO %s",
+		strings.Join(parts, ", "),
+		quoteQualifiedTable(schema, table),
+		quoteGrantee(grantee),
+	)
+}
+
+// formatGrantSequence emits GRANT privileges ON SEQUENCE.
+func formatGrantSequence(privileges, schema, sequence, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT %s ON SEQUENCE %s TO %s",
+		privileges,
+		quoteQualifiedTable(schema, sequence),
+		quoteGrantee(grantee),
+	)
+}
+
+// formatGrantRoutine emits GRANT EXECUTE ON FUNCTION or PROCEDURE.
+func formatGrantRoutine(schema, name, identityArgs, kind, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT EXECUTE ON %s %s(%s) TO %s",
+		kind,
+		quoteQualifiedType(schema, name),
+		identityArgs,
 		quoteGrantee(grantee),
 	)
 }

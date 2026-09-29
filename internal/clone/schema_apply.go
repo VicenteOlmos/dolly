@@ -118,6 +118,10 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err := applyDomainTypes(ctx, tgtDB, domains); err != nil {
 		return err
 	}
+	domainChecks, err := loadDomainCheckConstraints(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
 
 	composites, err := loadCompositeTypes(ctx, srcDB, schemas)
 	if err != nil {
@@ -155,6 +159,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applySQLDefs(ctx, tgtDB, aggregates, "aggregate"); err != nil {
+		return err
+	}
+	if err := applyDomainCheckConstraints(ctx, tgtDB, domainChecks); err != nil {
 		return err
 	}
 
@@ -226,6 +233,11 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	stats, err := loadStatistics(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+
 	views, err := loadViews(ctx, srcDB, schemas)
 	if err != nil {
 		return err
@@ -239,6 +251,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyViews(ctx, tgtDB, views); err != nil {
+		return err
+	}
+	if err := applyStatistics(ctx, tgtDB, stats); err != nil {
 		return err
 	}
 
@@ -271,6 +286,27 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 			return err
 		}
 		if err := applyGrants(ctx, tgtDB, grants); err != nil {
+			return err
+		}
+		columnGrants, err := loadColumnGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyColumnGrants(ctx, tgtDB, columnGrants); err != nil {
+			return err
+		}
+		sequenceGrants, err := loadSequenceGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applySequenceGrants(ctx, tgtDB, sequenceGrants); err != nil {
+			return err
+		}
+		routineGrants, err := loadRoutineGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyRoutineGrants(ctx, tgtDB, routineGrants); err != nil {
 			return err
 		}
 	}
