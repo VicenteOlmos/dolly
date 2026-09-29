@@ -511,6 +511,48 @@ func applyIndexes(ctx context.Context, tgtDB execer, indexes []indexRow) error {
 	return nil
 }
 
+func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT pg_catalog.pg_get_statisticsobjdef(s.oid)
+		FROM pg_statistic_ext s
+		INNER JOIN pg_namespace n ON n.oid = s.stxnamespace
+		WHERE n.nspname IN (%s)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    WHERE d.objid = s.oid AND d.deptype = 'e'
+		  )
+		ORDER BY n.nspname, s.stxname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list statistics: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var def string
+		if err := rows.Scan(&def); err != nil {
+			return nil, fmt.Errorf("scan statistics: %w", err)
+		}
+		def = strings.TrimSpace(def)
+		if def == "" {
+			continue
+		}
+		out = append(out, def)
+	}
+	return out, rows.Err()
+}
+
+func applyStatistics(ctx context.Context, tgtDB execer, defs []string) error {
+	for _, def := range defs {
+		if _, err := tgtDB.ExecContext(ctx, def); err != nil {
+			return fmt.Errorf("create statistics: %w", err)
+		}
+	}
+	return nil
+}
+
 type viewRow struct {
 	schema       string
 	name         string

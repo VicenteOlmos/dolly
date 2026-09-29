@@ -76,6 +76,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
+	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
+		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
@@ -367,6 +369,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef"}))
+	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
+		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}).
 			AddRow("app", "active_users", "SELECT id FROM users", false))

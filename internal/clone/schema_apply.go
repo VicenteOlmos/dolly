@@ -215,6 +215,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	stats, err := loadStatistics(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyStatistics(ctx, tgtDB, stats); err != nil {
+		return err
+	}
+
 	views, err := loadViews(ctx, srcDB, schemas)
 	if err != nil {
 		return err
