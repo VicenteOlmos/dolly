@@ -71,6 +71,60 @@ func TestBuildInsertUpsert(t *testing.T) {
 	}
 }
 
+func TestBuildInsertAlwaysIdentity(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "invoices",
+		Columns: []db.Column{
+			{Name: "id", DataType: "integer", PrimaryKey: true, Identity: "ALWAYS"},
+			{Name: "note", DataType: "text"},
+		},
+	}
+
+	q, _, err := buildInsert(table, ConflictError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `OVERRIDING SYSTEM VALUE`) || strings.Contains(q, "ON CONFLICT") {
+		t.Fatalf("error policy query = %s", q)
+	}
+
+	q, _, err = buildInsert(table, ConflictSkip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `OVERRIDING SYSTEM VALUE`) || !strings.Contains(q, `ON CONFLICT ("id") DO NOTHING`) {
+		t.Fatalf("skip policy query = %s", q)
+	}
+
+	q, _, err = buildInsert(table, ConflictUpsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `OVERRIDING SYSTEM VALUE`) || !strings.Contains(q, `ON CONFLICT ("id") DO UPDATE SET`) {
+		t.Fatalf("upsert policy query = %s", q)
+	}
+
+	byDefault := table
+	byDefault.Columns[0].Identity = "BY DEFAULT"
+	q, _, err = buildInsert(byDefault, ConflictError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, "OVERRIDING SYSTEM VALUE") {
+		t.Fatalf("BY DEFAULT should not override: %s", q)
+	}
+
+	empty := db.Table{Schema: "public", Name: "defaults"}
+	q, _, err = buildInsert(empty, ConflictError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, "OVERRIDING SYSTEM VALUE") {
+		t.Fatalf("DEFAULT VALUES must not override: %s", q)
+	}
+}
+
 func TestParseConflictPolicy(t *testing.T) {
 	p, err := ParseConflictPolicy("skip")
 	if err != nil || p != ConflictSkip {

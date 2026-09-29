@@ -168,7 +168,7 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. Refuses when the effective schema scope has no tables. |
 | `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. Empty schema scope fails closed; nonempty scope with no eligible percent roots reports a candidate-root diagnostic. |
 | `dolly dump list` | List local dump history without a database connection. |
-| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. |
+| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. `ALWAYS` identity columns use `INSERT ... OVERRIDING SYSTEM VALUE` on the row-by-row path; COPY keeps identity columns in the column list. |
 | `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. |
 | `dolly config` | Create or inspect `config.jsonc` with `init` and `show`. |
 | `dolly update` | Install the latest stable GitHub release (`--check` verifies without replacing; Windows defers replacement to a hidden helper). |
@@ -207,7 +207,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump \
 
 **Result/artifacts** numbered `{output}/{n}/` with NDJSON per table, `metadata.json` selection provenance (credential-free), and optional `schema.sql` when `pg_dump` is on `PATH`.
 
-**Constraint/warning** includes narrow scope; excludes win over includes. Globs, CSV, and unqualified names are rejected. Unmatched includes fail before output; unmatched excludes become warnings in metadata. Subset modes (`--percent`, `--seed-file`) are incompatible on the same run. Shared-snapshot parallel dump (`--workers N`) can export included tables when chunk/slow/subset/`--no-transaction` are off.
+**Constraint/warning** includes narrow scope; excludes win over includes. Globs, CSV, and unqualified names are rejected. Unmatched includes fail before output; unmatched excludes become warnings in metadata. `--include-table` of a partitioned parent fails with its direct leaf partitions; `--exclude-table` of a parent also excludes every nested leaf. Subset modes (`--percent`, `--seed-file`) are incompatible on the same run. Shared-snapshot parallel dump (`--workers N`) can export included tables when chunk/slow/subset/`--no-transaction` are off.
 
 ### Selector files
 

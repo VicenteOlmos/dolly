@@ -10,6 +10,8 @@ type Column struct {
 	// Generated is true for GENERATED ALWAYS columns. Identity columns stay false
 	// so dumped IDs are preserved.
 	Generated bool `json:"generated,omitempty"`
+	// Identity is ALWAYS or BY DEFAULT for identity columns (empty otherwise).
+	Identity string `json:"identity,omitempty"`
 }
 
 // ForeignKey represents a foreign-key constraint.

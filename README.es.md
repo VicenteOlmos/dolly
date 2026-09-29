@@ -157,7 +157,7 @@ Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para
 | `dolly dump` | Exporta datos a directorios de volcado NDJSON numerados. |
 | `dolly dump --percent N` | Volcado parcial: raíces recientes más cierre de claves foráneas; la salida puede superar el `N%`. |
 | `dolly dump list` | Enumera el historial local de volcados sin conectarse a una base de datos. |
-| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. |
+| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. Las columnas identity `ALWAYS` usan `INSERT ... OVERRIDING SYSTEM VALUE` en la ruta fila a fila; COPY mantiene esas columnas en la lista explícita. |
 | `dolly clone` | Clona con `schema-replay`, `template`, `logical-stream` o `physical-backup`. |
 | `dolly config` | Crea o inspecciona `config.jsonc` con `init` y `show`. |
 | `dolly version` | Muestra la versión de compilación. |
@@ -168,7 +168,7 @@ Ejecute `dolly <command> --help` para consultar los flags específicos de cada c
 
 **Modo de volcado en la TUI:** la sección Mode fija conexión lenta, `--require-safe-key`, workers, porcentaje, archivo de semillas, tablas en fragmentos, límites de subconjunto (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`) e include/exclude para la siguiente ejecución. `--max-in-list-size` sigue solo en la CLI. Los mismos flags siguen en `dolly dump`.
 
-Las tablas padre particionadas no se exportan: un `SELECT` del padre devuelve todas las hijas, así que Dolly vuelca y clona solo las particiones hoja. Nombra esas particiones en `--include-table`. Las columnas `GENERATED ALWAYS` quedan en los metadatos y se omiten al restaurar y en `logical-stream` para que el destino las calcule. Las columnas identity sí se copian.
+Las tablas padre particionadas no se exportan: un `SELECT` del padre devuelve todas las hijas, así que Dolly vuelca y clona solo las particiones hoja. Nombra esas particiones en `--include-table`; incluir el padre falla con sus hojas directas y excluir el padre también excluye cada hoja anidada. Las columnas `GENERATED ALWAYS` quedan en los metadatos y se omiten al restaurar y en `logical-stream` para que el destino las calcule. Las columnas identity sí se copian.
 
 Cuando `pg_dump` está en el `PATH`, Dolly captura `schema.sql` y lo sanitiza para permitir restauraciones compatibles entre versiones, incluyendo `CREATE SCHEMA IF NOT EXISTS` para que `--trust-schema-sql` pueda reproducirse en una base nueva que ya tiene `public`. Si falta `pg_dump`, Dolly escribe el mismo archivo desde la reproducción del catálogo (sin propietarios ni ACL) y avisa en stderr. Restore nunca ejecuta ese SQL a menos que pase explícitamente `--trust-schema-sql` para artefactos revisados.
 
@@ -190,7 +190,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Restauración masiva más rápida — avanzado
 
-La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. Skip y upsert siguen en INSERT. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
+La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. Skip y upsert siguen en INSERT con `OVERRIDING SYSTEM VALUE` cuando los metadatos marcan identity `ALWAYS`. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
 
 Para destinos vacíos de confianza o cargas muy grandes:
 
