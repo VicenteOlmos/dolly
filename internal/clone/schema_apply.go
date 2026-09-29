@@ -24,6 +24,9 @@ type schemaColumn struct {
 	defaultExpr     sql.NullString
 	ordinalPosition int
 	generatedExpr   string
+	identityGen     string
+	collationSchema string
+	collationName   string
 }
 
 type uniqueConstraint struct {
@@ -169,6 +172,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 			return err
 		}
 		if err := mergeGeneratedExpressions(ctx, srcDB, schemas, schemaCols); err != nil {
+			return err
+		}
+		if err := mergeColumnCatalog(ctx, srcDB, schemas, schemaCols); err != nil {
 			return err
 		}
 		uniqueMap, err := loadAllUniqueConstraints(ctx, srcDB, schemas)
@@ -687,6 +693,70 @@ func mergeGeneratedExpressions(ctx context.Context, q *sql.DB, schemas []string,
 			if expr, ok := exprs[exprKey{key, list[i].name}]; ok {
 				list[i].generatedExpr = expr
 			}
+		}
+		cols[key] = list
+	}
+	return nil
+}
+
+func mergeColumnCatalog(ctx context.Context, q *sql.DB, schemas []string, cols map[string][]schemaColumn) error {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, a.attname,
+		  pg_catalog.format_type(a.atttypid, a.atttypmod),
+		  CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' ELSE '' END,
+		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation THEN coll_ns.nspname ELSE '' END,
+		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation THEN coll.collname ELSE '' END
+		FROM pg_attribute a
+		JOIN pg_class c ON c.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_type t ON t.oid = a.atttypid
+		LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
+		LEFT JOIN pg_namespace coll_ns ON coll_ns.oid = coll.collnamespace
+		WHERE a.attnum > 0 AND NOT a.attisdropped
+		  AND c.relkind IN ('r', 'p')
+		  AND n.nspname IN (%s)
+	`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("load column catalog types: %w", err)
+	}
+	defer rows.Close()
+	type colKey struct{ table, column string }
+	type catalogCol struct {
+		sqlType    string
+		identity   string
+		collSchema string
+		collName   string
+	}
+	byCol := map[colKey]catalogCol{}
+	for rows.Next() {
+		var schema, table, column, sqlType, identity, collSchema, collName string
+		if err := rows.Scan(&schema, &table, &column, &sqlType, &identity, &collSchema, &collName); err != nil {
+			return fmt.Errorf("load column catalog types: %w", err)
+		}
+		byCol[colKey{schema + "." + table, column}] = catalogCol{
+			sqlType:    sqlType,
+			identity:   identity,
+			collSchema: collSchema,
+			collName:   collName,
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load column catalog types: %w", err)
+	}
+	for key, list := range cols {
+		for i := range list {
+			cc, ok := byCol[colKey{key, list[i].name}]
+			if !ok {
+				continue
+			}
+			if cc.sqlType != "" {
+				list[i].sqlType = cc.sqlType
+			}
+			list[i].identityGen = cc.identity
+			list[i].collationSchema = cc.collSchema
+			list[i].collationName = cc.collName
 		}
 		cols[key] = list
 	}

@@ -60,6 +60,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 		WillReturnRows(allDDLCols)
 	srcMock.ExpectQuery(`is_generated = 'ALWAYS'`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "generation_expression"}))
+	srcMock.ExpectQuery(`format_type`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "format_type", "identity", "coll_schema", "coll_name"}))
 	// loadAllUniqueConstraints (1 query).
 	srcMock.ExpectQuery(`constraint_type = 'UNIQUE'[\s\S]*table_schema IN \(\$1`).
 		WillReturnRows(allUniques)
