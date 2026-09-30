@@ -15,6 +15,7 @@ const (
 	historyFocusPath
 	historyFocusConflict
 	historyFocusReplace
+	historyFocusWorkers
 	historyFocusTrust
 	historyFocusCount
 )
@@ -31,6 +32,7 @@ const (
 const (
 	modeFieldSlow = iota
 	modeFieldSafe
+	modeFieldSanitize
 	modeFieldWorkers
 	modeFieldPercent
 	modeFieldSeed
@@ -60,6 +62,7 @@ type dumpScreen struct {
 	restoreProgress        **RestoreProgressEvent
 	restoreRunning         *bool
 	hasSession             func() bool
+	sanitizeDefault        func() bool
 	nav                    SectionNav
 	pathCursor             int
 	modeField              int
@@ -81,6 +84,8 @@ type dumpScreen struct {
 	restoreDir             string
 	restoreDirCursor       int
 	restoreDirFocus        bool
+	restoreWorkersFocus    bool
+	restoreWorkersCursor   int
 	historyFocus           int
 	logTailOffset          int
 	fileListOffset         int
@@ -88,10 +93,11 @@ type dumpScreen struct {
 	trustedSchemaSQL       bool
 }
 
-func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool) ScreenModel {
+func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool, sanitizeDefault func() bool) ScreenModel {
 	return &dumpScreen{
 		draft:           draft,
 		hasSession:      hasSession,
+		sanitizeDefault: sanitizeDefault,
 		dumpStatus:      dumpStatus,
 		dumpLog:         dumpLog,
 		dumpError:       dumpError,
@@ -207,8 +213,9 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 	}
 
 	if d.nav.InInside() && k.Code == tea.KeyEscape {
-		if d.nav.Section == dumpSectionHistory && d.restoreDirFocus {
+		if d.nav.Section == dumpSectionHistory && (d.restoreDirFocus || d.restoreWorkersFocus) {
 			d.restoreDirFocus = false
+			d.restoreWorkersFocus = false
 			return nil
 		}
 		d.nav.Exit()
@@ -217,13 +224,16 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 
 	if d.nav.InInside() && d.nav.Section == dumpSectionHistory {
 		if k.Code == tea.KeyTab {
-			if d.restoreDirFocus {
-				d.restoreDirFocus = false
-			}
+			d.restoreDirFocus = false
+			d.restoreWorkersFocus = false
 			d.historyFocus = (d.historyFocus + 1) % historyFocusCount
 			if d.historyFocus == historyFocusPath {
 				d.restoreDirFocus = true
 				d.restoreDirCursor = len(d.restoreDir)
+			}
+			if d.historyFocus == historyFocusWorkers {
+				d.restoreWorkersFocus = true
+				d.restoreWorkersCursor = len(d.draft.RestoreWorkersText)
 			}
 			return nil
 		}
@@ -239,7 +249,14 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 			d.restoreDirFocus = false
 			return nil
 		}
-		if k.Code == tea.KeySpace && !d.restoreDirFocus {
+		if d.restoreWorkersFocus && handleFieldCursorKey(k, &d.draft.RestoreWorkersText, &d.restoreWorkersCursor) {
+			return nil
+		}
+		if d.restoreWorkersFocus && k.Code == tea.KeyEscape {
+			d.restoreWorkersFocus = false
+			return nil
+		}
+		if k.Code == tea.KeySpace && !d.restoreDirFocus && !d.restoreWorkersFocus {
 			switch d.historyFocus {
 			case historyFocusConflict:
 				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
@@ -255,7 +272,7 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 		}
-		if k.Code == tea.KeyEnter && !d.restoreDirFocus {
+		if k.Code == tea.KeyEnter && !d.restoreDirFocus && !d.restoreWorkersFocus {
 			if d.historyFocus == historyFocusConflict {
 				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
 				return nil
@@ -373,7 +390,8 @@ func (d *dumpScreen) requestRestore() tea.Cmd {
 }
 
 func (d *dumpScreen) onFieldCursorNavigation() bool {
-	return d.sectionActive(dumpSectionPath) || d.modeTextFocused()
+	return d.sectionActive(dumpSectionPath) || d.modeTextFocused() ||
+		(d.sectionActive(dumpSectionHistory) && (d.restoreDirFocus || d.restoreWorkersFocus))
 }
 
 func (d *dumpScreen) modeTextFocused() bool {
@@ -466,6 +484,12 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			d.draft.RequireSafeKey = !d.draft.RequireSafeKey
 			return true
 		}
+	case modeFieldSanitize:
+		if k.Code == tea.KeySpace {
+			d.draft.Sanitize = !d.sanitizeEnabled()
+			d.draft.SanitizeSet = true
+			return true
+		}
 	case modeFieldWorkers:
 		switch k.Code {
 		case tea.KeyLeft:
@@ -508,6 +532,9 @@ func (d *dumpScreen) modeSummary() string {
 	if d.draft.RequireSafeKey {
 		parts = append(parts, "safe-key")
 	}
+	if d.sanitizeEnabled() {
+		parts = append(parts, "sanitize")
+	}
 	if strings.TrimSpace(d.draft.PercentText) != "" {
 		parts = append(parts, strings.TrimSpace(d.draft.PercentText)+"%")
 	}
@@ -543,6 +570,24 @@ func (d *dumpScreen) workersLabel() string {
 		return "config"
 	}
 	return strconv.Itoa(d.draft.Workers)
+}
+
+func (d *dumpScreen) sanitizeEnabled() bool {
+	if d.draft.SanitizeSet {
+		return d.draft.Sanitize
+	}
+	return d.sanitizeDefault != nil && d.sanitizeDefault()
+}
+
+func (d *dumpScreen) sanitizeLabel() string {
+	label := "off"
+	if d.sanitizeEnabled() {
+		label = "on"
+	}
+	if !d.draft.SanitizeSet {
+		return label + " (config)"
+	}
+	return label
 }
 
 func (d *dumpScreen) View(width, height int) string {
@@ -677,6 +722,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 	}{
 		{modeFieldSlow, "Slow connection", onOff(d.draft.SlowConnection)},
 		{modeFieldSafe, "Require safe key", onOff(d.draft.RequireSafeKey)},
+		{modeFieldSanitize, "Sanitize", d.sanitizeLabel()},
 		{modeFieldWorkers, "Workers", d.workersLabel()},
 		{modeFieldPercent, "Percent", d.modeFieldValue(d.draft.PercentText, d.percentCursor, modeFieldPercent)},
 		{modeFieldSeed, "Seed file", d.modeFieldValue(d.draft.SeedFile, d.seedCursor, modeFieldSeed)},
@@ -741,7 +787,7 @@ func (d *dumpScreen) toggleRestoreReplace() {
 }
 
 func (d *dumpScreen) moveHistoryFocus(delta int) {
-	if d.restoreDirFocus {
+	if d.restoreDirFocus || d.restoreWorkersFocus {
 		return
 	}
 	d.historyFocus += delta
@@ -770,6 +816,13 @@ func (d *dumpScreen) restoreReplaceLabel() string {
 	return "off"
 }
 
+func (d *dumpScreen) restoreWorkersLabel() string {
+	if strings.TrimSpace(d.draft.RestoreWorkersText) == "" {
+		return "config"
+	}
+	return d.draft.RestoreWorkersText
+}
+
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
@@ -785,12 +838,17 @@ func (d *dumpScreen) historySection(maxLines int) []string {
 	lines = append(lines, d.historyControlLine(historyFocusConflict, "On conflict:", conflictVal))
 	replaceVal := d.restoreReplaceLabel()
 	lines = append(lines, d.historyControlLine(historyFocusReplace, "Replace:", replaceVal))
+	workersVal := d.restoreWorkersLabel()
+	if d.historyFocus == historyFocusWorkers && d.restoreWorkersFocus {
+		workersVal = renderEditableField(d.draft.RestoreWorkersText, d.restoreWorkersCursor, false, true)
+	}
+	lines = append(lines, d.historyControlLine(historyFocusWorkers, "Workers:", workersVal))
 	trusted := "[ ]"
 	if d.trustedSchemaSQL {
 		trusted = "[x]"
 	}
 	lines = append(lines, d.historyControlLine(historyFocusTrust, "", trusted+" Trust schema.sql for this restore"))
-	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-5)...)
+	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-6)...)
 	return lines
 }
 
@@ -800,6 +858,9 @@ func (d *dumpScreen) historyControlLine(focus int, label, value string) string {
 		prefix = "> "
 	}
 	if focus == historyFocusPath && d.restoreDirFocus {
+		prefix = "> "
+	}
+	if focus == historyFocusWorkers && d.restoreWorkersFocus {
 		prefix = "> "
 	}
 	line := prefix

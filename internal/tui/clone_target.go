@@ -2,7 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
@@ -42,6 +44,24 @@ func effectiveCloneStrategy(strategy string) string {
 		return "schema-replay"
 	}
 	return strategy
+}
+
+func effectiveCloneStrategyForDraft(draft CloneDraft, cfg *config.Config) string {
+	strategy := strings.TrimSpace(draft.Strategy)
+	if strategy == "" && cfg != nil {
+		strategy = cfg.Clone.Strategy
+	}
+	return effectiveCloneStrategy(strategy)
+}
+
+func effectiveCloneTargetDir(draft CloneDraft, cfg *config.Config) string {
+	if trimmed := strings.TrimSpace(draft.TargetDir); trimmed != "" {
+		return trimmed
+	}
+	if cfg != nil {
+		return strings.TrimSpace(cfg.Clone.TargetDir)
+	}
+	return ""
 }
 
 // cloneNeedsUnsanitizedWarning mirrors the CLI guardrail: warn when clone will not

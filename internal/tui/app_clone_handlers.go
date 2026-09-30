@@ -28,6 +28,10 @@ func (a *App) handleCloneRequested() (tea.Model, tea.Cmd) {
 		a.statusMsg = truncateStatus(StyleWarning.Render("Set target DSN"), a.width)
 		return a, nil
 	}
+	if effectiveCloneStrategyForDraft(a.clone, a.cfg) == "physical-backup" && effectiveCloneTargetDir(a.clone, a.cfg) == "" {
+		a.statusMsg = truncateStatus(StyleWarning.Render("Physical-backup clone requires a target directory"), a.width)
+		return a, nil
+	}
 	if a.cloneStatus == CloneStatusRunning {
 		return a, nil
 	}

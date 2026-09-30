@@ -14,8 +14,8 @@
 │ > 4 clone                  ││ Replace: config                           │
 │   5 config                 ││ On conflict: config                       │
 │                            ││ Target directory: (empty)                 │
+│                            ││ Dump directory: (empty)                   │
 │                            ││ Skip create: config                       │
-│                            ││                                           │
 │                            ││                                           │
 ╰────────────────────────────╯╰───────────────────────────────────────────╯
 U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
