@@ -304,7 +304,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Faster bulk restore — advanced
 
-Default restore runs in one transaction. When the conflict policy is `error` and a DSN is set, Dolly loads each table with COPY on that same transaction, then updates sequences before commit. Skip and upsert stay on INSERT and require a primary key or a persisted unique key on the table; upsert does not assign `GENERATED ALWAYS` identity columns or generated columns in `ON CONFLICT DO UPDATE SET`. `--no-transaction` COPY uses a separate connection and commits per table.
+Default restore runs in one transaction. When the conflict policy is `error` and a DSN is set, Dolly loads each table with COPY on that same transaction, then updates sequences before commit. Sequence restore applies captured increment, minimum, maximum, cache, cycle, and a non-bigint data type before setval. Dumps written without those fields only run setval. Those options are still applied when setval is skipped because the target sequence is already ahead. Skip and upsert stay on INSERT and require a primary key or a persisted unique key on the table; upsert does not assign `GENERATED ALWAYS` identity columns or generated columns in `ON CONFLICT DO UPDATE SET`. `--no-transaction` COPY uses a separate connection and commits per table.
 
 For trusted empty targets or very large loads:
 

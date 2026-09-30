@@ -35,13 +35,20 @@ type SubsetManifest struct {
 	Percent      int            `json:"percent,omitempty"`
 }
 
-// SequenceState records a sequence's last value for restoration.
+// SequenceState records a sequence's last value and definition for restoration.
+// Option pointers stay nil on dumps written before those fields existed.
 type SequenceState struct {
-	Schema     string `json:"schema"`
-	Name       string `json:"name"`
-	LastValue  *int64 `json:"last_value,omitempty"`
-	StartValue int64  `json:"start_value"`
-	IsCalled   bool   `json:"is_called"`
+	Schema      string `json:"schema"`
+	Name        string `json:"name"`
+	LastValue   *int64 `json:"last_value,omitempty"`
+	StartValue  int64  `json:"start_value"`
+	IsCalled    bool   `json:"is_called"`
+	IncrementBy *int64 `json:"increment_by,omitempty"`
+	MinValue    *int64 `json:"min_value,omitempty"`
+	MaxValue    *int64 `json:"max_value,omitempty"`
+	CacheSize   *int64 `json:"cache_size,omitempty"`
+	Cycle       *bool  `json:"cycle,omitempty"`
+	DataType    string `json:"data_type,omitempty"`
 }
 
 // Metadata describes a dump's generation time, schema, and tables.

@@ -67,6 +67,9 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 		if !owned {
 			continue
 		}
+		if err := applySequenceOptions(ctx, q, seq); err != nil {
+			return err
+		}
 
 		value := seq.StartValue
 		isCalled := false
@@ -253,4 +256,48 @@ func listSerialColumns(ctx context.Context, q execQuerier, tables []db.Table) ([
 		return nil, fmt.Errorf("list serial columns: %w", err)
 	}
 	return cols, nil
+}
+
+func applySequenceOptions(ctx context.Context, q execQuerier, seq dump.SequenceState) error {
+	stmt, ok := formatAlterSequenceOptions(seq)
+	if !ok {
+		return nil
+	}
+	if _, err := q.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("alter sequence %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	return nil
+}
+
+func formatAlterSequenceOptions(seq dump.SequenceState) (string, bool) {
+	if seq.IncrementBy == nil && seq.MinValue == nil && seq.MaxValue == nil && seq.CacheSize == nil && seq.Cycle == nil && strings.TrimSpace(seq.DataType) == "" {
+		return "", false
+	}
+	var parts []string
+	if dt := strings.TrimSpace(seq.DataType); dt != "" && !strings.EqualFold(dt, "bigint") {
+		parts = append(parts, "AS "+dt)
+	}
+	if seq.IncrementBy != nil {
+		parts = append(parts, fmt.Sprintf("INCREMENT BY %d", *seq.IncrementBy))
+	}
+	if seq.MinValue != nil {
+		parts = append(parts, fmt.Sprintf("MINVALUE %d", *seq.MinValue))
+	}
+	if seq.MaxValue != nil {
+		parts = append(parts, fmt.Sprintf("MAXVALUE %d", *seq.MaxValue))
+	}
+	if seq.CacheSize != nil {
+		parts = append(parts, fmt.Sprintf("CACHE %d", *seq.CacheSize))
+	}
+	if seq.Cycle != nil {
+		if *seq.Cycle {
+			parts = append(parts, "CYCLE")
+		} else {
+			parts = append(parts, "NO CYCLE")
+		}
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return "ALTER SEQUENCE " + quoteQualifiedTable(seq.Schema, seq.Name) + " " + strings.Join(parts, " "), true
 }

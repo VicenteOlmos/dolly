@@ -190,7 +190,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Restauración masiva más rápida — avanzado
 
-La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. Skip y upsert siguen en INSERT y requieren una clave primaria o una clave única persistida en la tabla, con `OVERRIDING SYSTEM VALUE` cuando los metadatos marcan identity `ALWAYS`; upsert no asigna columnas identity `GENERATED ALWAYS` ni columnas generadas en `ON CONFLICT DO UPDATE SET`. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
+La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. La restauración de secuencias aplica el incremento, el mínimo, el máximo, la caché, el ciclo y un tipo de datos distinto de bigint capturados, antes de setval. Los dumps escritos sin esos campos solo ejecutan setval. Esas opciones se aplican igual cuando setval se omite porque la secuencia de destino ya está más adelante. Skip y upsert siguen en INSERT y requieren una clave primaria o una clave única persistida en la tabla, con `OVERRIDING SYSTEM VALUE` cuando los metadatos marcan identity `ALWAYS`; upsert no asigna columnas identity `GENERATED ALWAYS` ni columnas generadas en `ON CONFLICT DO UPDATE SET`. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
 
 Para destinos vacíos de confianza o cargas muy grandes:
 

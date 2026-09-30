@@ -270,3 +270,79 @@ func TestRestoreSequencesFromMetadataMonotonicReadErrorFailsClosed(t *testing.T)
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+
+func ptrBool(v bool) *bool { return &v }
+
+func TestFormatAlterSequenceOptions(t *testing.T) {
+	t.Parallel()
+	inc, min, max, cache := int64(5), int64(1), int64(1000), int64(3)
+	got, ok := formatAlterSequenceOptions(dump.SequenceState{
+		Schema: "app", Name: "items_id_seq",
+		IncrementBy: &inc, MinValue: &min, MaxValue: &max, CacheSize: &cache,
+		Cycle: ptrBool(true), DataType: "integer",
+	})
+	if !ok {
+		t.Fatal("expected options")
+	}
+	want := `ALTER SEQUENCE "app"."items_id_seq" AS integer INCREMENT BY 5 MINVALUE 1 MAXVALUE 1000 CACHE 3 CYCLE`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got, ok = formatAlterSequenceOptions(dump.SequenceState{
+		Schema: "app", Name: "items_id_seq", DataType: "bigint",
+		IncrementBy: &inc, Cycle: ptrBool(false),
+	})
+	if !ok || strings.Contains(got, " AS ") {
+		t.Fatalf("bigint must omit AS: %q", got)
+	}
+	if _, ok := formatAlterSequenceOptions(dump.SequenceState{Schema: "app", Name: "old"}); ok {
+		t.Fatal("legacy metadata must not alter")
+	}
+}
+
+func TestRestoreSequencesAppliesOptionsBeforeSetval(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	inc := int64(2)
+	meta := sequenceMetadata("public", "users", "id", "users_id_seq")
+	meta.Sequences[0].IncrementBy = &inc
+	meta.Sequences[0].DataType = "integer"
+	meta.Sequences[0].Cycle = ptrBool(false)
+	expectSequenceOwner(mock, "public", "users", "id")
+	mock.ExpectExec(`ALTER SEQUENCE "public"\."users_id_seq" AS integer INCREMENT BY 2 NO CYCLE`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectSequenceCurrentValueLess(mock)
+	mock.ExpectExec(`SELECT setval`).WillReturnResult(sqlmock.NewResult(1, 1))
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreSequencesAppliesOptionsWhenSetvalSkipped(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	inc := int64(4)
+	meta := sequenceMetadata("public", "users", "id", "users_id_seq")
+	meta.Sequences[0].LastValue = ptrInt64(5)
+	meta.Sequences[0].IncrementBy = &inc
+	expectSequenceOwner(mock, "public", "users", "id")
+	mock.ExpectExec(`ALTER SEQUENCE "public"\."users_id_seq" INCREMENT BY 4`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT last_value, is_called`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(100, true))
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
