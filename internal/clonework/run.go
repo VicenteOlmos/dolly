@@ -107,6 +107,9 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	if strategy == "" {
 		strategy = cfg.Clone.Strategy
 	}
+	if cfg.Sanitization.Enabled && (strategy == "template" || strategy == "physical-backup") {
+		return fmt.Errorf("sanitization cannot rewrite %s clones; use schema-replay or logical-stream, or disable sanitization", strategy)
+	}
 
 	var dumpOpts []dump.Option
 	var restoreOpts []restore.Option

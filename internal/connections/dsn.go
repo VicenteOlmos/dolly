@@ -156,7 +156,11 @@ func (c Connection) DSN() string {
 	q := u.Query()
 	q.Set("sslmode", sslmode)
 	if sslmode != "disable" {
-		q.Set("channel_binding", "require")
+		binding := strings.TrimSpace(c.ChannelBinding)
+		if binding == "" {
+			binding = "require"
+		}
+		q.Set("channel_binding", binding)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()

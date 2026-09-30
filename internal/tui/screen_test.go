@@ -72,3 +72,41 @@ func TestConnectionDraftDSNExplicitSSLMODERespected(t *testing.T) {
 		t.Fatalf("sslmode = %q, want require (explicit)", q.Get("sslmode"))
 	}
 }
+
+func TestConnectionDraftDSNChannelBindingExplicit(t *testing.T) {
+	c := ConnectionDraft{
+		Host:           "db.example.com",
+		Database:       "mydb",
+		User:           "user",
+		Password:       "pass",
+		SSLMODE:        "require",
+		ChannelBinding: "prefer",
+	}
+	q := mustParseDSNQuery(c.DSN())
+	if q.Get("channel_binding") != "prefer" {
+		t.Fatalf("channel_binding = %q, want prefer", q.Get("channel_binding"))
+	}
+}
+
+func TestConnectionDraftDSNChannelBindingDisableSSLSkipsBinding(t *testing.T) {
+	c := ConnectionDraft{
+		Host:           "db.example.com",
+		Database:       "mydb",
+		User:           "user",
+		Password:       "pass",
+		SSLMODE:        "disable",
+		ChannelBinding: "prefer",
+	}
+	q := mustParseDSNQuery(c.DSN())
+	if q.Get("channel_binding") != "" {
+		t.Fatalf("channel_binding = %q, want empty when sslmode=disable", q.Get("channel_binding"))
+	}
+}
+
+func mustParseDSNQuery(dsn string) url.Values {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		panic(err)
+	}
+	return u.Query()
+}
