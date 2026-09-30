@@ -65,18 +65,19 @@ type TableStrategyRecord struct {
 
 // Provenance records dump identity and source context for history/restore tracking.
 type Provenance struct {
-	Seq              int                       `json:"seq"`
-	BaseDir          string                    `json:"base_dir"`
-	SourceDatabase   string                    `json:"source_database,omitempty"`
-	SourceSignature  string                    `json:"source_signature,omitempty"`
-	Schemas          []string                  `json:"schemas,omitempty"`
-	Sanitized        *bool                     `json:"sanitization_enabled,omitempty"`
-	TableCount       int                       `json:"table_count"`
-	TotalRowEstimate int64                     `json:"total_row_estimate,omitempty"`
-	TableSelection   *TableSelectionProvenance `json:"table_selection,omitempty"`
-	ChunkTables        *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
-	Strategies         []TableStrategyRecord     `json:"strategies,omitempty"`
-	SnapshotConsistent bool                      `json:"snapshot_consistent"`
+	Seq                     int                       `json:"seq"`
+	BaseDir                 string                    `json:"base_dir"`
+	SourceDatabase          string                    `json:"source_database,omitempty"`
+	SourceSignature         string                    `json:"source_signature,omitempty"`
+	Schemas                 []string                  `json:"schemas,omitempty"`
+	Sanitized               *bool                     `json:"sanitization_enabled,omitempty"`
+	TableCount              int                       `json:"table_count"`
+	TotalRowEstimate        int64                     `json:"total_row_estimate,omitempty"`
+	TableSelection          *TableSelectionProvenance `json:"table_selection,omitempty"`
+	ChunkTables             *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
+	Strategies              []TableStrategyRecord     `json:"strategies,omitempty"`
+	OmittedPartitionParents []string                  `json:"omitted_partition_parents,omitempty"`
+	SnapshotConsistent      bool                      `json:"snapshot_consistent"`
 }
 
 // BuildStrategyRecords returns deterministic strategy provenance for explicitly

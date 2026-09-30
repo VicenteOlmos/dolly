@@ -168,7 +168,7 @@ Ejecute `dolly <command> --help` para consultar los flags específicos de cada c
 
 **Modo de volcado en la TUI:** la sección Mode fija conexión lenta, `--require-safe-key`, workers, porcentaje, archivo de semillas, tablas en fragmentos, límites de subconjunto (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`) e include/exclude para la siguiente ejecución. `--max-in-list-size` sigue solo en la CLI. Los mismos flags siguen en `dolly dump`.
 
-Las tablas padre particionadas no se exportan: un `SELECT` del padre devuelve todas las hijas, así que Dolly vuelca y clona solo las particiones hoja. Nombra esas particiones en `--include-table`; incluir el padre falla con sus hojas directas y excluir el padre también excluye cada hoja anidada. Las columnas `GENERATED ALWAYS` quedan en los metadatos y se omiten al restaurar y en `logical-stream` para que el destino las calcule. Las columnas identity sí se copian.
+Las tablas padre particionadas no se exportan: un `SELECT` del padre devuelve todas las hijas, así que Dolly vuelca y clona solo las particiones hoja. Nombra esas particiones en `--include-table`; incluir el padre falla con sus hojas directas o indica que no hay hojas en el alcance cuando el padre no tiene ninguna, y excluir el padre también excluye cada hoja anidada. Los volcados completos registran los padres omitidos en la procedencia de `metadata.json`. Las columnas `GENERATED ALWAYS` quedan en los metadatos y se omiten al restaurar y en `logical-stream` para que el destino las calcule. Las columnas identity sí se copian.
 
 Cuando `pg_dump` está en el `PATH`, Dolly captura `schema.sql` y lo sanitiza para permitir restauraciones compatibles entre versiones, incluyendo `CREATE SCHEMA IF NOT EXISTS` para que `--trust-schema-sql` pueda reproducirse en una base nueva que ya tiene `public`. Si falta `pg_dump`, Dolly escribe el mismo archivo desde la reproducción del catálogo (sin propietarios ni ACL) y avisa en stderr. Restore nunca ejecuta ese SQL a menos que pase explícitamente `--trust-schema-sql` para artefactos revisados.
 
@@ -190,7 +190,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Restauración masiva más rápida — avanzado
 
-La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. Skip y upsert siguen en INSERT con `OVERRIDING SYSTEM VALUE` cuando los metadatos marcan identity `ALWAYS`. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
+La restauración predeterminada se ejecuta en una sola transacción. Con política de conflicto `error` y un DSN, Dolly carga cada tabla con COPY en esa misma transacción y actualiza las secuencias antes del commit. Skip y upsert siguen en INSERT con `OVERRIDING SYSTEM VALUE` cuando los metadatos marcan identity `ALWAYS`; upsert no asigna columnas identity `GENERATED ALWAYS` ni columnas generadas en `ON CONFLICT DO UPDATE SET`. `--no-transaction` usa una conexión COPY aparte y confirma por tabla.
 
 Para destinos vacíos de confianza o cargas muy grandes:
 

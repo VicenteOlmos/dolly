@@ -404,7 +404,7 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 		}
 	} else {
-		tables = db.WithoutPartitionParents(tables)
+		tables = recordAndStripPartitionParents(tables, cfg.provenance)
 	}
 	if hasChunkPolicy(cfg) {
 		return nil, nil, fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")

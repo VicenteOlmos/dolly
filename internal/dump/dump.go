@@ -428,7 +428,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 		}
 	} else {
-		tables = db.WithoutPartitionParents(tables)
+		if cfg.subset != nil {
+			tables = db.WithoutPartitionParents(tables)
+		} else {
+			tables = recordAndStripPartitionParents(tables, cfg.provenance)
+		}
 	}
 
 	chunkPlans, chunkProv, err := PlanChunkStreaming(tables, cfg.chunkPolicy, cfg.chunkIgnored)

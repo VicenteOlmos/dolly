@@ -32,3 +32,21 @@ func TestColumnIdentityJSONRoundTrip(t *testing.T) {
 		t.Fatalf("legacy dump column should decode empty identity, got %q", decoded.Identity)
 	}
 }
+
+func TestDataColumnsKeepsIdentityDropsGenerated(t *testing.T) {
+	cols := []Column{
+		{Name: "id", Identity: "ALWAYS"},
+		{Name: "total", Generated: true},
+		{Name: "note"},
+	}
+	data := DataColumns(cols)
+	if len(data) != 2 || data[0].Name != "id" || data[1].Name != "note" {
+		t.Fatalf("data columns = %+v", data)
+	}
+	if HasGenerated(data) {
+		t.Fatal("HasGenerated should be false without generated columns")
+	}
+	if !HasGenerated(cols) {
+		t.Fatal("HasGenerated should be true when generated column present")
+	}
+}
