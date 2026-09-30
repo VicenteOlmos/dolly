@@ -35,7 +35,11 @@ func formatCreateDomain(schema, name, baseType string, notNull bool, defaultExpr
 func formatCreateCompositeType(schema, name string, attrs []compositeAttr) string {
 	var fieldParts []string
 	for _, a := range attrs {
-		fieldParts = append(fieldParts, fmt.Sprintf("%s %s", quoteIdentifier(a.name), a.typ))
+		part := fmt.Sprintf("%s %s", quoteIdentifier(a.name), a.typ)
+		if a.collSchema != "" && a.collName != "" {
+			part += " COLLATE " + quoteQualifiedType(a.collSchema, a.collName)
+		}
+		fieldParts = append(fieldParts, part)
 	}
 	return fmt.Sprintf(
 		"CREATE TYPE %s AS (%s)",
@@ -45,8 +49,10 @@ func formatCreateCompositeType(schema, name string, attrs []compositeAttr) strin
 }
 
 type compositeAttr struct {
-	name string
-	typ  string
+	name       string
+	typ        string
+	collSchema string
+	collName   string
 }
 
 // formatCreateSequence emits CREATE SEQUENCE with catalog-derived options.
@@ -56,6 +62,9 @@ func formatCreateSequence(schema, name string, seq sequenceDef) string {
 
 func formatSequenceOptions(seq sequenceDef) string {
 	var stmt string
+	if dt := strings.TrimSpace(seq.dataType); dt != "" && !strings.EqualFold(dt, "bigint") {
+		stmt += " AS " + dt
+	}
 	if seq.increment != 0 {
 		stmt += fmt.Sprintf(" INCREMENT BY %d", seq.increment)
 	}
@@ -78,6 +87,7 @@ func formatSequenceOptions(seq sequenceDef) string {
 }
 
 type sequenceDef struct {
+	dataType   string
 	increment  int64
 	minValue   int64
 	maxValue   int64
@@ -303,6 +313,10 @@ func commentTarget(kind, schema, object, column string) string {
 		return "DOMAIN " + quoteQualifiedType(schema, object)
 	case "type":
 		return "TYPE " + quoteQualifiedType(schema, object)
+	case "collation":
+		return "COLLATION " + quoteQualifiedType(schema, object)
+	case "policy":
+		return "POLICY " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
@@ -349,6 +363,15 @@ func formatGrantRoutine(schema, name, identityArgs, kind, grantee string) string
 		kind,
 		quoteQualifiedType(schema, name),
 		identityArgs,
+		quoteGrantee(grantee),
+	)
+}
+
+// formatGrantType emits GRANT USAGE ON TYPE.
+func formatGrantType(schema, name, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT USAGE ON TYPE %s TO %s",
+		quoteQualifiedType(schema, name),
 		quoteGrantee(grantee),
 	)
 }
