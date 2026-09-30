@@ -80,7 +80,7 @@ func newConnectionScreen(
 		getDefaultName:  getDefaultName,
 		setDefaultName:  setDefaultName,
 		spinnerFrame:    spinnerFrame,
-		fieldCursors:    make([]int, 6),
+		fieldCursors:    make([]int, 7),
 		fields: []connectionField{
 			{label: "Host", value: &draft.Host},
 			{label: "Port", value: &draft.Port},
@@ -88,6 +88,7 @@ func newConnectionScreen(
 			{label: "User", value: &draft.User},
 			{label: "Password", value: &draft.Password, masked: true},
 			{label: "SSLMODE", value: &draft.SSLMODE},
+			{label: "Channel binding", value: &draft.ChannelBinding},
 		},
 	}
 	cs.nav = NewSectionNav(connSectionCount)
@@ -523,6 +524,13 @@ func (c *connectionScreen) Update(msg tea.Msg) tea.Cmd {
 				}
 				return nil
 			}
+			if k.Code == tea.KeySpace && c.fields[c.focus].label == "Channel binding" {
+				*c.fields[c.focus].value = cycleChannelBinding(*c.fields[c.focus].value)
+				if c.panel == connPanelFields {
+					c.clearProfilePreview()
+				}
+				return nil
+			}
 			v := c.fields[c.focus].value
 			cur := &c.fieldCursors[c.focus]
 			if handleFieldCursorKey(k, v, cur) {
@@ -548,6 +556,19 @@ func cycleSSLMode(current string) string {
 		return "disable"
 	default:
 		return "disable"
+	}
+}
+
+func cycleChannelBinding(current string) string {
+	switch strings.TrimSpace(strings.ToLower(current)) {
+	case "require":
+		return "prefer"
+	case "prefer":
+		return "disable"
+	case "disable":
+		return "require"
+	default:
+		return "require"
 	}
 }
 
