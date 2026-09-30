@@ -112,6 +112,9 @@ func NewAppFromConfig(store connections.ConnectionStore, saveConnections bool, c
 		if cfg.Clone.Strategy != "" {
 			app.clone.Strategy = cfg.Clone.Strategy
 		}
+		if cfg.Clone.RestoreOnConflict != "" {
+			app.clone.OnConflict = cfg.Clone.RestoreOnConflict
+		}
 		if cfg.TUI.SectionEntry != "" {
 			app.sectionEntry = ParseSectionEntry(cfg.TUI.SectionEntry)
 		}

@@ -115,6 +115,24 @@ func TestNewAppFromConfigEmptyCloneStrategyStaysEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAppFromConfigPrePopulatesCloneOnConflict(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.RestoreOnConflict = "skip"
+	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
+	if app.clone.OnConflict != "skip" {
+		t.Fatalf("clone.OnConflict = %q, want skip", app.clone.OnConflict)
+	}
+}
+
+func TestNewAppFromConfigEmptyCloneOnConflictStaysEmpty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.RestoreOnConflict = ""
+	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
+	if app.clone.OnConflict != "" {
+		t.Fatalf("clone.OnConflict = %q, want empty", app.clone.OnConflict)
+	}
+}
+
 func TestNewAppFromConfigSectionEntryOverview(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.TUI.SectionEntry = "overview"
