@@ -55,6 +55,8 @@ type Table struct {
 	Columns       []Column          `json:"columns"`
 	ForeignKeys   []ForeignKey      `json:"foreign_keys"`
 	UniqueIndexes []UniqueIndexInfo `json:"-"`
+	// UniqueKeys lists column names for each persisted non-primary unique index (dump metadata).
+	UniqueKeys [][]string `json:"unique_keys,omitempty"`
 	// RelKind is pg_class.relkind ("r" ordinary, "p" partitioned parent).
 	RelKind string `json:"relkind,omitempty"`
 	// PartitionOf is schema.table of the partitioned parent when this row is a partition.

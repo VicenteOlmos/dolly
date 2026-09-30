@@ -144,6 +144,7 @@ func countNDJSONRows(path string) (int64, error) {
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {
+	persistUniqueKeys(tables)
 	m := Metadata{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Schema:      metadataSchemaLabel(filterSchemas, tables),

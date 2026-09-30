@@ -171,6 +171,31 @@ func TestBuildInsertUpsertSkipsGeneratedColumn(t *testing.T) {
 	}
 }
 
+func TestBuildInsertUpsertUsesPersistedUniqueKey(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "events",
+		Columns: []db.Column{
+			{Name: "code", DataType: "text", OrdinalPosition: 1},
+			{Name: "note", DataType: "text", OrdinalPosition: 2},
+		},
+		UniqueKeys: [][]string{{"code"}},
+	}
+	q, _, err := buildInsert(table, ConflictUpsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `ON CONFLICT ("code") DO UPDATE SET`) {
+		t.Fatalf("query = %s", q)
+	}
+	if strings.Contains(q, `"code" = EXCLUDED."code"`) {
+		t.Fatalf("conflict key column must be omitted from SET: %s", q)
+	}
+	if !strings.Contains(q, `"note" = EXCLUDED."note"`) {
+		t.Fatalf("query = %s", q)
+	}
+}
+
 func TestBuildInsertSkipUpsertRequiresKey(t *testing.T) {
 	table := db.Table{
 		Schema: "public",
