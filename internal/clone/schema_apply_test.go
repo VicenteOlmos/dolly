@@ -32,6 +32,8 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
+	srcMock.ExpectQuery(`pg_sequence`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 }
@@ -427,6 +429,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
+	srcMock.ExpectQuery(`pg_sequence`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 
@@ -504,6 +508,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	}))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
+	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
 	mock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
 	mock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))

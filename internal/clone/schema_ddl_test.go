@@ -64,6 +64,30 @@ func TestFormatCreateDomain(t *testing.T) {
 	}
 }
 
+func TestFormatSequenceDataType(t *testing.T) {
+	t.Parallel()
+	bigint := formatCreateSequence("app", "users_id_seq", sequenceDef{
+		dataType:   "bigint",
+		increment:  1,
+		minValid:   true,
+		maxValid:   true,
+		startValid: true,
+	})
+	if strings.Contains(bigint, " AS ") {
+		t.Fatalf("bigint should omit AS: %q", bigint)
+	}
+	intSeq := formatCreateSequence("app", "small_id_seq", sequenceDef{
+		dataType:   "integer",
+		increment:  1,
+		minValid:   true,
+		maxValid:   true,
+		startValid: true,
+	})
+	if !strings.Contains(intSeq, " AS integer") {
+		t.Fatalf("integer sequence missing AS: %q", intSeq)
+	}
+}
+
 func TestFormatCreateSequence(t *testing.T) {
 	t.Parallel()
 	got := formatCreateSequence("app", "users_id_seq", sequenceDef{

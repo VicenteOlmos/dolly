@@ -394,6 +394,17 @@ func loadSequences(ctx context.Context, q *sql.DB, schemas []string) ([]sequence
 		return nil, fmt.Errorf("list sequences: %w", err)
 	}
 
+	seqTypes, err := loadSequenceDataTypes(ctx, q, schemas)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		key := out[i].schema + "\x00" + out[i].name
+		if typ, ok := seqTypes[key]; ok {
+			out[i].def.dataType = typ
+		}
+	}
+
 	owned, err := loadSequenceOwnership(ctx, q, schemas)
 	if err != nil {
 		return nil, err
@@ -408,6 +419,31 @@ func loadSequences(ctx context.Context, q *sql.DB, schemas []string) ([]sequence
 		}
 	}
 	return out, nil
+}
+
+func loadSequenceDataTypes(ctx context.Context, q *sql.DB, schemas []string) (map[string]string, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, pg_catalog.format_type(s.seqtypid, NULL)
+		FROM pg_sequence s
+		JOIN pg_class c ON c.oid = s.seqrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname IN (%s)`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list sequence data types: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var schema, name, dataType string
+		if err := rows.Scan(&schema, &name, &dataType); err != nil {
+			return nil, fmt.Errorf("scan sequence data type: %w", err)
+		}
+		out[schema+"\x00"+name] = dataType
+	}
+	return out, rows.Err()
 }
 
 type sequenceOwnership struct {

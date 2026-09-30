@@ -56,6 +56,9 @@ func formatCreateSequence(schema, name string, seq sequenceDef) string {
 
 func formatSequenceOptions(seq sequenceDef) string {
 	var stmt string
+	if dt := strings.TrimSpace(seq.dataType); dt != "" && !strings.EqualFold(dt, "bigint") {
+		stmt += " AS " + dt
+	}
 	if seq.increment != 0 {
 		stmt += fmt.Sprintf(" INCREMENT BY %d", seq.increment)
 	}
@@ -78,6 +81,7 @@ func formatSequenceOptions(seq sequenceDef) string {
 }
 
 type sequenceDef struct {
+	dataType   string
 	increment  int64
 	minValue   int64
 	maxValue   int64
