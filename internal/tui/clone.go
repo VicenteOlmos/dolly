@@ -19,6 +19,7 @@ const (
 	cloneFieldReplace
 	cloneFieldOnConflict
 	cloneFieldTargetDir
+	cloneFieldDumpDir
 	cloneFieldSkipCreate
 	cloneFormFieldCount
 )
@@ -111,6 +112,8 @@ func (c *cloneScreen) activeField() *string {
 		return nil
 	case cloneFieldTargetDir:
 		return &c.draft.TargetDir
+	case cloneFieldDumpDir:
+		return &c.draft.DumpDir
 	default:
 		return nil
 	}
@@ -502,6 +505,7 @@ func (c *cloneScreen) formSection(hint string, width int) []string {
 	lines = append(lines, c.renderReplaceLine())
 	lines = append(lines, c.renderOnConflictLine())
 	lines = append(lines, c.fieldLine("Target directory:", c.draft.TargetDir, cloneFieldTargetDir, width))
+	lines = append(lines, c.fieldLine("Dump directory:", c.draft.DumpDir, cloneFieldDumpDir, width))
 	lines = append(lines, c.renderSkipCreateLine())
 	return lines
 }

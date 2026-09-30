@@ -17,7 +17,7 @@ Elija su ruta:
 | Trabajar de forma interactiva | `dolly tui` — conecte, inspeccione esquemas, cree volcados y clone desde una terminal real. |
 | Automatizar volcado o restauración | `dolly dump`, `dolly restore` y `dolly clone` — use un DSN o una conexión guardada. |
 
-`dolly tui` no tiene flags, requiere una TTY y lee `config.jsonc` desde el directorio actual. En la pantalla de volcado, la sección **Mode** permite editar el tamaño de fragmento, archivos de listas de tablas y los reintentos en conexión lenta; la restauración desde **History** puede fijar la política de conflicto de filas y replace. El formulario **Clone** puede fijar replace y on-conflict para la fase de restauración, sobrescribir el **directorio destino** del backup físico y activar **skip-create**.
+`dolly tui` no tiene flags, requiere una TTY y lee `config.jsonc` desde el directorio actual. En la pantalla de volcado, la sección **Mode** permite editar el tamaño de fragmento, archivos de listas de tablas, los reintentos en conexión lenta y un interruptor **Sanitize**; la restauración desde **History** puede fijar la política de conflicto de filas, replace y **workers** en paralelo. El formulario **Clone** puede fijar replace y on-conflict para la fase de restauración, sobrescribir el **directorio destino** del backup físico y el **directorio de volcado** del clon, y activar **skip-create** (physical-backup exige un directorio destino). En la pantalla de conexión, **SSLMODE** recorre modos habituales con Espacio cuando ese campo tiene el foco.
 
 ## Instalación
 

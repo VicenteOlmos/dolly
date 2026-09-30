@@ -206,6 +206,37 @@ func TestAppCloneNoSchema(t *testing.T) {
 	}
 }
 
+func TestAppClonePhysicalBackupRequiresTargetDir(t *testing.T) {
+	app := cloneAppWithSession(t, mockCloneRunner{})
+	app.cfg = config.DefaultConfig()
+	app.clone.Strategy = "physical-backup"
+	app.clone.TargetDir = ""
+
+	app = drainUpdate(app, cloneRequestedMsg{})
+
+	if app.cloneStatus != CloneStatusIdle {
+		t.Fatalf("cloneStatus = %v, want idle", app.cloneStatus)
+	}
+	if !containsPlain(app.statusMsg, "target directory") {
+		t.Fatalf("statusMsg = %q", stripANSIForGolden(app.statusMsg))
+	}
+}
+
+func TestAppCloneSchemaReplayAllowsEmptyTargetDir(t *testing.T) {
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	app.cfg = config.DefaultConfig()
+	app.clone.Strategy = "schema-replay"
+	app.clone.TargetDir = ""
+	app.clone.AnalyzeEnabled = false
+
+	app = drainUpdate(app, cloneRequestedMsg{})
+
+	if len(runner.lastSchemas) == 0 {
+		t.Fatalf("clone did not start; status=%v msg=%q", app.cloneStatus, stripANSIForGolden(app.statusMsg))
+	}
+}
+
 func TestAppCloneNoTarget(t *testing.T) {
 	app := cloneAppWithSession(t, mockCloneRunner{})
 	app.clone.TargetDSN = ""
@@ -469,6 +500,9 @@ func TestAppCloneUnsanitizedWarningStrategies(t *testing.T) {
 			app := cloneAppWithSession(t, runner)
 			app.cfg.Sanitization.Enabled = true
 			app.clone.Strategy = strategy
+			if strategy == "physical-backup" {
+				app.clone.TargetDir = "/tmp/pgdata"
+			}
 
 			app = drainUpdate(app, ctrlEnter())
 

@@ -78,8 +78,12 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 	if onProgress != nil {
 		opts = append(opts, dump.WithProgress(onProgress))
 	}
-	opts = append(opts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
-	sanitized := cfg.Sanitization.Enabled
+	sanitizeEnabled := cfg.Sanitization.Enabled
+	if draft.SanitizeSet {
+		sanitizeEnabled = draft.Sanitize
+	}
+	opts = append(opts, dump.SanitizationOptions(sanitizeEnabled)...)
+	sanitized := sanitizeEnabled
 	if seq, ok := parseDumpSeq(outputDir); ok {
 		opts = append(opts, dump.WithProvenance(dump.Provenance{
 			Seq:            seq,

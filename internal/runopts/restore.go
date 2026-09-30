@@ -115,6 +115,8 @@ type RestoreHistoryUserOverrides struct {
 	OnConflict string
 	Replace    bool
 	ReplaceSet bool
+	Workers    int
+	WorkersSet bool
 }
 
 // RestoreHistoryOptions builds restore options for TUI history restore from restore.* config keys.
@@ -144,6 +146,9 @@ func RestoreHistoryOptionsWithOverrides(cfg *config.Config, inputDir string, sch
 	}
 
 	workers := ResolveRestoreWorkers(RestoreOverrides{}, cfg)
+	if o.WorkersSet {
+		workers = o.Workers
+	}
 	if err := ValidateRestoreWorkers(workers); err != nil {
 		return nil, err
 	}

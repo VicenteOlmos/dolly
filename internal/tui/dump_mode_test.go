@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
@@ -48,6 +49,40 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 	}
 	if _, err := dumpOverridesFromDraft(DumpDraft{PercentText: "0"}); err == nil {
 		t.Fatal("percent 0 text should be rejected")
+	}
+}
+
+func TestDumpModeSanitizeToggle(t *testing.T) {
+	app := NewApp()
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionMode)
+	ds.modeField = modeFieldSanitize
+	ds.Update(keyPress("", tea.KeySpace, 0))
+	if !app.dump.SanitizeSet || !app.dump.Sanitize {
+		t.Fatalf("Sanitize = %v set=%v", app.dump.Sanitize, app.dump.SanitizeSet)
+	}
+	if !strings.Contains(ds.modeSummary(), "sanitize") {
+		t.Fatalf("mode summary = %q", ds.modeSummary())
+	}
+}
+
+func TestDumpModeSanitizeToggleFromEnabledConfig(t *testing.T) {
+	app := NewApp()
+	app.cfg = config.DefaultConfig()
+	app.cfg.Sanitization.Enabled = true
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionMode)
+	ds.modeField = modeFieldSanitize
+	if ds.sanitizeLabel() != "on (config)" || !strings.Contains(ds.modeSummary(), "sanitize") {
+		t.Fatalf("initial sanitize label = %q, summary = %q", ds.sanitizeLabel(), ds.modeSummary())
+	}
+	ds.Update(keyPress("", tea.KeySpace, 0))
+	if !app.dump.SanitizeSet || app.dump.Sanitize || ds.sanitizeLabel() != "off" || strings.Contains(ds.modeSummary(), "sanitize") {
+		t.Fatalf("first toggle: sanitize = %v set=%v label=%q summary=%q", app.dump.Sanitize, app.dump.SanitizeSet, ds.sanitizeLabel(), ds.modeSummary())
+	}
+	ds.Update(keyPress("", tea.KeySpace, 0))
+	if !app.dump.Sanitize || ds.sanitizeLabel() != "on" {
+		t.Fatalf("second toggle: sanitize = %v label=%q", app.dump.Sanitize, ds.sanitizeLabel())
 	}
 }
 
@@ -101,7 +136,8 @@ func TestDumpModeSectionReachesRunner(t *testing.T) {
 	app = drainUpdate(app, keyPress("s", 's', 0))
 	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
 	app = drainUpdate(app, keyPress("k", 'k', 0))
-	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
+	app = drainUpdate(app, keyPress("", tea.KeyDown, 0)) // sanitize
+	app = drainUpdate(app, keyPress("", tea.KeyDown, 0)) // workers
 	app = drainUpdate(app, keyPress("", tea.KeyRight, 0))
 	app = drainUpdate(app, keyPress("", tea.KeyDown, 0))
 	app = drainUpdate(app, keyPress("2", '2', 0))

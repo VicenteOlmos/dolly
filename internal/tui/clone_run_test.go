@@ -31,6 +31,30 @@ func TestProductionCloneRunnerPassesTargetDir(t *testing.T) {
 	}
 }
 
+func TestProductionCloneRunnerPassesDumpDir(t *testing.T) {
+	orig := cloneworkRun
+	defer func() { cloneworkRun = orig }()
+
+	var got clonework.Params
+	cloneworkRun = func(_ context.Context, p clonework.Params, _ func(clonework.ProgressEvent)) error {
+		got = p
+		return nil
+	}
+
+	draft := CloneDraft{
+		SourceDSN: "postgres://u:p@h/src",
+		CloneName: "src_kloned_1",
+		DumpDir:   "/data/dumps",
+	}
+	runner := productionCloneRunner{}
+	if err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.DumpDir != "/data/dumps" {
+		t.Fatalf("DumpDir = %q, want /data/dumps", got.DumpDir)
+	}
+}
+
 func TestProductionCloneRunnerSetsSkipCreateFromDraft(t *testing.T) {
 	orig := cloneworkRun
 	defer func() { cloneworkRun = orig }()
