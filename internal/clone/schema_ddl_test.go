@@ -168,6 +168,51 @@ func TestFormatAlterTableReplicaIdentity(t *testing.T) {
 	}
 }
 
+func TestFormatCreateCollation(t *testing.T) {
+	t.Parallel()
+	libc, ok := formatCreateCollation("app", "en_us", "c", "", "", "en_US.UTF-8", "en_US.UTF-8", true)
+	wantLibc := `CREATE COLLATION "app"."en_us" (PROVIDER = libc, LC_COLLATE = 'en_US.UTF-8', LC_CTYPE = 'en_US.UTF-8')`
+	if !ok || libc != wantLibc {
+		t.Fatalf("libc: got (%q, %v), want (%q, true)", libc, ok, wantLibc)
+	}
+	icu, ok := formatCreateCollation("app", "und", "i", "und", "", "", "", false)
+	wantICU := `CREATE COLLATION "app"."und" (PROVIDER = icu, LOCALE = 'und', DETERMINISTIC = false)`
+	if !ok || icu != wantICU {
+		t.Fatalf("icu: got (%q, %v), want (%q, true)", icu, ok, wantICU)
+	}
+	icu, ok = formatCreateCollation("app", "custom", "i", "und", "&V << w <<< W's", "", "", true)
+	wantICU = `CREATE COLLATION "app"."custom" (PROVIDER = icu, LOCALE = 'und', DETERMINISTIC = true, RULES = '&V << w <<< W''s')`
+	if !ok || icu != wantICU {
+		t.Fatalf("icu rules: got (%q, %v), want (%q, true)", icu, ok, wantICU)
+	}
+	if _, ok := formatCreateCollation("app", "bad", "c", "", "", "", "en_US.UTF-8", true); ok {
+		t.Fatal("expected skip when libc locale empty")
+	}
+}
+
+func TestFormatAlterColumnCompression(t *testing.T) {
+	t.Parallel()
+	got, ok := formatAlterColumnCompression("app", "events", "payload", "l")
+	want := `ALTER TABLE ONLY "app"."events" ALTER COLUMN "payload" SET COMPRESSION lz4`
+	if !ok || got != want {
+		t.Fatalf("lz4: got (%q, %v), want (%q, true)", got, ok, want)
+	}
+	got, ok = formatAlterColumnCompression("app", "events", "payload", "p")
+	want = `ALTER TABLE ONLY "app"."events" ALTER COLUMN "payload" SET COMPRESSION pglz`
+	if !ok || got != want {
+		t.Fatalf("pglz: got (%q, %v), want (%q, true)", got, ok, want)
+	}
+}
+
+func TestFormatAlterTableFillfactor(t *testing.T) {
+	t.Parallel()
+	got := formatAlterTableFillfactor("app", "events", 90)
+	want := `ALTER TABLE "app"."events" SET (fillfactor=90)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatAlterColumnStorage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -232,6 +277,14 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	wantDomain := `DOMAIN "app"."email"`
 	if domain != wantDomain {
 		t.Fatalf("domain target = %q, want %q", domain, wantDomain)
+	}
+	if got := commentTarget("type", "app", "status_enum", ""); got != `TYPE "app"."status_enum"` {
+		t.Fatalf("type target = %q", got)
+	}
+	gotTypeComment := formatCommentOn("type", "app", "status_enum", "", "lifecycle")
+	wantTypeComment := `COMMENT ON TYPE "app"."status_enum" IS 'lifecycle'`
+	if gotTypeComment != wantTypeComment {
+		t.Fatalf("type comment = %q, want %q", gotTypeComment, wantTypeComment)
 	}
 	idx := commentTarget("index", "app", "users_email_idx", "")
 	wantIdx := `INDEX "app"."users_email_idx"`

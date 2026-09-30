@@ -158,6 +158,72 @@ func formatAlterTableReplicaIdentity(schema, table, ident, indexName string) (st
 	}
 }
 
+// formatCreateCollation emits CREATE COLLATION for libc or ICU user collations.
+func formatCreateCollation(schema, name, provider, icuLocale, icuRules, libcCollate, libcCtype string, deterministic bool) (string, bool) {
+	qual := quoteQualifiedType(schema, name)
+	switch provider {
+	case "c":
+		if libcCollate == "" || libcCtype == "" {
+			return "", false
+		}
+		return fmt.Sprintf(
+			"CREATE COLLATION %s (PROVIDER = libc, LC_COLLATE = %s, LC_CTYPE = %s)",
+			qual,
+			quoteLiteral(libcCollate),
+			quoteLiteral(libcCtype),
+		), true
+	case "i":
+		if icuLocale == "" {
+			return "", false
+		}
+		det := "true"
+		if !deterministic {
+			det = "false"
+		}
+		rules := ""
+		if icuRules != "" {
+			rules = ", RULES = " + quoteLiteral(icuRules)
+		}
+		return fmt.Sprintf(
+			"CREATE COLLATION %s (PROVIDER = icu, LOCALE = %s, DETERMINISTIC = %s%s)",
+			qual,
+			quoteLiteral(icuLocale),
+			det,
+			rules,
+		), true
+	default:
+		return "", false
+	}
+}
+
+// formatAlterColumnCompression emits ALTER TABLE ... SET COMPRESSION.
+func formatAlterColumnCompression(schema, table, column, code string) (string, bool) {
+	var compression string
+	switch code {
+	case "l":
+		compression = "lz4"
+	case "p":
+		compression = "pglz"
+	default:
+		return "", false
+	}
+	return fmt.Sprintf(
+		"ALTER TABLE ONLY %s ALTER COLUMN %s SET COMPRESSION %s",
+		quoteQualifiedTable(schema, table),
+		quoteIdentifier(column),
+		compression,
+	), true
+}
+
+// formatAlterTableFillfactor emits ALTER TABLE ... SET (fillfactor=N).
+func formatAlterTableFillfactor(schema, table string, fillfactor int) string {
+	return fmt.Sprintf(
+		"ALTER TABLE %s SET (fillfactor=%d)",
+		quoteQualifiedTable(schema, table),
+		fillfactor,
+	)
+}
+
 // formatAlterColumnStorage emits ALTER TABLE ... ALTER COLUMN ... SET STORAGE.
 func formatAlterColumnStorage(schema, table, column, storageCode string) (string, bool) {
 	var storage string
@@ -235,6 +301,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return "CONSTRAINT " + quoteIdentifier(column) + " ON DOMAIN " + quoteQualifiedType(schema, object)
 	case "domain":
 		return "DOMAIN " + quoteQualifiedType(schema, object)
+	case "type":
+		return "TYPE " + quoteQualifiedType(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}

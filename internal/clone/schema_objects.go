@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -185,6 +186,79 @@ func applyDomainCheckConstraints(ctx context.Context, tgtDB execer, checks []dom
 		stmt := formatAlterDomainAddConstraint(dc.schema, dc.domain, dc.name, dc.constraint)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("add domain check %q on %s.%s: %w", dc.name, dc.schema, dc.domain, err)
+		}
+	}
+	return nil
+}
+
+type collationRow struct {
+	schema          string
+	name            string
+	provider        string
+	icuLocale       string
+	icuRules        string
+	libcCollate     string
+	libcCtype       string
+	isDeterministic bool
+}
+
+func loadCollations(ctx context.Context, q *sql.DB, schemas []string) ([]collationRow, error) {
+	major, err := scanServerMajor(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	icuLocale := "coll.collcollate"
+	icuRules := "''"
+	if major >= 15 {
+		icuLocale = "coll.colliculocale"
+		icuRules = "COALESCE(coll.collicurules, '')"
+	}
+	if major >= 17 {
+		icuLocale = "coll.colllocale"
+	}
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, coll.collname, coll.collprovider::text,
+		       COALESCE(%s, ''), %s,
+		       COALESCE(coll.collcollate, ''),
+		       COALESCE(coll.collctype, ''),
+		       coll.collisdeterministic
+		FROM pg_collation coll
+		INNER JOIN pg_namespace n ON n.oid = coll.collnamespace
+		WHERE coll.collprovider IN ('c', 'i')
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, coll.collname`, icuLocale, icuRules, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list collations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []collationRow
+	for rows.Next() {
+		var row collationRow
+		if err := rows.Scan(
+			&row.schema, &row.name, &row.provider,
+			&row.icuLocale, &row.icuRules, &row.libcCollate, &row.libcCtype, &row.isDeterministic,
+		); err != nil {
+			return nil, fmt.Errorf("scan collation: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyCollations(ctx context.Context, tgtDB execer, rows []collationRow) error {
+	for _, row := range rows {
+		stmt, ok := formatCreateCollation(
+			row.schema, row.name, row.provider,
+			row.icuLocale, row.icuRules, row.libcCollate, row.libcCtype, row.isDeterministic,
+		)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("create collation %s.%s: %w", row.schema, row.name, err)
 		}
 	}
 	return nil
@@ -629,6 +703,114 @@ func applyColumnStorageOverrides(ctx context.Context, tgtDB execer, rows []colum
 	return nil
 }
 
+type columnCompressionRow struct {
+	schema string
+	table  string
+	column string
+	codec  string
+}
+
+func loadColumnCompressionOverrides(ctx context.Context, q *sql.DB, schemas []string) ([]columnCompressionRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, a.attname, a.attcompression::text
+		FROM pg_attribute a
+		INNER JOIN pg_class c ON c.oid = a.attrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE a.attnum > 0 AND NOT a.attisdropped
+		  AND c.relkind IN ('r', 'p')
+		  AND a.attcompression IN ('l', 'p')
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, a.attnum`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list column compression overrides: %w", err)
+	}
+	defer rows.Close()
+
+	var out []columnCompressionRow
+	for rows.Next() {
+		var row columnCompressionRow
+		if err := rows.Scan(&row.schema, &row.table, &row.column, &row.codec); err != nil {
+			return nil, fmt.Errorf("scan column compression: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyColumnCompressionOverrides(ctx context.Context, tgtDB execer, rows []columnCompressionRow) error {
+	for _, row := range rows {
+		stmt, ok := formatAlterColumnCompression(row.schema, row.table, row.column, row.codec)
+		if !ok {
+			continue
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("column compression on %s.%s.%s: %w", row.schema, row.table, row.column, err)
+		}
+	}
+	return nil
+}
+
+type tableFillfactorRow struct {
+	schema     string
+	table      string
+	fillfactor int
+}
+
+func loadTableFillfactors(ctx context.Context, q *sql.DB, schemas []string) ([]tableFillfactorRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, opt.option_value
+		FROM pg_class c
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL pg_catalog.pg_options_to_table(c.reloptions) opt
+		WHERE c.relkind IN ('r', 'p')
+		  AND c.reloptions IS NOT NULL
+		  AND opt.option_name = 'fillfactor'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list table fillfactors: %w", err)
+	}
+	defer rows.Close()
+
+	var out []tableFillfactorRow
+	for rows.Next() {
+		var row tableFillfactorRow
+		var value string
+		if err := rows.Scan(&row.schema, &row.table, &value); err != nil {
+			return nil, fmt.Errorf("scan table fillfactor: %w", err)
+		}
+		ff, err := parseFillfactorOption(value)
+		if err != nil {
+			continue
+		}
+		row.fillfactor = ff
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func parseFillfactorOption(value string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 10 || n > 100 {
+		return 0, fmt.Errorf("invalid fillfactor")
+	}
+	return n, nil
+}
+
+func applyTableFillfactors(ctx context.Context, tgtDB execer, rows []tableFillfactorRow) error {
+	for _, row := range rows {
+		stmt := formatAlterTableFillfactor(row.schema, row.table, row.fillfactor)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("fillfactor on %s.%s: %w", row.schema, row.table, err)
+		}
+	}
+	return nil
+}
+
 func loadStatistics(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
@@ -821,7 +1003,24 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		WHERE d.classoid = 'pg_type'::regclass AND d.objsubid = 0
 		  AND t.typtype = 'd'
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'type', n.nspname, t.typname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_type t ON t.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		WHERE d.classoid = 'pg_type'::regclass AND d.objsubid = 0
+		  AND t.typtype = 'e'
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'type', n.nspname, t.typname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_type t ON t.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		WHERE d.classoid = 'pg_type'::regclass AND d.objsubid = 0
+		  AND t.typtype = 'c'
+		  AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid AND c.relkind = 'c')
+		  AND n.nspname IN (%s)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)

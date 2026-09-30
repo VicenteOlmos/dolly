@@ -125,6 +125,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	collations, err := loadCollations(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyCollations(ctx, tgtDB, collations); err != nil {
+		return err
+	}
+
 	composites, err := loadCompositeTypes(ctx, srcDB, schemas)
 	if err != nil {
 		return err
@@ -240,6 +248,22 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyColumnStorageOverrides(ctx, tgtDB, columnStorage); err != nil {
+		return err
+	}
+
+	columnCompression, err := loadColumnCompressionOverrides(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyColumnCompressionOverrides(ctx, tgtDB, columnCompression); err != nil {
+		return err
+	}
+
+	tableFillfactors, err := loadTableFillfactors(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyTableFillfactors(ctx, tgtDB, tableFillfactors); err != nil {
 		return err
 	}
 

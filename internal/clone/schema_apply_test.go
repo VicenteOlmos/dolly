@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -20,6 +21,11 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
+	srcMock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(160000))
+	srcMock.ExpectQuery(`pg_collation`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
+		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
@@ -82,6 +88,10 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
 	srcMock.ExpectQuery(`attstorage`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attstorage"}))
+	srcMock.ExpectQuery(`attcompression`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attcompression"}))
+	srcMock.ExpectQuery(`pg_options_to_table`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
@@ -159,6 +169,44 @@ func TestColumnSQLType(t *testing.T) {
 		if got != tt.want {
 			t.Fatalf("columnSQLType() = %q, want %q", got, tt.want)
 		}
+	}
+}
+
+func TestLoadCollationsCatalogVersions(t *testing.T) {
+	for _, tt := range []struct {
+		major  int
+		locale string
+		rules  string
+	}{
+		{14, "coll.collcollate", "''"},
+		{16, "coll.colliculocale", "COALESCE(coll.collicurules, '')"},
+		{17, "coll.colllocale", "COALESCE(coll.collicurules, '')"},
+	} {
+		t.Run(strconv.Itoa(tt.major), func(t *testing.T) {
+			src, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = src.Close() })
+			wantRules := "&V << w"
+			if tt.major == 14 {
+				wantRules = ""
+			}
+			mock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(tt.major * 10000))
+			mock.ExpectQuery(regexp.QuoteMeta("COALESCE("+tt.locale+", ''), "+tt.rules) + `(?s).*coll\.collprovider IN \('c', 'i'\)`).
+				WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "provider", "locale", "rules", "collate", "ctype", "deterministic"}).
+					AddRow("app", "custom", "i", "und", wantRules, "", "", true))
+			rows, err := loadCollations(context.Background(), src, []string{"app"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].icuLocale != "und" || rows[0].icuRules != wantRules {
+				t.Fatalf("collations = %+v", rows)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -368,6 +416,11 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"nspname", "typname", "format_type", "typnotnull", "pg_get_expr"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "conname", "pg_get_constraintdef"}))
+	srcMock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(160000))
+	srcMock.ExpectQuery(`pg_collation`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
+		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
@@ -385,6 +438,10 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
 	srcMock.ExpectQuery(`attstorage`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attstorage"}))
+	srcMock.ExpectQuery(`attcompression`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attcompression"}))
+	srcMock.ExpectQuery(`pg_options_to_table`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
@@ -441,6 +498,10 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`t\.typtype = 'e'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "label"}))
 	mock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "base", "notnull", "default"}).AddRow("app", "positive", "integer", false, ""))
 	mock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "domain", "name", "def"}).AddRow("app", "positive", "valid", "CHECK (app.valid_value(VALUE))"))
+	mock.ExpectQuery(`SHOW server_version_num`).WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(160000))
+	mock.ExpectQuery(`pg_collation`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
+	}))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
@@ -451,6 +512,8 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
 	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}).AddRow("app", "items", "i", "items_code_idx"))
 	mock.ExpectQuery(`attstorage`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "storage"}).AddRow("app", "items", "code", "e"))
+	mock.ExpectQuery(`attcompression`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "compression"}))
+	mock.ExpectQuery(`pg_options_to_table`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "option_value"}))
 	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}).AddRow("app", "items", "items_code_idx", `CREATE UNIQUE INDEX "items_code_idx" ON "app"."items" (code)`, false))
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
 	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true))
