@@ -10,7 +10,7 @@ Follow it on Review and IncrementalReview. Do not treat it as a request to edit 
 
 ## Bar
 
-Comment when the change can mis-dump, mis-restore, mis-clone, drop or widen a privilege, leak a credential or other secret, or fail a test that CI actually runs. A missing test does not hide a security or data-exposure bug. Skip formatting, naming, comment wording, and drive-by refactors.
+Comment when the change can mis-dump, mis-restore, mis-clone, drop or widen a privilege, leak a credential or other secret, break a supported command for the user, or fail a test that CI actually runs. A missing test does not hide a security bug or a concrete failure that blocks a later command. Skip formatting, naming, comment wording, and drive-by refactors.
 
 One inline comment per defect. Do not add a nit list to look thorough. Leave the review-body shape to the Review and IncrementalReview playbook.
 
@@ -19,7 +19,7 @@ Each inline comment:
 - Start with `blocker`, `major`, or `minor`.
 - State the broken behavior in one sentence.
 - Give one concrete failing case: a catalog shape, a call order, or an input.
-- Name the function that has to change and the regression test that should fail first.
+- Name the function that has to change. Name a regression test when one should exist; do not wait for that test before reporting the failure.
 - Show only the corrected condition, SQL predicate, or call order. Do not paste a rewrite of the file.
 
 Do not ask for scheduling, MySQL, incremental sync, exclusion constraints, operator classes, or ordered-set aggregates. Do not ask for `--no-tablespaces`, `session_replication_role`, or `--max-in-list-size` in the TUI. Nullable unique indexes stay fail-closed.
@@ -51,6 +51,10 @@ Skip and upsert need a primary key or a persisted unique key. Policy `error` sta
 ### `internal/connections/**`
 
 Errors, logs, and prompts go through `RedactDSN` and `RedactMessage`. A new secret-bearing DSN field or query key is still a defect when no test names it yet. `SetDSNParam` returns `ErrMalformedDSN` and that error must not contain the raw DSN or the secret. Do not print a connection string that still has a password, token, or `client_secret`.
+
+### `internal/update/**`
+
+`writeCandidateExclusive` creates `.dolly-update-candidate` with `O_EXCL`. After that create succeeds, an error return removes the file. Leaving it makes the next `dolly update` fail at the same exclusive open.
 
 ### `internal/tui/**`
 
