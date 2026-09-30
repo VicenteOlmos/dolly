@@ -352,6 +352,9 @@ func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 	}
 	p.TotalRowEstimate = total
 	p.SnapshotConsistent = dumpSnapshotConsistent(cfg)
+	if cfg.withoutTransaction {
+		p.NoTransaction = true
+	}
 	return &p
 }
 

@@ -77,6 +77,7 @@ type Provenance struct {
 	ChunkTables             *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
 	Strategies              []TableStrategyRecord     `json:"strategies,omitempty"`
 	OmittedPartitionParents []string                  `json:"omitted_partition_parents,omitempty"`
+	NoTransaction           bool                      `json:"no_transaction,omitempty"`
 	SnapshotConsistent      bool                      `json:"snapshot_consistent"`
 }
 
