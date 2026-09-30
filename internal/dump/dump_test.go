@@ -80,6 +80,25 @@ func TestDumpFullFlow(t *testing.T) {
 	}
 }
 
+func TestRecordAndStripPartitionParentsCreatesProvenance(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "events", RelKind: "p"},
+		{Schema: "public", Name: "events_2024", RelKind: "r"},
+	}
+	kept, prov := recordAndStripPartitionParents(tables, nil)
+	if prov == nil || len(prov.OmittedPartitionParents) != 1 || prov.OmittedPartitionParents[0] != "public.events" {
+		t.Fatalf("provenance = %+v", prov)
+	}
+	if len(kept) != 1 || kept[0].Name != "events_2024" {
+		t.Fatalf("kept = %+v", kept)
+	}
+	existing := &Provenance{SourceDatabase: "app"}
+	_, got := recordAndStripPartitionParents(tables, existing)
+	if got != existing || len(existing.OmittedPartitionParents) != 1 {
+		t.Fatalf("existing provenance was replaced: %+v", got)
+	}
+}
+
 func TestDumpFullRecordsOmittedPartitionParents(t *testing.T) {
 	prev := db.SkipRelationAnnotations
 	db.SkipRelationAnnotations = false
@@ -620,6 +639,58 @@ func TestDumpWithoutTransaction(t *testing.T) {
 	}
 	if meta.Provenance == nil || meta.Provenance.SnapshotConsistent {
 		t.Fatalf("provenance = %+v, want snapshot_consistent false", meta.Provenance)
+	}
+	if !meta.Provenance.NoTransaction {
+		t.Fatalf("provenance = %+v, want no_transaction true", meta.Provenance)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"no_transaction": true`) {
+		t.Fatalf("metadata = %s", raw)
+	}
+}
+
+func TestDumpTransactionalOmitsNoTransactionProvenance(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(0))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+
+	emptyUniqueIndexMock(mock)
+
+	streamRows := sqlmock.NewRows([]string{"id"})
+	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
+	mock.ExpectCommit()
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(), WithProvenance(Provenance{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "no_transaction") {
+		t.Fatalf("transactional dump should omit no_transaction: %s", raw)
 	}
 }
 

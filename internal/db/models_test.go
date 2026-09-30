@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -48,5 +49,38 @@ func TestDataColumnsKeepsIdentityDropsGenerated(t *testing.T) {
 	}
 	if !HasGenerated(cols) {
 		t.Fatal("HasGenerated should be true when generated column present")
+	}
+}
+
+func TestTableUniqueKeysJSONRoundTrip(t *testing.T) {
+	table := Table{
+		Schema: "public",
+		Name:   "events",
+		Columns: []Column{
+			{Name: "code", DataType: "text", OrdinalPosition: 1},
+		},
+		UniqueKeys: [][]string{{"code"}, {"tenant", "seq"}},
+	}
+	data, err := json.Marshal(table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Table
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded.UniqueKeys, table.UniqueKeys) {
+		t.Fatalf("unique_keys = %+v, want %+v", decoded.UniqueKeys, table.UniqueKeys)
+	}
+}
+
+func TestTableWithoutUniqueKeysDecodesNil(t *testing.T) {
+	const payload = `{"schema":"public","name":"events","columns":[{"name":"id","data_type":"integer","is_nullable":false,"primary_key":true,"ordinal_position":1}]}`
+	var table Table
+	if err := json.Unmarshal([]byte(payload), &table); err != nil {
+		t.Fatal(err)
+	}
+	if table.UniqueKeys != nil {
+		t.Fatalf("unique_keys = %+v, want nil", table.UniqueKeys)
 	}
 }

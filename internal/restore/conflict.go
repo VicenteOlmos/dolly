@@ -47,6 +47,9 @@ func ParseConflictPolicy(s string) (ConflictPolicy, error) {
 
 func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames []string, err error) {
 	if len(table.Columns) == 0 {
+		if policy == ConflictSkip || policy == ConflictUpsert {
+			return "", nil, conflictRequiresKeyError(table, policy)
+		}
 		return fmt.Sprintf("INSERT INTO %s DEFAULT VALUES", pgx.Identifier{table.Schema, table.Name}.Sanitize()), nil, nil
 	}
 
@@ -62,6 +65,7 @@ func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames 
 	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
 	valuesClause := strings.Join(placeholders, ", ")
 	pkCols := primaryKeyColumns(table.Columns)
+	conflictCols := conflictKeyColumns(table, pkCols)
 	if hasAlwaysIdentity(table.Columns) {
 		base := fmt.Sprintf(
 			"INSERT INTO %s (%s) OVERRIDING SYSTEM VALUE VALUES (%s)",
@@ -69,7 +73,7 @@ func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames 
 			strings.Join(idents, ", "),
 			valuesClause,
 		)
-		return finishInsert(base, table, policy, pkCols, colNames)
+		return finishInsert(base, table, policy, conflictCols, colNames)
 	}
 	base := fmt.Sprintf(
 		"INSERT INTO %s (%s) VALUES (%s)",
@@ -77,7 +81,26 @@ func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames 
 		strings.Join(idents, ", "),
 		valuesClause,
 	)
-	return finishInsert(base, table, policy, pkCols, colNames)
+	return finishInsert(base, table, policy, conflictCols, colNames)
+}
+
+func conflictKeyColumns(table db.Table, pkCols []string) []string {
+	if len(pkCols) > 0 {
+		return pkCols
+	}
+	if len(table.UniqueKeys) > 0 {
+		return table.UniqueKeys[0]
+	}
+	return nil
+}
+
+func conflictRequiresKeyError(table db.Table, policy ConflictPolicy) error {
+	return fmt.Errorf(
+		"conflict policy %s requires a primary key or unique key on %s.%s",
+		policy.String(),
+		table.Schema,
+		table.Name,
+	)
 }
 
 func hasAlwaysIdentity(cols []db.Column) bool {
@@ -89,28 +112,31 @@ func hasAlwaysIdentity(cols []db.Column) bool {
 	return false
 }
 
-func finishInsert(base string, table db.Table, policy ConflictPolicy, pkCols []string, colNames []string) (string, []string, error) {
-	if len(pkCols) == 0 || policy == ConflictError {
+func finishInsert(base string, table db.Table, policy ConflictPolicy, conflictCols []string, colNames []string) (string, []string, error) {
+	if policy == ConflictError {
 		return base, colNames, nil
 	}
-
-	pkIdents := make([]string, len(pkCols))
-	for i, name := range pkCols {
-		pkIdents[i] = pgx.Identifier{name}.Sanitize()
+	if len(conflictCols) == 0 {
+		return "", nil, conflictRequiresKeyError(table, policy)
 	}
-	conflictTarget := strings.Join(pkIdents, ", ")
+
+	keyIdents := make([]string, len(conflictCols))
+	for i, name := range conflictCols {
+		keyIdents[i] = pgx.Identifier{name}.Sanitize()
+	}
+	conflictTarget := strings.Join(keyIdents, ", ")
 
 	switch policy {
 	case ConflictSkip:
 		return base + fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING", conflictTarget), colNames, nil
 	case ConflictUpsert:
 		var sets []string
-		pkSet := make(map[string]struct{}, len(pkCols))
-		for _, name := range pkCols {
-			pkSet[name] = struct{}{}
+		keySet := make(map[string]struct{}, len(conflictCols))
+		for _, name := range conflictCols {
+			keySet[name] = struct{}{}
 		}
 		for _, c := range table.Columns {
-			if _, isPK := pkSet[c.Name]; isPK {
+			if _, inKey := keySet[c.Name]; inKey {
 				continue
 			}
 			if c.Identity == "ALWAYS" || c.Generated {

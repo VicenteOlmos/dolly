@@ -55,11 +55,12 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 			restoredColumns[table.Schema+"\x00"+table.Name+"\x00"+column.Name] = true
 		}
 	}
+	omittedParents := omittedPartitionParentSet(meta)
 	for _, seq := range meta.Sequences {
 		if schemaFilter != nil && !schemaFilter[seq.Schema] {
 			continue
 		}
-		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns)
+		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns, omittedParents)
 		if err != nil {
 			return err
 		}
@@ -117,7 +118,18 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 	return nil
 }
 
-func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.SequenceState, restoredColumns map[string]bool) (bool, error) {
+func omittedPartitionParentSet(meta dump.Metadata) map[string]bool {
+	if meta.Provenance == nil || len(meta.Provenance.OmittedPartitionParents) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(meta.Provenance.OmittedPartitionParents))
+	for _, name := range meta.Provenance.OmittedPartitionParents {
+		set[name] = true
+	}
+	return set
+}
+
+func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.SequenceState, restoredColumns, omittedParents map[string]bool) (bool, error) {
 	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT tbl_ns.nspname, tbl.relname, a.attname
 		FROM pg_class seq
 		JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
@@ -139,7 +151,7 @@ func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.Sequ
 	if err := rows.Scan(&schema, &table, &column); err != nil {
 		return false, fmt.Errorf("scan sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
 	}
-	if !restoredColumns[schema+"\x00"+table+"\x00"+column] {
+	if !restoredColumns[schema+"\x00"+table+"\x00"+column] && !omittedParents[schema+"."+table] {
 		return false, fmt.Errorf("sequence %s.%s is not owned by a restored column", seq.Schema, seq.Name)
 	}
 	if err := rows.Err(); err != nil {

@@ -171,6 +171,75 @@ func TestBuildInsertUpsertSkipsGeneratedColumn(t *testing.T) {
 	}
 }
 
+func TestBuildInsertUpsertUsesPersistedUniqueKey(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "events",
+		Columns: []db.Column{
+			{Name: "code", DataType: "text", OrdinalPosition: 1},
+			{Name: "note", DataType: "text", OrdinalPosition: 2},
+		},
+		UniqueKeys: [][]string{{"code"}},
+	}
+	q, _, err := buildInsert(table, ConflictUpsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `ON CONFLICT ("code") DO UPDATE SET`) {
+		t.Fatalf("query = %s", q)
+	}
+	if strings.Contains(q, `"code" = EXCLUDED."code"`) {
+		t.Fatalf("conflict key column must be omitted from SET: %s", q)
+	}
+	if !strings.Contains(q, `"note" = EXCLUDED."note"`) {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+func TestBuildInsertSkipUpsertRequiresKey(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "events",
+		Columns: []db.Column{
+			{Name: "code", DataType: "text"},
+			{Name: "note", DataType: "text"},
+		},
+	}
+	for _, policy := range []ConflictPolicy{ConflictSkip, ConflictUpsert} {
+		_, _, err := buildInsert(table, policy)
+		if err == nil {
+			t.Fatalf("policy %s: expected error without key", policy)
+		}
+		if !strings.Contains(err.Error(), `public.events`) || !strings.Contains(err.Error(), policy.String()) {
+			t.Fatalf("policy %s: err = %v", policy, err)
+		}
+	}
+	q, _, err := buildInsert(table, ConflictError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, "ON CONFLICT") {
+		t.Fatalf("error policy should not add ON CONFLICT: %s", q)
+	}
+}
+
+func TestBuildInsertDefaultValuesConflictRequiresKey(t *testing.T) {
+	table := db.Table{Schema: "app", Name: "settings"}
+	for _, policy := range []ConflictPolicy{ConflictSkip, ConflictUpsert} {
+		_, _, err := buildInsert(table, policy)
+		if err == nil {
+			t.Fatalf("policy %s: expected error for DEFAULT VALUES", policy)
+		}
+	}
+	q, _, err := buildInsert(table, ConflictError)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, "DEFAULT VALUES") {
+		t.Fatalf("query = %s", q)
+	}
+}
+
 func TestParseConflictPolicy(t *testing.T) {
 	p, err := ParseConflictPolicy("skip")
 	if err != nil || p != ConflictSkip {
