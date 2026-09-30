@@ -14,7 +14,7 @@ func TestTablesForSequenceCaptureIncludesOmittedParents(t *testing.T) {
 	exported := []db.Table{leaf}
 
 	got := tablesForSequenceCapture(all, exported)
-	want := []db.Table{leaf, parent}
+	want := []db.Table{parent, leaf}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("tablesForSequenceCapture() = %+v, want %+v", got, want)
 	}
