@@ -366,6 +366,11 @@ func TestFormatGrantSequenceAndRoutine(t *testing.T) {
 	if got := formatGrantRoutine("app", "my_proc", "integer", "PROCEDURE", "PUBLIC"); got != `GRANT EXECUTE ON PROCEDURE "app"."my_proc"(integer) TO PUBLIC` {
 		t.Fatalf("procedure grant = %q", got)
 	}
+	gotType := formatGrantType("app", "status_enum", "app_reader")
+	wantType := `GRANT USAGE ON TYPE "app"."status_enum" TO "app_reader"`
+	if gotType != wantType {
+		t.Fatalf("type grant = %q, want %q", gotType, wantType)
+	}
 }
 
 func TestFormatEnableRLSAndPolicy(t *testing.T) {

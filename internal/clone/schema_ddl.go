@@ -367,6 +367,15 @@ func formatGrantRoutine(schema, name, identityArgs, kind, grantee string) string
 	)
 }
 
+// formatGrantType emits GRANT USAGE ON TYPE.
+func formatGrantType(schema, name, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT USAGE ON TYPE %s TO %s",
+		quoteQualifiedType(schema, name),
+		quoteGrantee(grantee),
+	)
+}
+
 // formatGrantSchema emits GRANT privileges ON SCHEMA.
 func formatGrantSchema(privileges, schema, grantee string) string {
 	return fmt.Sprintf(

@@ -1405,6 +1405,56 @@ func applyRoutineGrants(ctx context.Context, tgtDB execer, grants []routineGrant
 	return nil
 }
 
+type typeGrantRow struct {
+	schema    string
+	typeName  string
+	grantee   string
+	grantable bool
+}
+
+func loadTypeGrants(ctx context.Context, q *sql.DB, schemas []string) ([]typeGrantRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, t.typname, COALESCE(r.rolname, 'PUBLIC'), priv.is_grantable
+		FROM pg_type t
+		JOIN pg_namespace n ON n.oid = t.typnamespace
+		CROSS JOIN LATERAL aclexplode(t.typacl) priv
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE t.typtype IN ('e', 'd', 'c')
+		  AND NOT (t.typtype = 'c' AND EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid))
+		  AND priv.privilege_type = 'USAGE'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, t.typname, 3`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list type grants: %w", err)
+	}
+	defer rows.Close()
+
+	var out []typeGrantRow
+	for rows.Next() {
+		var g typeGrantRow
+		if err := rows.Scan(&g.schema, &g.typeName, &g.grantee, &g.grantable); err != nil {
+			return nil, fmt.Errorf("scan type grant: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+func applyTypeGrants(ctx context.Context, tgtDB execer, grants []typeGrantRow) error {
+	for _, g := range grants {
+		stmt := formatGrantType(g.schema, g.typeName, g.grantee)
+		if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("grant on type %s.%s: %w", g.schema, g.typeName, err)
+		}
+	}
+	return nil
+}
+
 type rlsTable struct {
 	schema string
 	table  string
