@@ -35,7 +35,11 @@ func formatCreateDomain(schema, name, baseType string, notNull bool, defaultExpr
 func formatCreateCompositeType(schema, name string, attrs []compositeAttr) string {
 	var fieldParts []string
 	for _, a := range attrs {
-		fieldParts = append(fieldParts, fmt.Sprintf("%s %s", quoteIdentifier(a.name), a.typ))
+		part := fmt.Sprintf("%s %s", quoteIdentifier(a.name), a.typ)
+		if a.collSchema != "" && a.collName != "" {
+			part += " COLLATE " + quoteQualifiedType(a.collSchema, a.collName)
+		}
+		fieldParts = append(fieldParts, part)
 	}
 	return fmt.Sprintf(
 		"CREATE TYPE %s AS (%s)",
@@ -45,8 +49,10 @@ func formatCreateCompositeType(schema, name string, attrs []compositeAttr) strin
 }
 
 type compositeAttr struct {
-	name string
-	typ  string
+	name       string
+	typ        string
+	collSchema string
+	collName   string
 }
 
 // formatCreateSequence emits CREATE SEQUENCE with catalog-derived options.

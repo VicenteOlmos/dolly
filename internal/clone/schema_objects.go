@@ -310,11 +310,16 @@ func loadCompositeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]str
 
 func loadCompositeAttrs(ctx context.Context, q *sql.DB, schema, typeName string) ([]compositeAttr, error) {
 	const query = `
-		SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)
+		SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod),
+		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> typ.typcollation THEN coll_ns.nspname ELSE '' END,
+		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> typ.typcollation THEN coll.collname ELSE '' END
 		FROM pg_type t
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
 		INNER JOIN pg_class c ON c.oid = t.typrelid
 		INNER JOIN pg_attribute a ON a.attrelid = c.oid
+		INNER JOIN pg_type typ ON typ.oid = a.atttypid
+		LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
+		LEFT JOIN pg_namespace coll_ns ON coll_ns.oid = coll.collnamespace
 		WHERE t.typtype = 'c'
 		  AND n.nspname = $1 AND t.typname = $2
 		  AND a.attnum > 0 AND NOT a.attisdropped
@@ -328,7 +333,7 @@ func loadCompositeAttrs(ctx context.Context, q *sql.DB, schema, typeName string)
 	var attrs []compositeAttr
 	for rows.Next() {
 		var a compositeAttr
-		if err := rows.Scan(&a.name, &a.typ); err != nil {
+		if err := rows.Scan(&a.name, &a.typ, &a.collSchema, &a.collName); err != nil {
 			return nil, fmt.Errorf("scan composite attr: %w", err)
 		}
 		attrs = append(attrs, a)

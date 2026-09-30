@@ -380,4 +380,11 @@ func TestFormatCreateCompositeType(t *testing.T) {
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+	gotColl := formatCreateCompositeType("app", "label", []compositeAttr{
+		{name: "text", typ: "text", collSchema: "app", collName: "custom"},
+	})
+	wantColl := `CREATE TYPE "app"."label" AS ("text" text COLLATE "app"."custom")`
+	if gotColl != wantColl {
+		t.Fatalf("collated composite: got %q, want %q", gotColl, wantColl)
+	}
 }
