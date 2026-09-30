@@ -12,7 +12,7 @@
 │   2 schema                 ││ Analyze: [ ]                              │
 │   3 dump                   ││ Privileges: [ ]                           │
 │ > 4 clone                  ││ Replace: config                           │
-│   5 config                 ││ On conflict: config                       │
+│   5 config                 ││ On conflict: error                        │
 │                            ││ Target directory: (empty)                 │
 │                            ││ Dump directory: (empty)                   │
 │                            ││ Skip create: config                       │

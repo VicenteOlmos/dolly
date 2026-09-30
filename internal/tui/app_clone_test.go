@@ -587,3 +587,26 @@ func TestProductionCloneRunnerPassesReplaceAndOnConflict(t *testing.T) {
 		t.Fatalf("params = replaceSet %v replace %v onConflict %q", gotReplaceSet, gotReplace, gotOnConflict)
 	}
 }
+
+func TestProductionCloneRunnerLeavesUnsetStrategyForConfig(t *testing.T) {
+	var gotStrategy, gotOnConflict string
+	orig := cloneworkRun
+	cloneworkRun = func(_ context.Context, p clonework.Params, _ func(clonework.ProgressEvent)) error {
+		gotStrategy = p.Strategy
+		gotOnConflict = p.OnConflict
+		return nil
+	}
+	defer func() { cloneworkRun = orig }()
+
+	draft := CloneDraft{
+		SourceDSN: "postgres://u:p@h/db",
+		CloneName: "db_dolly_1",
+		TargetDSN: "postgres://u:p@h/target",
+	}
+	if err := (productionCloneRunner{}).Run(context.Background(), draft, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotStrategy != "" || gotOnConflict != "" {
+		t.Fatalf("strategy = %q onConflict = %q, want empty so config applies", gotStrategy, gotOnConflict)
+	}
+}

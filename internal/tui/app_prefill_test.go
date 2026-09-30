@@ -94,12 +94,24 @@ func TestNewAppFromConfigEmptyDumpOutputDir(t *testing.T) {
 	}
 }
 
-func TestNewAppFromConfigPrePopulatesCloneStrategy(t *testing.T) {
+func TestNewAppFromConfigFollowsLiveCloneStrategy(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Clone.Strategy = "logical-stream"
 	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
-	if app.clone.Strategy != "logical-stream" {
-		t.Fatalf("clone.Strategy = %q, want logical-stream", app.clone.Strategy)
+	if app.clone.Strategy != "" {
+		t.Fatalf("clone.Strategy = %q, want empty until the form overrides it", app.clone.Strategy)
+	}
+	if effectiveCloneStrategyForDraft(app.clone, cfg) != "logical-stream" {
+		t.Fatalf("effective strategy = %q, want logical-stream", effectiveCloneStrategyForDraft(app.clone, cfg))
+	}
+	cfg.Clone.Strategy = "template"
+	if effectiveCloneStrategyForDraft(app.clone, cfg) != "template" {
+		t.Fatalf("effective strategy = %q, want template after config edit", effectiveCloneStrategyForDraft(app.clone, cfg))
+	}
+	app.clone.Strategy = "physical-backup"
+	cfg.Clone.Strategy = "schema-replay"
+	if effectiveCloneStrategyForDraft(app.clone, cfg) != "physical-backup" {
+		t.Fatalf("effective strategy = %q, want the explicit form override", effectiveCloneStrategyForDraft(app.clone, cfg))
 	}
 }
 
@@ -115,12 +127,25 @@ func TestNewAppFromConfigEmptyCloneStrategyStaysEmpty(t *testing.T) {
 	}
 }
 
-func TestNewAppFromConfigPrePopulatesCloneOnConflict(t *testing.T) {
+func TestNewAppFromConfigFollowsLiveCloneOnConflict(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Clone.RestoreOnConflict = "skip"
 	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
-	if app.clone.OnConflict != "skip" {
-		t.Fatalf("clone.OnConflict = %q, want skip", app.clone.OnConflict)
+	if app.clone.OnConflict != "" {
+		t.Fatalf("clone.OnConflict = %q, want empty until the form overrides it", app.clone.OnConflict)
+	}
+	cs := app.screens[ScreenClone].(*cloneScreen)
+	if cs.cloneOnConflictLabel() != "skip" {
+		t.Fatalf("on-conflict label = %q, want skip from config", cs.cloneOnConflictLabel())
+	}
+	cfg.Clone.RestoreOnConflict = "upsert"
+	if cs.cloneOnConflictLabel() != "upsert" {
+		t.Fatalf("on-conflict label = %q, want upsert after config edit", cs.cloneOnConflictLabel())
+	}
+	app.clone.OnConflict = "error"
+	cfg.Clone.RestoreOnConflict = "skip"
+	if cs.cloneOnConflictLabel() != "error" {
+		t.Fatalf("on-conflict label = %q, want the explicit form override", cs.cloneOnConflictLabel())
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
 func TestCycleChannelBinding(t *testing.T) {
@@ -52,5 +54,32 @@ func TestConnectionScreenChannelBindingSpaceCycles(t *testing.T) {
 	q := mustParseDSNQuery(draft.DSN())
 	if q.Get("channel_binding") != "prefer" {
 		t.Fatalf("DSN channel_binding = %q, want prefer", q.Get("channel_binding"))
+	}
+}
+
+func TestChannelBindingRoundTripsThroughSavedProfile(t *testing.T) {
+	draft := ConnectionDraft{
+		Host:           "h",
+		Port:           "5432",
+		Database:       "db",
+		User:           "u",
+		Password:       "p",
+		SSLMODE:        "verify-full",
+		ChannelBinding: "disable",
+	}
+	saved := connectionFromDraft(draft, "local", []string{"public"})
+	if saved.ChannelBinding != "disable" {
+		t.Fatalf("saved binding = %q, want disable", saved.ChannelBinding)
+	}
+	again := draftFromConnection(saved)
+	if again.ChannelBinding != "disable" {
+		t.Fatalf("draft binding = %q, want disable", again.ChannelBinding)
+	}
+	if got := saved.DSN(); !containsPlain(got, "channel_binding=disable") {
+		t.Fatalf("profile DSN = %q, want disable", got)
+	}
+	legacy := connections.Connection{Host: "h", Database: "db", User: "u", Password: "p"}
+	if got := legacy.DSN(); !containsPlain(got, "channel_binding=require") {
+		t.Fatalf("legacy DSN = %q, want require", got)
 	}
 }

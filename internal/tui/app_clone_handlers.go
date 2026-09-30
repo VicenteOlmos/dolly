@@ -114,10 +114,11 @@ func (a *App) appendCloneUnsanitizedWarningIfNeeded() {
 	if a.cfg == nil {
 		return
 	}
-	if !cloneNeedsUnsanitizedWarning(a.clone.Strategy, a.cfg.Sanitization.Enabled) {
+	strategy := effectiveCloneStrategyForDraft(a.clone, a.cfg)
+	if !cloneNeedsUnsanitizedWarning(strategy, a.cfg.Sanitization.Enabled) {
 		return
 	}
-	warn := connections.RedactMessage(formatCloneUnsanitizedWarning(a.clone.Strategy, a.cfg.Sanitization.Enabled))
+	warn := connections.RedactMessage(formatCloneUnsanitizedWarning(strategy, a.cfg.Sanitization.Enabled))
 	appendCloneLog(&a.cloneLog, warn)
 }
 
