@@ -1061,7 +1061,14 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		  AND t.typtype = 'c'
 		  AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid AND c.relkind = 'c')
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'collation', n.nspname, coll.collname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_collation coll ON coll.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = coll.collnamespace
+		WHERE d.classoid = 'pg_collation'::regclass AND d.objsubid = 0
+		  AND n.nspname IN (%s)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)

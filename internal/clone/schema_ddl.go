@@ -313,6 +313,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return "DOMAIN " + quoteQualifiedType(schema, object)
 	case "type":
 		return "TYPE " + quoteQualifiedType(schema, object)
+	case "collation":
+		return "COLLATION " + quoteQualifiedType(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}

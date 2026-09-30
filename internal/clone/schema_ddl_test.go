@@ -305,6 +305,14 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if got := commentTarget("type", "app", "status_enum", ""); got != `TYPE "app"."status_enum"` {
 		t.Fatalf("type target = %q", got)
 	}
+	if got := commentTarget("collation", "app", "custom", ""); got != `COLLATION "app"."custom"` {
+		t.Fatalf("collation target = %q", got)
+	}
+	gotCollationComment := formatCommentOn("collation", "app", "custom", "", "sort rules")
+	wantCollationComment := `COMMENT ON COLLATION "app"."custom" IS 'sort rules'`
+	if gotCollationComment != wantCollationComment {
+		t.Fatalf("collation comment = %q, want %q", gotCollationComment, wantCollationComment)
+	}
 	gotTypeComment := formatCommentOn("type", "app", "status_enum", "", "lifecycle")
 	wantTypeComment := `COMMENT ON TYPE "app"."status_enum" IS 'lifecycle'`
 	if gotTypeComment != wantTypeComment {
