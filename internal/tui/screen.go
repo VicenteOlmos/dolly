@@ -91,6 +91,9 @@ type ConnectionDraft struct {
 	Password       string
 	SSLMODE        string
 	ChannelBinding string
+	SSLRootCert    string
+	SSLCert        string
+	SSLKey         string
 }
 
 func (c ConnectionDraft) DSN() string {
@@ -116,9 +119,18 @@ func (c ConnectionDraft) DSN() string {
 			binding = "require"
 		}
 		q.Set("channel_binding", binding)
+		setTLSFileParam(q, "sslrootcert", c.SSLRootCert)
+		setTLSFileParam(q, "sslcert", c.SSLCert)
+		setTLSFileParam(q, "sslkey", c.SSLKey)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func setTLSFileParam(q url.Values, key, value string) {
+	if value = strings.TrimSpace(value); value != "" {
+		q.Set(key, value)
+	}
 }
 
 type SchemaDraft struct {

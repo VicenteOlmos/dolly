@@ -161,7 +161,16 @@ func (c Connection) DSN() string {
 			binding = "require"
 		}
 		q.Set("channel_binding", binding)
+		setTLSFile(q, "sslrootcert", c.SSLRootCert)
+		setTLSFile(q, "sslcert", c.SSLCert)
+		setTLSFile(q, "sslkey", c.SSLKey)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func setTLSFile(q url.Values, key, value string) {
+	if value = strings.TrimSpace(value); value != "" {
+		q.Set(key, value)
+	}
 }

@@ -11,9 +11,9 @@
 │ > 1 connect                ││ SSLMODE:       ││ jump to screen ││                │
 │   2 schema                 ││ Channel        ││ Ctrl+Tab       ││                │
 │   3 dump                   ││ binding:       ││ [global]  next ││                │
-│   4 clone                  ││                ││ screen         ││                │
-│   5 config                 ││                ││ Ctrl+Shift+Tab ││                │
-│                            ││                ││ [global]       ││                │
+│   4 clone                  ││ SSL root cert: ││ screen         ││                │
+│   5 config                 ││ SSL cert:      ││ Ctrl+Shift+Tab ││                │
+│                            ││ SSL key:       ││ [global]       ││                │
 │                            ││                ││ previous       ││                │
 │                            ││                ││ screen         ││                │
 │                            ││                ││ g / F5         ││                │

@@ -136,6 +136,30 @@ func TestConnectionDSNChannelBinding(t *testing.T) {
 	}
 }
 
+func TestConnectionDSNTLSFiles(t *testing.T) {
+	in := Connection{
+		Host: "h", Database: "d", User: "u", Password: "p",
+		SSLRootCert: "/certs/root.crt",
+		SSLCert:     "/certs/client.crt",
+		SSLKey:      "/certs/client.key",
+	}
+	got := in.DSN()
+	for _, part := range []string{"sslrootcert=%2Fcerts%2Froot.crt", "sslcert=%2Fcerts%2Fclient.crt", "sslkey=%2Fcerts%2Fclient.key"} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("DSN = %q, missing %q", got, part)
+		}
+	}
+	if in.Signature() != (Connection{Host: "h", Database: "d", User: "u"}).Signature() {
+		t.Fatal("TLS file paths must not change the profile signature")
+	}
+	disabled := in
+	disabled.SSLMODE = "disable"
+	got = disabled.DSN()
+	if strings.Contains(got, "sslrootcert=") || strings.Contains(got, "sslcert=") || strings.Contains(got, "sslkey=") {
+		t.Fatalf("DSN = %q, want TLS files omitted when sslmode=disable", got)
+	}
+}
+
 func TestConnectionSignatureNormalizesPort(t *testing.T) {
 	withPort := Connection{Host: "h", Port: "5433", Database: "d", User: "u"}
 	emptyPort := Connection{Host: "h", Database: "d", User: "u"}

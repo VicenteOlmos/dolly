@@ -83,3 +83,25 @@ func TestChannelBindingRoundTripsThroughSavedProfile(t *testing.T) {
 		t.Fatalf("legacy DSN = %q, want require", got)
 	}
 }
+
+func TestTLSFilesRoundTripThroughSavedProfile(t *testing.T) {
+	draft := ConnectionDraft{
+		Host: "h", Port: "5432", Database: "db", User: "u", Password: "p",
+		SSLMODE: "verify-full", SSLRootCert: "/certs/root.crt", SSLCert: "/certs/client.crt", SSLKey: "/certs/client.key",
+	}
+	saved := connectionFromDraft(draft, "local", nil)
+	again := draftFromConnection(saved)
+	if again.SSLRootCert != draft.SSLRootCert || again.SSLCert != draft.SSLCert || again.SSLKey != draft.SSLKey {
+		t.Fatalf("round trip = %+v", again)
+	}
+	if got := saved.DSN(); !containsPlain(got, "sslrootcert=") || !containsPlain(got, "sslkey=") {
+		t.Fatalf("profile DSN = %q, want TLS files", got)
+	}
+	if got := draft.DSN(); !containsPlain(got, "sslcert=") {
+		t.Fatalf("draft DSN = %q, want sslcert", got)
+	}
+	draft.SSLMODE = "disable"
+	if got := draft.DSN(); containsPlain(got, "sslrootcert=") {
+		t.Fatalf("draft DSN = %q, want TLS files omitted", got)
+	}
+}

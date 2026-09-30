@@ -31,6 +31,9 @@ type Connection struct {
 	Password       string   `yaml:"password"`
 	SSLMODE        string   `yaml:"sslmode,omitempty"`
 	ChannelBinding string   `yaml:"channel_binding,omitempty"`
+	SSLRootCert    string   `yaml:"sslrootcert,omitempty"`
+	SSLCert        string   `yaml:"sslcert,omitempty"`
+	SSLKey         string   `yaml:"sslkey,omitempty"`
 	Schemas        []string `yaml:"schemas,omitempty"`
 }
 
