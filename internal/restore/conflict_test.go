@@ -123,6 +123,52 @@ func TestBuildInsertAlwaysIdentity(t *testing.T) {
 	if strings.Contains(q, "OVERRIDING SYSTEM VALUE") {
 		t.Fatalf("DEFAULT VALUES must not override: %s", q)
 	}
+
+	nonPKIdentity := db.Table{
+		Schema: "public",
+		Name:   "line_items",
+		Columns: []db.Column{
+			{Name: "code", DataType: "text", PrimaryKey: true},
+			{Name: "seq", DataType: "bigint", Identity: "ALWAYS"},
+			{Name: "qty", DataType: "integer"},
+			{Name: "legacy_id", DataType: "bigint", Identity: "BY DEFAULT"},
+		},
+	}
+	q, _, err = buildInsert(nonPKIdentity, ConflictUpsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `ON CONFLICT ("code") DO UPDATE SET`) {
+		t.Fatalf("upsert policy query = %s", q)
+	}
+	if strings.Contains(q, `"seq" = EXCLUDED."seq"`) {
+		t.Fatalf("ALWAYS identity must not appear in upsert SET: %s", q)
+	}
+	if !strings.Contains(q, `"qty" = EXCLUDED."qty"`) || !strings.Contains(q, `"legacy_id" = EXCLUDED."legacy_id"`) {
+		t.Fatalf("normal and BY DEFAULT columns must update: %s", q)
+	}
+}
+
+func TestBuildInsertUpsertSkipsGeneratedColumn(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "orders",
+		Columns: []db.Column{
+			{Name: "id", DataType: "integer", PrimaryKey: true},
+			{Name: "total", DataType: "integer", Generated: true},
+			{Name: "note", DataType: "text"},
+		},
+	}
+	q, _, err := buildInsert(table, ConflictUpsert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(q, `"total" = EXCLUDED."total"`) {
+		t.Fatalf("generated column must not appear in upsert SET: %s", q)
+	}
+	if !strings.Contains(q, `"note" = EXCLUDED."note"`) {
+		t.Fatalf("writable column must update: %s", q)
+	}
 }
 
 func TestParseConflictPolicy(t *testing.T) {
