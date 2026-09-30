@@ -706,6 +706,9 @@ func (c *connectionScreen) View(width, height int) string {
 		renderFields := func(editable bool) {
 			for i, f := range c.fields {
 				if c.panel == connPanelList || c.inOverview() {
+					if f.label == "Channel binding" && strings.TrimSpace(*f.value) == "" {
+						continue
+					}
 					label := StyleMuted.Render(f.label + ":")
 					display := *f.value
 					if f.masked {

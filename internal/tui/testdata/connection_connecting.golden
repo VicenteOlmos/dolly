@@ -8,15 +8,16 @@
 │                            ││ User:                                     │
 │            dolly           ││ Password:                                 │
 │                            ││ SSLMODE:                                  │
-│ > 1 connect                ││                                           │
-│   2 schema                 ││        __                                 │
-│   3 dump                   ││       UooU\.'@@@@@@`.                     │
-│   4 clone                  ││       \__/(@@@@@@@@@@)                    │
-│   5 config                 ││            (@@@@@@@@)                     │
+│ > 1 connect                ││ Channel binding:                          │
+│   2 schema                 ││                                           │
+│   3 dump                   ││        __                                 │
+│   4 clone                  ││       UooU\.'@@@@@@`.                     │
+│   5 config                 ││       \__/(@@@@@@@@@@)                    │
+│                            ││            (@@@@@@@@)                     │
 │                            ││            `YY~~~~YY'                     │
 │                            ││             ||    ||                      │
 │                            ││                                           │
-│                            ││ Connecting…                               │
-╰────────────────────────────╯╰───────────────────────────────────────────╯
+╰────────────────────────────╯│ Connecting…                               │
+                              ╰───────────────────────────────────────────╯
 U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
 Enter connect · Esc back · Tab field · ?/F1                                     
