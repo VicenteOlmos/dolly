@@ -12,7 +12,8 @@
 │   2 schema                 ││ User: deploy          │
 │   3 dump                   ││ Password: ********    │
 │   4 clone                  ││ SSLMODE:              │
-│   5 config                 ││ Schemas: app, billing │
-╰────────────────────────────╯╰───────────────────────╯
+│   5 config                 ││ Channel binding:      │
+╰────────────────────────────╯│ Schemas: app, billing │
+                              ╰───────────────────────╯
 U@U dump · restore · clone · tui · history restore          
 ↑↓ section · Enter open · e/s/r/d/t · ?/F1                  

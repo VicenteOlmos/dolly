@@ -23,14 +23,15 @@ const allowPlaintextEnvVar = "DOLLY_CONNECTIONS_ALLOW_PLAINTEXT"
 
 // Connection is a saved PostgreSQL profile.
 type Connection struct {
-	Name     string   `yaml:"name"`
-	Host     string   `yaml:"host"`
-	Port     string   `yaml:"port"`
-	Database string   `yaml:"database"`
-	User     string   `yaml:"user"`
-	Password string   `yaml:"password"`
-	SSLMODE  string   `yaml:"sslmode,omitempty"`
-	Schemas  []string `yaml:"schemas,omitempty"`
+	Name           string   `yaml:"name"`
+	Host           string   `yaml:"host"`
+	Port           string   `yaml:"port"`
+	Database       string   `yaml:"database"`
+	User           string   `yaml:"user"`
+	Password       string   `yaml:"password"`
+	SSLMODE        string   `yaml:"sslmode,omitempty"`
+	ChannelBinding string   `yaml:"channel_binding,omitempty"`
+	Schemas        []string `yaml:"schemas,omitempty"`
 }
 
 // ConnectionStore persists named connection profiles.

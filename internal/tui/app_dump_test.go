@@ -506,6 +506,27 @@ func TestDumpScreenPathEdit(t *testing.T) {
 	}
 }
 
+func TestDumpScreenModeNoTransactionSpaceToggles(t *testing.T) {
+	draft := DumpDraft{}
+	status := DumpStatusIdle
+	var log []string
+	var dumpErr string
+	var dumpResult *DumpResultSummary
+	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil)
+	ds := screen.(*dumpScreen)
+	enterDumpSection(ds, dumpSectionMode)
+	ds.modeField = modeFieldNoTransaction
+
+	screen.Update(keyPress("", tea.KeySpace, 0))
+	if !draft.NoTransaction {
+		t.Fatal("expected NoTransaction true after Space")
+	}
+	screen.Update(keyPress("", tea.KeySpace, 0))
+	if draft.NoTransaction {
+		t.Fatal("expected NoTransaction false after second Space")
+	}
+}
+
 func TestAppDumpIgnoresDuplicateEnter(t *testing.T) {
 	conn, err := sql.Open("pgx", "postgres://u:p@h-x/db_stub")
 	if err != nil {

@@ -77,3 +77,14 @@ func formatCloneUnsanitizedWarning(strategy string, sanitizationEnabled bool) st
 	strategy = effectiveCloneStrategy(strategy)
 	return fmt.Sprintf("warning: clone will copy unsanitized data (strategy=%s, sanitization=%v)", strategy, sanitizationEnabled)
 }
+
+func cloneSanitizationStrategyBlock(draft CloneDraft, cfg *config.Config) (bool, string) {
+	if cfg == nil || !cfg.Sanitization.Enabled {
+		return false, ""
+	}
+	strategy := effectiveCloneStrategyForDraft(draft, cfg)
+	if strategy != "template" && strategy != "physical-backup" {
+		return false, ""
+	}
+	return true, fmt.Sprintf("Sanitization cannot rewrite %s clones; use schema-replay or logical-stream, or disable sanitization in config", strategy)
+}

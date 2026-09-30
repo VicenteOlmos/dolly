@@ -49,6 +49,7 @@ const (
 	modeFieldIncludeTableFile
 	modeFieldExcludeTableFile
 	modeFieldChunkTableFile
+	modeFieldNoTransaction
 	modeFieldCount
 )
 
@@ -499,6 +500,11 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			d.adjustWorkers(1)
 			return true
 		}
+	case modeFieldNoTransaction:
+		if k.Code == tea.KeySpace {
+			d.draft.NoTransaction = !d.draft.NoTransaction
+			return true
+		}
 	}
 	return false
 }
@@ -561,6 +567,9 @@ func (d *dumpScreen) modeSummary() string {
 	}
 	if d.draft.WorkersSet {
 		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
+	}
+	if d.draft.NoTransaction {
+		parts = append(parts, "no-tx")
 	}
 	return strings.Join(parts, " · ")
 }
@@ -739,6 +748,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldIncludeTableFile, "Include table file", d.modeFieldValue(d.draft.IncludeTableFile, d.includeTableFileCursor, modeFieldIncludeTableFile)},
 		{modeFieldExcludeTableFile, "Exclude table file", d.modeFieldValue(d.draft.ExcludeTableFile, d.excludeTableFileCursor, modeFieldExcludeTableFile)},
 		{modeFieldChunkTableFile, "Chunk table file", d.modeFieldValue(d.draft.ChunkTableFile, d.chunkTableFileCursor, modeFieldChunkTableFile)},
+		{modeFieldNoTransaction, "No transaction", onOff(d.draft.NoTransaction)},
 	}
 	var lines []string
 	lines = append(lines, StyleAccent.Render("Mode"))
