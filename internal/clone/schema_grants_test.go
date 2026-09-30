@@ -82,6 +82,49 @@ func TestReplayExtraGrants(t *testing.T) {
 	}
 }
 
+func TestReplayTypeUsageGrants(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`relkind <> 'c'`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "name", "grantee", "privilege", "grantable", "missing_public"}).
+			AddRow("app", "mood", "reader", "USAGE", true, true).
+			AddRow("app", "mood", "owner", "USAGE", false, true).
+			AddRow("app", "label", "PUBLIC", "USAGE", false, false).
+			AddRow("app", "address", "PUBLIC", "", false, true))
+	grants, err := loadTypeGrants(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyTypeGrants(context.Background(), rec, grants); err != nil {
+		t.Fatal(err)
+	}
+	script := rec.String()
+	for _, stmt := range []string{
+		`REVOKE USAGE ON TYPE "app"."mood" FROM PUBLIC;`,
+		`GRANT USAGE ON TYPE "app"."mood" TO "reader" WITH GRANT OPTION;`,
+		`GRANT USAGE ON TYPE "app"."mood" TO "owner";`,
+		`GRANT USAGE ON TYPE "app"."label" TO PUBLIC;`,
+		`REVOKE USAGE ON TYPE "app"."address" FROM PUBLIC;`,
+	} {
+		if !strings.Contains(script, stmt) {
+			t.Errorf("missing %s in:\n%s", stmt, script)
+		}
+	}
+	if strings.Count(script, `REVOKE USAGE ON TYPE "app"."mood"`) != 1 {
+		t.Errorf("duplicate revoke in:\n%s", script)
+	}
+	if strings.Contains(script, `GRANT USAGE ON TYPE "app"."address" TO PUBLIC`) {
+		t.Errorf("empty privilege became a grant:\n%s", script)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadProcedureComment(t *testing.T) {
 	src, mock, err := sqlmock.New()
 	if err != nil {

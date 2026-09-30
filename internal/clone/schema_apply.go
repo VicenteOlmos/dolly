@@ -321,7 +321,8 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
-	if err := applyComments(ctx, tgtDB, comments); err != nil {
+	objectComments, policyComments := splitPolicyComments(comments)
+	if err := applyComments(ctx, tgtDB, objectComments); err != nil {
 		return err
 	}
 
@@ -374,8 +375,22 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err := applyRLS(ctx, tgtDB, rlsTables, policies); err != nil {
 		return err
 	}
+	if err := applyComments(ctx, tgtDB, policyComments); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func splitPolicyComments(comments []commentRow) (objectComments, policyComments []commentRow) {
+	for _, c := range comments {
+		if c.kind == "policy" {
+			policyComments = append(policyComments, c)
+			continue
+		}
+		objectComments = append(objectComments, c)
+	}
+	return objectComments, policyComments
 }
 
 func loadSchemaColumns(ctx context.Context, q *sql.DB, schema, table string) ([]schemaColumn, error) {

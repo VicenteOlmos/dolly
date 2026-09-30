@@ -1406,23 +1406,28 @@ func applyRoutineGrants(ctx context.Context, tgtDB execer, grants []routineGrant
 }
 
 type typeGrantRow struct {
-	schema    string
-	typeName  string
-	grantee   string
-	grantable bool
+	schema       string
+	typeName     string
+	grantee      string
+	grantable    bool
+	revokePublic bool
 }
 
 func loadTypeGrants(ctx context.Context, q *sql.DB, schemas []string) ([]typeGrantRow, error) {
 	inClause, args := schemaINClause(schemas)
+	// Effective ACL: NULL typacl is the built-in default (PUBLIC USAGE), not a revoke.
+	// Standalone composites have a pg_class row with relkind 'c'; table row types do not.
 	query := fmt.Sprintf(`
-		SELECT n.nspname, t.typname, COALESCE(r.rolname, 'PUBLIC'), priv.is_grantable
+		SELECT n.nspname, t.typname, COALESCE(r.rolname, 'PUBLIC'),
+		       COALESCE(priv.privilege_type, ''), COALESCE(priv.is_grantable, false),
+		       NOT EXISTS (SELECT 1 FROM aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) acl
+		                   WHERE acl.grantee = 0 AND acl.privilege_type = 'USAGE')
 		FROM pg_type t
 		JOIN pg_namespace n ON n.oid = t.typnamespace
-		CROSS JOIN LATERAL aclexplode(t.typacl) priv
+		LEFT JOIN LATERAL aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) priv ON true
 		LEFT JOIN pg_roles r ON r.oid = priv.grantee
 		WHERE t.typtype IN ('e', 'd', 'c')
-		  AND NOT (t.typtype = 'c' AND EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid))
-		  AND priv.privilege_type = 'USAGE'
+		  AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind <> 'c')
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, t.typname, 3`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -1432,10 +1437,21 @@ func loadTypeGrants(ctx context.Context, q *sql.DB, schemas []string) ([]typeGra
 	defer rows.Close()
 
 	var out []typeGrantRow
+	seen := make(map[string]bool)
 	for rows.Next() {
 		var g typeGrantRow
-		if err := rows.Scan(&g.schema, &g.typeName, &g.grantee, &g.grantable); err != nil {
+		var priv string
+		var missingPublic bool
+		if err := rows.Scan(&g.schema, &g.typeName, &g.grantee, &priv, &g.grantable, &missingPublic); err != nil {
 			return nil, fmt.Errorf("scan type grant: %w", err)
+		}
+		key := g.schema + "\x00" + g.typeName
+		if missingPublic && !seen[key] {
+			out = append(out, typeGrantRow{schema: g.schema, typeName: g.typeName, revokePublic: true})
+		}
+		seen[key] = true
+		if !strings.EqualFold(priv, "USAGE") {
+			continue
 		}
 		out = append(out, g)
 	}
@@ -1445,7 +1461,9 @@ func loadTypeGrants(ctx context.Context, q *sql.DB, schemas []string) ([]typeGra
 func applyTypeGrants(ctx context.Context, tgtDB execer, grants []typeGrantRow) error {
 	for _, g := range grants {
 		stmt := formatGrantType(g.schema, g.typeName, g.grantee)
-		if g.grantable {
+		if g.revokePublic {
+			stmt = fmt.Sprintf("REVOKE USAGE ON TYPE %s FROM PUBLIC", quoteQualifiedType(g.schema, g.typeName))
+		} else if g.grantable {
 			stmt += " WITH GRANT OPTION"
 		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
