@@ -17,3 +17,7 @@ Standard build, lint, test, and run commands live in `README.md`, `CONTRIBUTING.
 - `dolly tui` requires a real TTY; it will not run in a plain piped shell. Use a PTY (e.g. tmux) or the opt-in smoke: `make test-tui-pty-smoke`.
 - Match the Go toolchain to `go.mod`.
 - PostgreSQL client tools (`psql`, `pg_dump`, `pg_restore`, `pg_basebackup`) must be on `PATH` for schema capture and clone strategies.
+
+### Pullfrog reviews
+
+When the task is a pull request review, follow `.github/pullfrog/review.md`.
