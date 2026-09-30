@@ -391,6 +391,7 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 	if err != nil {
 		return nil, nil, fmt.Errorf("load schema: %w", err)
 	}
+	preStripTables := tables
 	if cfg.selection != nil {
 		filtered, selProv, err := planPartitionTableSelection(tables, cfg.selection, cfg.selectionIgnored)
 		if err != nil {
@@ -404,7 +405,7 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 		}
 	} else {
-		tables = recordAndStripPartitionParents(tables, cfg.provenance)
+		tables, cfg.provenance = recordAndStripPartitionParents(tables, cfg.provenance)
 	}
 	if hasChunkPolicy(cfg) {
 		return nil, nil, fmt.Errorf("parallel dump workers are incompatible with chunk or slow-connection mode")
@@ -412,7 +413,11 @@ func introspectParallelPlan(ctx context.Context, q querier, cfg *config) ([]db.T
 
 	var sequences []SequenceState
 	if !cfg.skipSequences {
-		seqs, err := captureSequences(ctx, q, tables)
+		seqTables := tablesForSequenceCapture(preStripTables, SortTables(tables))
+		if cfg.selection != nil {
+			seqTables = SortTables(tables)
+		}
+		seqs, err := captureSequences(ctx, q, seqTables)
 		if err != nil {
 			return nil, nil, fmt.Errorf("capture sequences: %w", err)
 		}

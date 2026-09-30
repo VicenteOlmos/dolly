@@ -18,7 +18,7 @@
                               │ Analyze: [ ]          │
                               │ Privileges: [ ]       │
                               │ Replace: config       │
-                              │ On conflict: config   │
+                              │ On conflict: error    │
                               │ Target directory:     │
                               │ (empty)               │
                               │ Dump directory:       │

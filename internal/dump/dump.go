@@ -352,6 +352,9 @@ func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 	}
 	p.TotalRowEstimate = total
 	p.SnapshotConsistent = dumpSnapshotConsistent(cfg)
+	if cfg.withoutTransaction {
+		p.NoTransaction = true
+	}
 	return &p
 }
 
@@ -415,6 +418,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 	if err != nil {
 		return fmt.Errorf("load schema: %w", err)
 	}
+	preStripTables := tables
 	if cfg.selection != nil {
 		filtered, selProv, err := planPartitionTableSelection(tables, cfg.selection, cfg.selectionIgnored)
 		if err != nil {
@@ -431,7 +435,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		if cfg.subset != nil {
 			tables = db.WithoutPartitionParents(tables)
 		} else {
-			tables = recordAndStripPartitionParents(tables, cfg.provenance)
+			tables, cfg.provenance = recordAndStripPartitionParents(tables, cfg.provenance)
 		}
 	}
 
@@ -471,7 +475,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 
 	var sequences []SequenceState
 	if !cfg.skipSequences {
-		seqs, err := captureSequences(ctx, q, sorted)
+		seqTables := sorted
+		if cfg.selection == nil && cfg.subset == nil {
+			seqTables = tablesForSequenceCapture(preStripTables, sorted)
+		}
+		seqs, err := captureSequences(ctx, q, seqTables)
 		if err != nil {
 			return fmt.Errorf("capture sequences: %w", err)
 		}

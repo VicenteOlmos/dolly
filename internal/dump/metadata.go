@@ -77,6 +77,7 @@ type Provenance struct {
 	ChunkTables             *ChunkTableProvenance     `json:"chunk_tables,omitempty"`
 	Strategies              []TableStrategyRecord     `json:"strategies,omitempty"`
 	OmittedPartitionParents []string                  `json:"omitted_partition_parents,omitempty"`
+	NoTransaction           bool                      `json:"no_transaction,omitempty"`
 	SnapshotConsistent      bool                      `json:"snapshot_consistent"`
 }
 
@@ -144,6 +145,7 @@ func countNDJSONRows(path string) (int64, error) {
 }
 
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {
+	persistUniqueKeys(tables)
 	m := Metadata{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Schema:      metadataSchemaLabel(filterSchemas, tables),

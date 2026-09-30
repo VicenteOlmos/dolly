@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -83,12 +84,13 @@ type DumpResultSummary struct {
 }
 
 type ConnectionDraft struct {
-	Host     string
-	Port     string
-	Database string
-	User     string
-	Password string
-	SSLMODE  string
+	Host           string
+	Port           string
+	Database       string
+	User           string
+	Password       string
+	SSLMODE        string
+	ChannelBinding string
 }
 
 func (c ConnectionDraft) DSN() string {
@@ -109,7 +111,11 @@ func (c ConnectionDraft) DSN() string {
 	q := u.Query()
 	q.Set("sslmode", sslmode)
 	if sslmode != "disable" {
-		q.Set("channel_binding", "require")
+		binding := strings.TrimSpace(c.ChannelBinding)
+		if binding == "" {
+			binding = "require"
+		}
+		q.Set("channel_binding", binding)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()

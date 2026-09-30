@@ -560,3 +560,40 @@ func TestRunDefaultMaxOpenConnsWhenUnset(t *testing.T) {
 		t.Fatalf("MaxOpenConns = %d, want default 5", got.MaxOpenConns)
 	}
 }
+
+func TestRunBlocksSanitizedTemplateAndPhysicalBackup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.jsonc"), []byte(`{"sanitization":{"enabled":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	for _, strategy := range []string{"template", "physical-backup"} {
+		err := Run(context.Background(), Params{
+			SourceDSN: "postgres://u:p@h/src",
+			Schemas:   []string{"public"},
+			Strategy:  strategy,
+		}, nil)
+		if err == nil || !strings.Contains(err.Error(), "sanitization cannot rewrite") {
+			t.Fatalf("strategy %s: err = %v, want sanitization block", strategy, err)
+		}
+	}
+
+	orig := runInProcess
+	defer func() { runInProcess = orig }()
+	runInProcess = func(_ context.Context, _ clone.Options, _ func(clone.ProgressEvent)) error { return nil }
+	if err := Run(context.Background(), Params{
+		SourceDSN: "postgres://u:p@h/src",
+		Schemas:   []string{"public"},
+		Strategy:  "logical-stream",
+	}, nil); err != nil {
+		t.Fatalf("logical-stream with sanitization: %v", err)
+	}
+}

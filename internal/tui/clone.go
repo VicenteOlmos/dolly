@@ -121,9 +121,10 @@ func (c *cloneScreen) activeField() *string {
 
 // cycleStrategy cycles through cloneStrategyChoices with ←/→.
 func (c *cloneScreen) cycleStrategy(delta int) {
+	shown := c.displayedStrategy()
 	current := -1
 	for i, s := range cloneStrategyChoices {
-		if s == c.draft.Strategy {
+		if s == shown {
 			current = i
 			break
 		}
@@ -358,7 +359,7 @@ func (c *cloneScreen) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldOnConflict {
-			c.draft.OnConflict = cycleCloneOnConflict(c.draft.OnConflict)
+			c.draft.OnConflict = cycleCloneOnConflict(c.displayedOnConflict())
 			return nil
 		}
 		if c.sectionActive(cloneSectionForm) && c.formField == cloneFieldSkipCreate {
@@ -580,11 +581,34 @@ func (c *cloneScreen) cloneReplaceLabel() string {
 	return "off"
 }
 
-func (c *cloneScreen) cloneOnConflictLabel() string {
-	if c.draft.OnConflict == "" {
-		return "config"
+func (c *cloneScreen) displayedStrategy() string {
+	if strings.TrimSpace(c.draft.Strategy) != "" {
+		return c.draft.Strategy
 	}
-	return c.draft.OnConflict
+	var cfg *config.Config
+	if c.getCfg != nil {
+		cfg = c.getCfg()
+	}
+	return effectiveCloneStrategyForDraft(*c.draft, cfg)
+}
+
+func (c *cloneScreen) displayedOnConflict() string {
+	if strings.TrimSpace(c.draft.OnConflict) != "" {
+		return c.draft.OnConflict
+	}
+	if c.getCfg != nil {
+		if cfg := c.getCfg(); cfg != nil {
+			return strings.TrimSpace(cfg.Clone.RestoreOnConflict)
+		}
+	}
+	return ""
+}
+
+func (c *cloneScreen) cloneOnConflictLabel() string {
+	if shown := c.displayedOnConflict(); shown != "" {
+		return shown
+	}
+	return "config"
 }
 
 func (c *cloneScreen) renderReplaceLine() string {
@@ -640,10 +664,7 @@ func (c *cloneScreen) renderTargetField(width int) string {
 // renderStrategyField renders the Strategy as a cycler.
 func (c *cloneScreen) renderStrategyField(width int) string {
 	focused := c.sectionActive(cloneSectionForm) && c.formField == 2
-	strategy := c.draft.Strategy
-	if strategy == "" {
-		strategy = "schema-replay"
-	}
+	strategy := c.displayedStrategy()
 	var value string
 	if focused {
 		value = StyleAccent.Render(fmt.Sprintf("← %s →", strategy))

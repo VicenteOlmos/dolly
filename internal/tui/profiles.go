@@ -20,24 +20,26 @@ func parseCommaSchemas(s string) []string {
 
 func draftFromConnection(c connections.Connection) ConnectionDraft {
 	return ConnectionDraft{
-		Host:     c.Host,
-		Port:     c.Port,
-		Database: c.Database,
-		User:     c.User,
-		Password: c.Password,
-		SSLMODE:  c.SSLMODE,
+		Host:           c.Host,
+		Port:           c.Port,
+		Database:       c.Database,
+		User:           c.User,
+		Password:       c.Password,
+		SSLMODE:        c.SSLMODE,
+		ChannelBinding: c.ChannelBinding,
 	}
 }
 
 func connectionFromDraft(d ConnectionDraft, name string, schemas []string) connections.Connection {
 	return connections.Connection{
-		Name:     name,
-		Host:     d.Host,
-		Port:     d.Port,
-		Database: d.Database,
-		User:     d.User,
-		Password: d.Password,
-		SSLMODE:  d.SSLMODE,
-		Schemas:  append([]string(nil), schemas...),
+		Name:           name,
+		Host:           d.Host,
+		Port:           d.Port,
+		Database:       d.Database,
+		User:           d.User,
+		Password:       d.Password,
+		SSLMODE:        d.SSLMODE,
+		ChannelBinding: d.ChannelBinding,
+		Schemas:        append([]string(nil), schemas...),
 	}
 }

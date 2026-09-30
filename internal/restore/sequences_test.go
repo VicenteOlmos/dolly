@@ -48,6 +48,53 @@ func TestRestoreSequencesFromMetadataRestoresOwnedSequence(t *testing.T) {
 	}
 }
 
+func TestRestoreSequencesFromMetadataAcceptsOmittedPartitionParent(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	meta := dump.Metadata{
+		Tables: []db.Table{{Schema: "public", Name: "events_p0", Columns: []db.Column{{Name: "id"}}}},
+		Sequences: []dump.SequenceState{{
+			Schema: "public", Name: "events_id_seq", StartValue: 5,
+		}},
+		Provenance: &dump.Provenance{OmittedPartitionParents: []string{"public.events"}},
+	}
+	expectSequenceOwner(mock, "public", "events", "id")
+	expectSequenceCurrentValueLess(mock)
+	mock.ExpectExec(`SELECT setval\('"public"\."events_id_seq"'::regclass, 5, false\)`).WillReturnResult(sqlmock.NewResult(1, 1))
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreSequencesFromMetadataRejectsUnrelatedOwnerWhenParentsOmitted(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	meta := dump.Metadata{
+		Tables: []db.Table{{Schema: "public", Name: "events_p0", Columns: []db.Column{{Name: "id"}}}},
+		Sequences: []dump.SequenceState{{
+			Schema: "public", Name: "other_seq", StartValue: 5,
+		}},
+		Provenance: &dump.Provenance{OmittedPartitionParents: []string{"public.events"}},
+	}
+	expectSequenceOwner(mock, "private", "secrets", "id")
+	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil)
+	if err == nil || !strings.Contains(err.Error(), "not owned by a restored column") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestoreSequencesFromMetadataRejectsUnownedMetadata(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -223,4 +270,3 @@ func TestRestoreSequencesFromMetadataMonotonicReadErrorFailsClosed(t *testing.T)
 }
 
 func ptrInt64(v int64) *int64 { return &v }
-

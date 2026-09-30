@@ -17,7 +17,7 @@ Choose your path:
 | Work interactively | `dolly tui` — connect, inspect schemas, dump, and clone from a real terminal. |
 | Script dump or restore | `dolly dump`, `dolly restore`, and `dolly clone` — use a DSN or saved connection. |
 
-`dolly tui` has no flags, requires a TTY, and reads `config.jsonc` from the current directory. In the dump screen, the **Mode** section edits chunk size, table-list files, slow-connection retry settings, and a **Sanitize** toggle; **History** restore can set row conflict policy, replace, and parallel **workers**. The **Clone** form can set replace and on-conflict for the restore phase, override the physical-backup **target directory** and clone **dump directory**, and toggle **skip-create** (physical-backup requires a target directory). On the connection screen, **SSLMODE** cycles common modes with Space when that field is focused.
+`dolly tui` has no flags, requires a TTY, and reads `config.jsonc` from the current directory. The dump screen exposes a no-transaction mode row; connection fields cycle channel binding and saved profiles keep that choice; clone strategy and on-conflict follow the current config until the clone form overrides them; template and physical-backup clones refuse to start when sanitization is enabled. In the dump screen, the **Mode** section edits chunk size, table-list files, slow-connection retry settings, and a **Sanitize** toggle; **History** restore can set row conflict policy, replace, and parallel **workers**. The **Clone** form can set replace and on-conflict for the restore phase, override the physical-backup **target directory** and clone **dump directory**, and toggle **skip-create** (physical-backup requires a target directory). On the connection screen, **SSLMODE** cycles common modes with Space when that field is focused.
 
 ## Install
 
@@ -180,7 +180,7 @@ Run `dolly <command> --help` for command-specific flags.
 
 **TUI dump mode:** the dump screen Mode section sets slow connection, `--require-safe-key`, workers, percent, seed file, chunk tables, subset limits (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`), and include/exclude tables for the next run. `--max-in-list-size` stays on the CLI. The same flags stay on `dolly dump`.
 
-Partitioned parents are not exported: a `SELECT` of the parent returns every child, so Dolly dumps and clones only the leaf partitions. Name the partitions in `--include-table`. Full dumps record omitted partitioned parents in `metadata.json` provenance. `GENERATED ALWAYS` columns are stored in the dump metadata and omitted from restore and logical-stream writes so the destination computes them. Identity columns are still copied.
+Partitioned parents are not exported: a `SELECT` of the parent returns every child, so Dolly dumps and clones only the leaf partitions. Name the partitions in `--include-table`. Full dumps record omitted partitioned parents in `metadata.json` provenance and record `no_transaction` when `--no-transaction` is set. Identity sequences owned by partitioned parents are still captured. `GENERATED ALWAYS` columns are stored in the dump metadata and omitted from restore and logical-stream writes so the destination computes them. Identity columns are still copied.
 
 When `pg_dump` is on `PATH`, Dolly captures `schema.sql` and sanitizes it for cross-version restore compatibility, including `CREATE SCHEMA IF NOT EXISTS` so `--trust-schema-sql` can replay into a fresh database that already has `public`. If `pg_dump` is missing, Dolly writes the same file from catalog replay (without owners or ACLs) and prints a warning. Restore never executes that SQL unless you explicitly pass `--trust-schema-sql` for reviewed artifacts.
 
@@ -304,7 +304,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump --percent 10 --max-rows-per-table 1
 
 ### Faster bulk restore — advanced
 
-Default restore runs in one transaction. When the conflict policy is `error` and a DSN is set, Dolly loads each table with COPY on that same transaction, then updates sequences before commit. Skip and upsert stay on INSERT; upsert does not assign `GENERATED ALWAYS` identity columns or generated columns in `ON CONFLICT DO UPDATE SET`. `--no-transaction` COPY uses a separate connection and commits per table.
+Default restore runs in one transaction. When the conflict policy is `error` and a DSN is set, Dolly loads each table with COPY on that same transaction, then updates sequences before commit. Skip and upsert stay on INSERT and require a primary key or a persisted unique key on the table; upsert does not assign `GENERATED ALWAYS` identity columns or generated columns in `ON CONFLICT DO UPDATE SET`. `--no-transaction` COPY uses a separate connection and commits per table.
 
 For trusted empty targets or very large loads:
 
