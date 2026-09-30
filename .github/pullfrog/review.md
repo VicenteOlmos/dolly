@@ -10,9 +10,9 @@ Follow it on Review and IncrementalReview. Do not treat it as a request to edit 
 
 ## Bar
 
-Comment when the change can mis-dump, mis-restore, mis-clone, drop or widen a privilege, leak a credential or other secret, or fail a test that CI actually runs. A missing test does not hide a data-exposure bug. Skip formatting, naming, comment wording, and drive-by refactors.
+Comment when the change can mis-dump, mis-restore, mis-clone, drop or widen a privilege, leak a credential or other secret, or fail a test that CI actually runs. A missing test does not hide a security or data-exposure bug. Skip formatting, naming, comment wording, and drive-by refactors.
 
-One inline comment per defect. Keep the review body in the shape the Review and IncrementalReview playbook already requires, including the reviewed-changes preamble and commit SHA. Do not add a nit list to look thorough.
+One inline comment per defect. Do not add a nit list to look thorough. Leave the review-body shape to the Review and IncrementalReview playbook.
 
 Each inline comment:
 
@@ -47,6 +47,10 @@ Partition parents are omitted from row files and listed in `omitted_partition_pa
 Skip and upsert need a primary key or a persisted unique key. Policy `error` stays a plain insert. Conflict targets must not include `ALWAYS` identity or generated columns.
 
 `go test -tags=integration` compiles `*_test.go` without the integration tag into the same process as the integration tests. `init` in `internal/dump/sqlmock_test.go` and `internal/restore/sqlmock_test.go` sets `db.SkipRelationAnnotations` true. Do not set that flag false in `TestMain`. A test that needs real `relkind`, partition bounds, or generated columns flips it for that test and restores the previous value in `t.Cleanup`.
+
+### `internal/connections/**`
+
+Errors, logs, and prompts go through `RedactDSN` and `RedactMessage`. A new secret-bearing DSN field or query key is still a defect when no test names it yet. `SetDSNParam` returns `ErrMalformedDSN` and that error must not contain the raw DSN or the secret. Do not print a connection string that still has a password, token, or `client_secret`.
 
 ### `internal/tui/**`
 
