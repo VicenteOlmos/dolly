@@ -1368,6 +1368,9 @@ func TestIntegrationParallelRestoreRetryRetainsCommittedManifest(t *testing.T) {
 }
 
 func TestIntegrationDumpRestorePartitionParentIdentity(t *testing.T) {
+	prev := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = prev })
 	conn := openIntegrationDB(t)
 	ctx := context.Background()
 	schema := fmt.Sprintf("dolly_part_%d", time.Now().UnixNano())
