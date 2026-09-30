@@ -481,7 +481,8 @@ func TestCloneSavedProfileDSNMasked(t *testing.T) {
 }
 
 func TestAppCloneLogicalStreamSanitizedOmitsWarning(t *testing.T) {
-	app := cloneAppWithSession(t, &schemasRecordingCloneRunner{})
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
 	app.cfg.Sanitization.Enabled = true
 	app.clone.Strategy = "logical-stream"
 	app = drainUpdate(app, ctrlEnter())
@@ -489,9 +490,12 @@ func TestAppCloneLogicalStreamSanitizedOmitsWarning(t *testing.T) {
 	if strings.Contains(log, "warning: clone will copy unsanitized data") {
 		t.Fatalf("logical-stream redacts when sanitization is on:\n%s", log)
 	}
+	if runner.lastSchemas == nil {
+		t.Fatal("expected logical-stream clone to start with sanitization enabled")
+	}
 }
 
-func TestAppCloneUnsanitizedWarningStrategies(t *testing.T) {
+func TestAppCloneSanitizedBlocksTemplateAndPhysicalBackup(t *testing.T) {
 	strategies := []string{"template", "physical-backup"}
 	for _, strategy := range strategies {
 		t.Run(strategy, func(t *testing.T) {
@@ -506,15 +510,15 @@ func TestAppCloneUnsanitizedWarningStrategies(t *testing.T) {
 
 			app = drainUpdate(app, ctrlEnter())
 
+			if runner.lastSchemas != nil {
+				t.Fatal("clone runner should not start when sanitization blocks strategy")
+			}
+			if !strings.Contains(app.statusMsg, "Sanitization cannot rewrite") {
+				t.Fatalf("status = %q, want sanitization block message", app.statusMsg)
+			}
 			log := strings.Join(app.cloneLog, "\n")
-			if !strings.Contains(log, "warning: clone will copy unsanitized data") {
-				t.Fatalf("cloneLog missing unsanitized warning:\n%s", log)
-			}
-			if !strings.Contains(log, "strategy="+strategy) {
-				t.Fatalf("cloneLog missing strategy=%s:\n%s", strategy, log)
-			}
-			if strings.Contains(log, "secret") || strings.Contains(log, ":p@") {
-				t.Fatalf("cloneLog leaked credentials:\n%s", log)
+			if strings.Contains(log, "warning: clone will copy unsanitized data") {
+				t.Fatalf("clone should be blocked before unsanitized warning:\n%s", log)
 			}
 		})
 	}

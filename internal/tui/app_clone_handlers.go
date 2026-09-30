@@ -83,6 +83,10 @@ func (a *App) handleCloneProceed() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) startCloneExecution(schemas []string) (tea.Model, tea.Cmd) {
+	if blocked, msg := cloneSanitizationStrategyBlock(a.clone, a.cfg); blocked {
+		a.statusMsg = truncateStatus(StyleWarning.Render(msg), a.width)
+		return a, nil
+	}
 	a.clearCloneResult()
 	a.appendCloneUnsanitizedWarningIfNeeded()
 	a.cloneStatus = CloneStatusRunning
