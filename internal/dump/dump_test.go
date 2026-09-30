@@ -80,6 +80,25 @@ func TestDumpFullFlow(t *testing.T) {
 	}
 }
 
+func TestRecordAndStripPartitionParentsCreatesProvenance(t *testing.T) {
+	tables := []db.Table{
+		{Schema: "public", Name: "events", RelKind: "p"},
+		{Schema: "public", Name: "events_2024", RelKind: "r"},
+	}
+	kept, prov := recordAndStripPartitionParents(tables, nil)
+	if prov == nil || len(prov.OmittedPartitionParents) != 1 || prov.OmittedPartitionParents[0] != "public.events" {
+		t.Fatalf("provenance = %+v", prov)
+	}
+	if len(kept) != 1 || kept[0].Name != "events_2024" {
+		t.Fatalf("kept = %+v", kept)
+	}
+	existing := &Provenance{SourceDatabase: "app"}
+	_, got := recordAndStripPartitionParents(tables, existing)
+	if got != existing || len(existing.OmittedPartitionParents) != 1 {
+		t.Fatalf("existing provenance was replaced: %+v", got)
+	}
+}
+
 func TestDumpFullRecordsOmittedPartitionParents(t *testing.T) {
 	prev := db.SkipRelationAnnotations
 	db.SkipRelationAnnotations = false

@@ -141,7 +141,7 @@ func tablesForSequenceCapture(allTables []db.Table, rowExportTables []db.Table) 
 	return out
 }
 
-func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) []db.Table {
+func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) ([]db.Table, *Provenance) {
 	var omitted []string
 	for _, table := range tables {
 		if table.RelKind == "p" {
@@ -150,11 +150,12 @@ func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) []db.Ta
 	}
 	if len(omitted) > 0 {
 		sort.Strings(omitted)
-		if prov != nil {
-			prov.OmittedPartitionParents = omitted
+		if prov == nil {
+			prov = &Provenance{}
 		}
+		prov.OmittedPartitionParents = omitted
 	}
-	return db.WithoutPartitionParents(tables)
+	return db.WithoutPartitionParents(tables), prov
 }
 
 func nestedPartitionLeaves(parentKey string, tables []db.Table) []db.Table {

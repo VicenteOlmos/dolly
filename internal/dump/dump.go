@@ -435,7 +435,7 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		if cfg.subset != nil {
 			tables = db.WithoutPartitionParents(tables)
 		} else {
-			tables = recordAndStripPartitionParents(tables, cfg.provenance)
+			tables, cfg.provenance = recordAndStripPartitionParents(tables, cfg.provenance)
 		}
 	}
 
