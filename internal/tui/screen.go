@@ -128,6 +128,8 @@ type DumpDraft struct {
 	NoTransaction       bool
 	SlowConnection      bool
 	RequireSafeKey      bool
+	Sanitize            bool
+	SanitizeSet         bool
 	PercentText         string
 	SeedFile            string
 	ChunkTables         string
@@ -150,6 +152,7 @@ type DumpDraft struct {
 	RestoreOnConflict   string
 	RestoreReplace      bool
 	RestoreReplaceSet   bool
+	RestoreWorkersText  string
 }
 
 // DumpHistoryEntry is one row in the dump history list.
@@ -212,6 +215,7 @@ type CloneDraft struct {
 	ReplaceSet        bool
 	OnConflict        string
 	TargetDir         string
+	DumpDir           string
 	SkipCreate        bool
 	SkipCreateSet     bool
 }
