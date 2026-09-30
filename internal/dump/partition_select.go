@@ -108,7 +108,40 @@ func expandExcludedPartitionParents(tables []db.Table, policy *SelectionPolicy) 
 	return &SelectionPolicy{Includes: policy.Includes, Excludes: excludes}
 }
 
-func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) []db.Table {
+// tablesForSequenceCapture returns row-export tables plus partitioned parents
+// omitted from metadata tables so identity sequences owned by parents are captured.
+func tablesForSequenceCapture(allTables []db.Table, rowExportTables []db.Table) []db.Table {
+	seen := make(map[string]struct{}, len(allTables))
+	out := make([]db.Table, 0, len(rowExportTables)+len(allTables))
+	for _, table := range rowExportTables {
+		key := tableKey(table.Schema, table.Name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, table)
+	}
+	for _, table := range allTables {
+		if table.RelKind != "p" {
+			continue
+		}
+		key := tableKey(table.Schema, table.Name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, table)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Schema != out[j].Schema {
+			return out[i].Schema < out[j].Schema
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) ([]db.Table, *Provenance) {
 	var omitted []string
 	for _, table := range tables {
 		if table.RelKind == "p" {
@@ -117,11 +150,12 @@ func recordAndStripPartitionParents(tables []db.Table, prov *Provenance) []db.Ta
 	}
 	if len(omitted) > 0 {
 		sort.Strings(omitted)
-		if prov != nil {
-			prov.OmittedPartitionParents = omitted
+		if prov == nil {
+			prov = &Provenance{}
 		}
+		prov.OmittedPartitionParents = omitted
 	}
-	return db.WithoutPartitionParents(tables)
+	return db.WithoutPartitionParents(tables), prov
 }
 
 func nestedPartitionLeaves(parentKey string, tables []db.Table) []db.Table {
