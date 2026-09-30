@@ -310,11 +310,16 @@ func loadCompositeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]str
 
 func loadCompositeAttrs(ctx context.Context, q *sql.DB, schema, typeName string) ([]compositeAttr, error) {
 	const query = `
-		SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)
+		SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod),
+		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> typ.typcollation THEN coll_ns.nspname ELSE '' END,
+		  CASE WHEN a.attcollation <> 0 AND a.attcollation <> typ.typcollation THEN coll.collname ELSE '' END
 		FROM pg_type t
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
 		INNER JOIN pg_class c ON c.oid = t.typrelid
 		INNER JOIN pg_attribute a ON a.attrelid = c.oid
+		INNER JOIN pg_type typ ON typ.oid = a.atttypid
+		LEFT JOIN pg_collation coll ON coll.oid = a.attcollation
+		LEFT JOIN pg_namespace coll_ns ON coll_ns.oid = coll.collnamespace
 		WHERE t.typtype = 'c'
 		  AND n.nspname = $1 AND t.typname = $2
 		  AND a.attnum > 0 AND NOT a.attisdropped
@@ -328,7 +333,7 @@ func loadCompositeAttrs(ctx context.Context, q *sql.DB, schema, typeName string)
 	var attrs []compositeAttr
 	for rows.Next() {
 		var a compositeAttr
-		if err := rows.Scan(&a.name, &a.typ); err != nil {
+		if err := rows.Scan(&a.name, &a.typ, &a.collSchema, &a.collName); err != nil {
 			return nil, fmt.Errorf("scan composite attr: %w", err)
 		}
 		attrs = append(attrs, a)
@@ -394,6 +399,17 @@ func loadSequences(ctx context.Context, q *sql.DB, schemas []string) ([]sequence
 		return nil, fmt.Errorf("list sequences: %w", err)
 	}
 
+	seqTypes, err := loadSequenceDataTypes(ctx, q, schemas)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		key := out[i].schema + "\x00" + out[i].name
+		if typ, ok := seqTypes[key]; ok {
+			out[i].def.dataType = typ
+		}
+	}
+
 	owned, err := loadSequenceOwnership(ctx, q, schemas)
 	if err != nil {
 		return nil, err
@@ -408,6 +424,31 @@ func loadSequences(ctx context.Context, q *sql.DB, schemas []string) ([]sequence
 		}
 	}
 	return out, nil
+}
+
+func loadSequenceDataTypes(ctx context.Context, q *sql.DB, schemas []string) (map[string]string, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, pg_catalog.format_type(s.seqtypid, NULL)
+		FROM pg_sequence s
+		JOIN pg_class c ON c.oid = s.seqrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname IN (%s)`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list sequence data types: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var schema, name, dataType string
+		if err := rows.Scan(&schema, &name, &dataType); err != nil {
+			return nil, fmt.Errorf("scan sequence data type: %w", err)
+		}
+		out[schema+"\x00"+name] = dataType
+	}
+	return out, rows.Err()
 }
 
 type sequenceOwnership struct {
@@ -1020,7 +1061,22 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		  AND t.typtype = 'c'
 		  AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid AND c.relkind = 'c')
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'collation', n.nspname, coll.collname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_collation coll ON coll.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = coll.collnamespace
+		WHERE d.classoid = 'pg_collation'::regclass AND d.objsubid = 0
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'policy', n.nspname, c.relname, pol.polname, d.description
+		FROM pg_description d
+		INNER JOIN pg_policy pol ON pol.oid = d.objoid
+		INNER JOIN pg_class c ON c.oid = pol.polrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE d.classoid = 'pg_policy'::regclass AND d.objsubid = 0
+		  AND n.nspname IN (%s)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)
@@ -1344,6 +1400,74 @@ func applyRoutineGrants(ctx context.Context, tgtDB execer, grants []routineGrant
 		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("replay execute privileges on %s.%s: %w", g.schema, g.name, err)
+		}
+	}
+	return nil
+}
+
+type typeGrantRow struct {
+	schema       string
+	typeName     string
+	grantee      string
+	grantable    bool
+	revokePublic bool
+}
+
+func loadTypeGrants(ctx context.Context, q *sql.DB, schemas []string) ([]typeGrantRow, error) {
+	inClause, args := schemaINClause(schemas)
+	// Effective ACL: NULL typacl is the built-in default (PUBLIC USAGE), not a revoke.
+	// Standalone composites have a pg_class row with relkind 'c'; table row types do not.
+	query := fmt.Sprintf(`
+		SELECT n.nspname, t.typname, COALESCE(r.rolname, 'PUBLIC'),
+		       COALESCE(priv.privilege_type, ''), COALESCE(priv.is_grantable, false),
+		       NOT EXISTS (SELECT 1 FROM aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) acl
+		                   WHERE acl.grantee = 0 AND acl.privilege_type = 'USAGE')
+		FROM pg_type t
+		JOIN pg_namespace n ON n.oid = t.typnamespace
+		LEFT JOIN LATERAL aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) priv ON true
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE t.typtype IN ('e', 'd', 'c')
+		  AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.reltype = t.oid AND c.relkind <> 'c')
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, t.typname, 3`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list type grants: %w", err)
+	}
+	defer rows.Close()
+
+	var out []typeGrantRow
+	seen := make(map[string]bool)
+	for rows.Next() {
+		var g typeGrantRow
+		var priv string
+		var missingPublic bool
+		if err := rows.Scan(&g.schema, &g.typeName, &g.grantee, &priv, &g.grantable, &missingPublic); err != nil {
+			return nil, fmt.Errorf("scan type grant: %w", err)
+		}
+		key := g.schema + "\x00" + g.typeName
+		if missingPublic && !seen[key] {
+			out = append(out, typeGrantRow{schema: g.schema, typeName: g.typeName, revokePublic: true})
+		}
+		seen[key] = true
+		if !strings.EqualFold(priv, "USAGE") {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+func applyTypeGrants(ctx context.Context, tgtDB execer, grants []typeGrantRow) error {
+	for _, g := range grants {
+		stmt := formatGrantType(g.schema, g.typeName, g.grantee)
+		if g.revokePublic {
+			stmt = fmt.Sprintf("REVOKE USAGE ON TYPE %s FROM PUBLIC", quoteQualifiedType(g.schema, g.typeName))
+		} else if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("grant on type %s.%s: %w", g.schema, g.typeName, err)
 		}
 	}
 	return nil

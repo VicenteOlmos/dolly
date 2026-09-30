@@ -271,6 +271,74 @@ func TestCatalogReplayIdentityTypesAndPartitionIndexesPG16(t *testing.T) {
 	}
 }
 
+func TestCatalogReplayPolicyCommentAndTypeUsagePG16(t *testing.T) {
+	ctx := context.Background()
+	role := fmt.Sprintf("dolly_type_user_%d", os.Getpid())
+	if dsn := os.Getenv("DOLLY_TEST_PG_DSN"); dsn != "" {
+		t.Cleanup(func() {
+			adminDSN, err := RewriteDSN(dsn, "postgres")
+			if err != nil {
+				return
+			}
+			admin, err := sql.Open("pgx", adminDSN)
+			if err != nil {
+				return
+			}
+			defer admin.Close()
+			_, _ = admin.ExecContext(context.Background(), "DROP ROLE IF EXISTS "+quoteIdentifier(role))
+		})
+	}
+	src, tgt, _, _ := reviewDBPair(t)
+	if _, err := src.ExecContext(ctx, "DROP ROLE IF EXISTS "+quoteIdentifier(role)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.ExecContext(ctx, fmt.Sprintf(`
+		CREATE ROLE %s;
+		CREATE SCHEMA app;
+		CREATE TYPE app.mood AS ENUM ('ok');
+		CREATE TYPE app.address AS (street text);
+		REVOKE USAGE ON TYPE app.mood FROM PUBLIC;
+		REVOKE USAGE ON TYPE app.address FROM PUBLIC;
+		GRANT USAGE ON TYPE app.mood TO %s;
+		GRANT USAGE ON TYPE app.address TO %s;
+		CREATE TABLE app.items (id integer);
+		ALTER TABLE app.items ENABLE ROW LEVEL SECURITY;
+		CREATE POLICY tenant ON app.items FOR SELECT USING (true);
+		COMMENT ON POLICY tenant ON app.items IS 'tenant filter';
+	`, quoteIdentifier(role), quoteIdentifier(role), quoteIdentifier(role))); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, true); err != nil {
+		t.Fatal(err)
+	}
+	var comment string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT d.description
+		FROM pg_description d
+		JOIN pg_policy pol ON pol.oid = d.objoid
+		WHERE d.classoid = 'pg_policy'::regclass AND pol.polname = 'tenant'
+	`).Scan(&comment); err != nil || comment != "tenant filter" {
+		t.Fatalf("policy comment = %q, err = %v", comment, err)
+	}
+	for _, typ := range []string{"mood", "address"} {
+		var publicUsage, roleUsage bool
+		if err := tgt.QueryRowContext(ctx, `
+			SELECT COALESCE(bool_or(a.grantee = 0 AND a.privilege_type = 'USAGE'), false),
+			       COALESCE(bool_or(r.rolname = $2 AND a.privilege_type = 'USAGE'), false)
+			FROM pg_type t
+			JOIN pg_namespace n ON n.oid = t.typnamespace
+			LEFT JOIN LATERAL aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) a ON true
+			LEFT JOIN pg_roles r ON r.oid = a.grantee
+			WHERE n.nspname = 'app' AND t.typname = $1
+		`, typ, role).Scan(&publicUsage, &roleUsage); err != nil {
+			t.Fatal(err)
+		}
+		if publicUsage || !roleUsage {
+			t.Fatalf("%s privileges: public=%v role=%v", typ, publicUsage, roleUsage)
+		}
+	}
+}
+
 func TestSanitizedCopyEnumPG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, srcDSN, tgtDSN := reviewDBPair(t)

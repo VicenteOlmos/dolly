@@ -32,6 +32,8 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
+	srcMock.ExpectQuery(`pg_sequence`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 }
@@ -114,6 +116,8 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"schema", "sequence", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(p\.proacl\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "proname", "pg_get_function_identity_arguments", "kind", "rolname", "privilege_type", "grantable", "missing_public"}))
+	srcMock.ExpectQuery(`acldefault\('T', t\.typowner\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "typname", "grantee", "grantable"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
@@ -427,6 +431,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
 		}))
+	srcMock.ExpectQuery(`pg_sequence`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	srcMock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname", "attname", "identity"}))
 
@@ -465,6 +471,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"schema", "sequence", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(p\.proacl\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "proname", "pg_get_function_identity_arguments", "kind", "rolname", "privilege_type", "grantable", "missing_public"}))
+	srcMock.ExpectQuery(`acldefault\('T', t\.typowner\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "typname", "grantee", "grantable"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
@@ -504,6 +512,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	}))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
+	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
 	mock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
 	mock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
@@ -520,16 +529,19 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
 	mock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
-	mock.ExpectQuery(`FROM pg_description`).WillReturnRows(sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).AddRow("domain_constraint", "app", "positive", "valid", "must be positive"))
-	mock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "force"}))
-	mock.ExpectQuery(`FROM pg_policy`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "command", "permissive", "using", "check", "roles"}))
+	mock.ExpectQuery(`FROM pg_description`).WillReturnRows(sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).
+		AddRow("domain_constraint", "app", "positive", "valid", "must be positive").
+		AddRow("policy", "app", "items", "tenant", "tenant filter"))
+	mock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "force"}).AddRow("app", "items", false))
+	mock.ExpectQuery(`FROM pg_policy`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "command", "permissive", "using", "check", "roles"}).
+		AddRow("app", "items", "tenant", "SELECT", true, "true", "", ""))
 
 	rec := &scriptExec{}
 	if err := applySchemas(context.Background(), src, rec, []string{"app"}, false); err != nil {
 		t.Fatal(err)
 	}
 	script := rec.String()
-	parts := []string{"CREATE DOMAIN", "CREATE FUNCTION", "ALTER DOMAIN", "ALTER TABLE ONLY", "CREATE UNIQUE INDEX", "REPLICA IDENTITY USING INDEX", "CREATE MATERIALIZED VIEW", "CREATE STATISTICS", "COMMENT ON CONSTRAINT"}
+	parts := []string{"CREATE DOMAIN", "CREATE FUNCTION", "ALTER DOMAIN", "ALTER TABLE ONLY", "CREATE UNIQUE INDEX", "REPLICA IDENTITY USING INDEX", "CREATE MATERIALIZED VIEW", "CREATE STATISTICS", "COMMENT ON CONSTRAINT", "CREATE POLICY", "COMMENT ON POLICY"}
 	last := -1
 	for _, part := range parts {
 		pos := strings.Index(script, part)

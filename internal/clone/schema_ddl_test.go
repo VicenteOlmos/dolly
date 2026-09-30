@@ -64,6 +64,30 @@ func TestFormatCreateDomain(t *testing.T) {
 	}
 }
 
+func TestFormatSequenceDataType(t *testing.T) {
+	t.Parallel()
+	bigint := formatCreateSequence("app", "users_id_seq", sequenceDef{
+		dataType:   "bigint",
+		increment:  1,
+		minValid:   true,
+		maxValid:   true,
+		startValid: true,
+	})
+	if strings.Contains(bigint, " AS ") {
+		t.Fatalf("bigint should omit AS: %q", bigint)
+	}
+	intSeq := formatCreateSequence("app", "small_id_seq", sequenceDef{
+		dataType:   "integer",
+		increment:  1,
+		minValid:   true,
+		maxValid:   true,
+		startValid: true,
+	})
+	if !strings.Contains(intSeq, " AS integer") {
+		t.Fatalf("integer sequence missing AS: %q", intSeq)
+	}
+}
+
 func TestFormatCreateSequence(t *testing.T) {
 	t.Parallel()
 	got := formatCreateSequence("app", "users_id_seq", sequenceDef{
@@ -281,6 +305,22 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if got := commentTarget("type", "app", "status_enum", ""); got != `TYPE "app"."status_enum"` {
 		t.Fatalf("type target = %q", got)
 	}
+	if got := commentTarget("collation", "app", "custom", ""); got != `COLLATION "app"."custom"` {
+		t.Fatalf("collation target = %q", got)
+	}
+	gotCollationComment := formatCommentOn("collation", "app", "custom", "", "sort rules")
+	wantCollationComment := `COMMENT ON COLLATION "app"."custom" IS 'sort rules'`
+	if gotCollationComment != wantCollationComment {
+		t.Fatalf("collation comment = %q, want %q", gotCollationComment, wantCollationComment)
+	}
+	if got := commentTarget("policy", "app", "users", "tenant_isolation"); got != `POLICY "tenant_isolation" ON "app"."users"` {
+		t.Fatalf("policy target = %q", got)
+	}
+	gotPolicyComment := formatCommentOn("policy", "app", "users", "tenant_isolation", "tenant filter")
+	wantPolicyComment := `COMMENT ON POLICY "tenant_isolation" ON "app"."users" IS 'tenant filter'`
+	if gotPolicyComment != wantPolicyComment {
+		t.Fatalf("policy comment = %q, want %q", gotPolicyComment, wantPolicyComment)
+	}
 	gotTypeComment := formatCommentOn("type", "app", "status_enum", "", "lifecycle")
 	wantTypeComment := `COMMENT ON TYPE "app"."status_enum" IS 'lifecycle'`
 	if gotTypeComment != wantTypeComment {
@@ -326,6 +366,11 @@ func TestFormatGrantSequenceAndRoutine(t *testing.T) {
 	if got := formatGrantRoutine("app", "my_proc", "integer", "PROCEDURE", "PUBLIC"); got != `GRANT EXECUTE ON PROCEDURE "app"."my_proc"(integer) TO PUBLIC` {
 		t.Fatalf("procedure grant = %q", got)
 	}
+	gotType := formatGrantType("app", "status_enum", "app_reader")
+	wantType := `GRANT USAGE ON TYPE "app"."status_enum" TO "app_reader"`
+	if gotType != wantType {
+		t.Fatalf("type grant = %q, want %q", gotType, wantType)
+	}
 }
 
 func TestFormatEnableRLSAndPolicy(t *testing.T) {
@@ -355,5 +400,12 @@ func TestFormatCreateCompositeType(t *testing.T) {
 	want := `CREATE TYPE "app"."address" AS ("street" text, "zip" integer)`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+	gotColl := formatCreateCompositeType("app", "label", []compositeAttr{
+		{name: "text", typ: "text", collSchema: "app", collName: "custom"},
+	})
+	wantColl := `CREATE TYPE "app"."label" AS ("text" text COLLATE "app"."custom")`
+	if gotColl != wantColl {
+		t.Fatalf("collated composite: got %q, want %q", gotColl, wantColl)
 	}
 }
