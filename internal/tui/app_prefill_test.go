@@ -94,6 +94,27 @@ func TestNewAppFromConfigEmptyDumpOutputDir(t *testing.T) {
 	}
 }
 
+func TestNewAppFromConfigPrePopulatesCloneStrategy(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Strategy = "logical-stream"
+	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
+	if app.clone.Strategy != "logical-stream" {
+		t.Fatalf("clone.Strategy = %q, want logical-stream", app.clone.Strategy)
+	}
+}
+
+func TestNewAppFromConfigEmptyCloneStrategyStaysEmpty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Strategy = ""
+	app := NewAppFromConfig(nil, false, cfg, "config.jsonc")
+	if app.clone.Strategy != "" {
+		t.Fatalf("clone.Strategy = %q, want empty", app.clone.Strategy)
+	}
+	if effectiveCloneStrategyForDraft(app.clone, cfg) != "schema-replay" {
+		t.Fatalf("effective strategy = %q, want schema-replay fallback", effectiveCloneStrategyForDraft(app.clone, cfg))
+	}
+}
+
 func TestNewAppFromConfigSectionEntryOverview(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.TUI.SectionEntry = "overview"
