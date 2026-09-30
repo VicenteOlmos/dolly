@@ -10,9 +10,9 @@ Follow it on Review and IncrementalReview. Do not treat it as a request to edit 
 
 ## Bar
 
-Comment only when the change can mis-dump, mis-restore, mis-clone, drop or widen a privilege, or fail a test that CI actually runs. Skip formatting, naming, comment wording, and drive-by refactors.
+Comment when the change can mis-dump, mis-restore, mis-clone, drop or widen a privilege, leak a credential or other secret, or fail a test that CI actually runs. A missing test does not hide a data-exposure bug. Skip formatting, naming, comment wording, and drive-by refactors.
 
-One inline comment per defect. The review body is a merge recommendation in one paragraph, then a table of changed behavior (area, what it does now). If nothing is wrong, say so and stop. Do not add a nit list to look thorough.
+One inline comment per defect. Keep the review body in the shape the Review and IncrementalReview playbook already requires, including the reviewed-changes preamble and commit SHA. Do not add a nit list to look thorough.
 
 Each inline comment:
 
