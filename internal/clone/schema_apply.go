@@ -141,6 +141,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	ranges, err := loadRangeTypes(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyRangeTypes(ctx, tgtDB, ranges); err != nil {
+		return err
+	}
+
 	seqs, err := loadSequences(ctx, srcDB, schemas)
 	if err != nil {
 		return err

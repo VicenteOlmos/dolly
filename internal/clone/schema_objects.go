@@ -20,10 +20,11 @@ func schemaINClause(schemas []string) (string, []any) {
 
 func applyExtensions(ctx context.Context, srcDB *sql.DB, tgtDB execer) error {
 	const query = `
-		SELECT extname
-		FROM pg_extension
-		WHERE extname <> 'plpgsql'
-		ORDER BY extname`
+		SELECT e.extname, n.nspname, e.extversion
+		FROM pg_extension e
+		INNER JOIN pg_namespace n ON n.oid = e.extnamespace
+		WHERE e.extname <> 'plpgsql'
+		ORDER BY e.extname`
 	rows, err := srcDB.QueryContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("list extensions: %w", err)
@@ -31,11 +32,18 @@ func applyExtensions(ctx context.Context, srcDB *sql.DB, tgtDB execer) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, schema, version string
+		if err := rows.Scan(&name, &schema, &version); err != nil {
 			return fmt.Errorf("scan extension: %w", err)
 		}
-		stmt := formatCreateExtension(name)
+		schema = strings.TrimSpace(schema)
+		if schema != "" && schema != "public" && !strings.EqualFold(schema, "pg_catalog") {
+			stmt := fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quoteIdentifier(schema))
+			if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("create schema %q for extension %q: %w", schema, name, err)
+			}
+		}
+		stmt := formatCreateExtension(name, schema, version)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create extension %q: %w", name, err)
 		}
@@ -899,12 +907,14 @@ type viewRow struct {
 	name         string
 	definition   string
 	materialized bool
+	options      string
 }
 
 func loadViews(ctx context.Context, q *sql.DB, schemas []string) ([]viewRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT n.nspname, c.relname, pg_get_viewdef(c.oid, true), c.relkind = 'm'
+		SELECT n.nspname, c.relname, pg_get_viewdef(c.oid, true), c.relkind = 'm',
+		       COALESCE(array_to_string(c.reloptions, ','), '')
 		FROM pg_class c
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relkind IN ('v', 'm')
@@ -919,7 +929,7 @@ func loadViews(ctx context.Context, q *sql.DB, schemas []string) ([]viewRow, err
 	var out []viewRow
 	for rows.Next() {
 		var v viewRow
-		if err := rows.Scan(&v.schema, &v.name, &v.definition, &v.materialized); err != nil {
+		if err := rows.Scan(&v.schema, &v.name, &v.definition, &v.materialized, &v.options); err != nil {
 			return nil, fmt.Errorf("scan view: %w", err)
 		}
 		out = append(out, v)
@@ -939,12 +949,18 @@ func applyViews(ctx context.Context, tgtDB execer, views []viewRow) error {
 				remaining = append(remaining, v)
 				continue
 			}
+			if err := applyViewOptions(ctx, tgtDB, v); err != nil {
+				return err
+			}
 		}
 		if len(remaining) == len(pending) {
 			v := pending[0]
 			stmt := formatCreateView(v.schema, v.name, v.definition, v.materialized)
 			if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 				return fmt.Errorf("create view %s.%s: %w", v.schema, v.name, err)
+			}
+			if err := applyViewOptions(ctx, tgtDB, v); err != nil {
+				return err
 			}
 			remaining = pending[1:]
 		}
@@ -953,6 +969,82 @@ func applyViews(ctx context.Context, tgtDB execer, views []viewRow) error {
 	if len(pending) > 0 {
 		v := pending[0]
 		return fmt.Errorf("create view %s.%s: unresolved dependencies after %d passes", v.schema, v.name, maxPasses)
+	}
+	return nil
+}
+
+func applyViewOptions(ctx context.Context, tgtDB execer, v viewRow) error {
+	stmt, ok := formatAlterViewOptions(v.schema, v.name, v.materialized, v.options)
+	if !ok {
+		return nil
+	}
+	if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("set options on view %s.%s: %w", v.schema, v.name, err)
+	}
+	return nil
+}
+
+func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTypeDef, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, t.typname,
+		       pg_catalog.format_type(r.rngsubtype, NULL),
+		       COALESCE(opc_ns.nspname, ''),
+		       COALESCE(opc.opcname, ''),
+		       COALESCE(coll_ns.nspname, ''),
+		       COALESCE(coll.collname, ''),
+		       COALESCE(can_ns.nspname, ''),
+		       COALESCE(can.proname, ''),
+		       COALESCE(pg_catalog.pg_get_function_identity_arguments(can.oid), ''),
+		       COALESCE(diff_ns.nspname, ''),
+		       COALESCE(diff.proname, ''),
+		       COALESCE(pg_catalog.pg_get_function_identity_arguments(diff.oid), '')
+		FROM pg_type t
+		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
+		INNER JOIN pg_range r ON r.rngtypid = t.oid
+		LEFT JOIN pg_opclass opc ON opc.oid = r.rngsubopc
+		LEFT JOIN pg_namespace opc_ns ON opc_ns.oid = opc.opcnamespace
+		LEFT JOIN pg_collation coll ON coll.oid = r.rngcollation AND r.rngcollation <> 0
+		LEFT JOIN pg_namespace coll_ns ON coll_ns.oid = coll.collnamespace
+		LEFT JOIN pg_proc can ON can.oid = r.rngcanonical
+		LEFT JOIN pg_namespace can_ns ON can_ns.oid = can.pronamespace
+		LEFT JOIN pg_proc diff ON diff.oid = r.rngsubdiff
+		LEFT JOIN pg_namespace diff_ns ON diff_ns.oid = diff.pronamespace
+		WHERE t.typtype = 'r'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, t.typname`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list range types: %w", err)
+	}
+	defer rows.Close()
+
+	var out []rangeTypeDef
+	for rows.Next() {
+		var r rangeTypeDef
+		var canSchema, canName, canArgs, diffSchema, diffName, diffArgs string
+		if err := rows.Scan(
+			&r.schema, &r.name, &r.subtype,
+			&r.opclassSchema, &r.opclass,
+			&r.collSchema, &r.collName,
+			&canSchema, &canName, &canArgs,
+			&diffSchema, &diffName, &diffArgs,
+		); err != nil {
+			return nil, fmt.Errorf("scan range type: %w", err)
+		}
+		r.canonical = formatRangeFunc(canSchema, canName, canArgs)
+		r.subtypeDiff = formatRangeFunc(diffSchema, diffName, diffArgs)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func applyRangeTypes(ctx context.Context, tgtDB execer, types []rangeTypeDef) error {
+	for _, r := range types {
+		stmt := formatCreateRangeType(r)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("create range type %s.%s: %w", r.schema, r.name, err)
+		}
 	}
 	return nil
 }
@@ -1076,7 +1168,25 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE d.classoid = 'pg_policy'::regclass AND d.objsubid = 0
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'trigger', n.nspname, c.relname, t.tgname, d.description
+		FROM pg_description d
+		INNER JOIN pg_trigger t ON t.oid = d.objoid
+		INNER JOIN pg_class c ON c.oid = t.tgrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE d.classoid = 'pg_trigger'::regclass AND d.objsubid = 0
+		  AND NOT t.tgisinternal
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'rule', n.nspname, c.relname, r.rulename, d.description
+		FROM pg_description d
+		INNER JOIN pg_rewrite r ON r.oid = d.objoid
+		INNER JOIN pg_class c ON c.oid = r.ev_class
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE d.classoid = 'pg_rewrite'::regclass AND d.objsubid = 0
+		  AND r.rulename <> '_RETURN'
+		  AND n.nspname IN (%s)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)

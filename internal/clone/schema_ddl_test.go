@@ -119,10 +119,68 @@ func TestFormatAlterSequenceOwnedBy(t *testing.T) {
 
 func TestFormatCreateExtension(t *testing.T) {
 	t.Parallel()
-	got := formatCreateExtension("uuid-ossp")
+	got := formatCreateExtension("uuid-ossp", "public", "")
 	want := `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCreateExtension("postgis", "gis", "3.4.0")
+	want = `CREATE EXTENSION IF NOT EXISTS "postgis" SCHEMA "gis" VERSION '3.4.0'`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatCommentOnTriggerAndRule(t *testing.T) {
+	t.Parallel()
+	got := formatCommentOn("trigger", "app", "items", "touch", "keeps updated_at")
+	want := `COMMENT ON TRIGGER "touch" ON "app"."items" IS 'keeps updated_at'`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCommentOn("rule", "app", "items", "log_del", "audit")
+	want = `COMMENT ON RULE "log_del" ON "app"."items" IS 'audit'`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatAlterViewOptions(t *testing.T) {
+	t.Parallel()
+	got, ok := formatAlterViewOptions("app", "active", false, "security_barrier=true,security_invoker=true,check_option=cascaded,fillfactor=70")
+	if !ok {
+		t.Fatal("expected options")
+	}
+	want := `ALTER VIEW "app"."active" SET (security_barrier=true, security_invoker=true, check_option=cascaded)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if _, ok := formatAlterViewOptions("app", "mv", true, "security_invoker=true"); ok {
+		t.Fatal("materialized views do not take security_invoker")
+	}
+	got, ok = formatAlterViewOptions("app", "mv", true, "security_barrier=true")
+	if !ok || got != `ALTER MATERIALIZED VIEW "app"."mv" SET (security_barrier=true)` {
+		t.Fatalf("matview = %q ok=%v", got, ok)
+	}
+}
+
+func TestFormatCreateRangeType(t *testing.T) {
+	t.Parallel()
+	got := formatCreateRangeType(rangeTypeDef{
+		schema: "app", name: "span", subtype: "integer",
+		opclassSchema: "pg_catalog", opclass: "int4_ops",
+		canonical: `"app"."span_canonical"(integer)`,
+	})
+	want := `CREATE TYPE "app"."span" AS RANGE (SUBTYPE = integer, SUBTYPE_OPCLASS = "int4_ops", CANONICAL = "app"."span_canonical"(integer))`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCreateRangeType(rangeTypeDef{
+		schema: "app", name: "span", subtype: "integer",
+		opclassSchema: "app", opclass: "custom_ops",
+	})
+	if strings.Contains(got, "custom_ops") {
+		t.Fatalf("custom opclass must stay omitted: %s", got)
 	}
 }
 

@@ -110,8 +110,18 @@ func formatAlterSequenceOwnedBy(schema, seqName, tableSchema, tableName, column 
 }
 
 // formatCreateExtension emits CREATE EXTENSION IF NOT EXISTS.
-func formatCreateExtension(name string) string {
-	return fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %s", quoteIdentifier(name))
+// A non-public schema and an explicit version are replayed so the target
+// does not install the extension into public at its default version.
+func formatCreateExtension(name, schema, version string) string {
+	stmt := fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %s", quoteIdentifier(name))
+	schema = strings.TrimSpace(schema)
+	if schema != "" && schema != "public" && !strings.EqualFold(schema, "pg_catalog") {
+		stmt += " SCHEMA " + quoteIdentifier(schema)
+	}
+	if version = strings.TrimSpace(version); version != "" {
+		stmt += " VERSION " + quoteLiteral(version)
+	}
+	return stmt
 }
 
 // formatTableCheckConstraint adds CONSTRAINT name CHECK (...).
@@ -275,6 +285,86 @@ func formatCreateView(schema, name, definition string, materialized bool) string
 	)
 }
 
+// formatAlterViewOptions emits ALTER VIEW/MATERIALIZED VIEW SET for reloptions
+// that pg_get_viewdef does not include. False and unknown options are omitted.
+func formatAlterViewOptions(schema, name string, materialized bool, reloptions string) (string, bool) {
+	raw := strings.Trim(strings.TrimSpace(reloptions), "{}")
+	if raw == "" {
+		return "", false
+	}
+	var parts []string
+	for _, item := range strings.Split(raw, ",") {
+		key, val, ok := strings.Cut(strings.TrimSpace(item), "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		val = strings.Trim(strings.TrimSpace(val), `"`)
+		switch key {
+		case "security_barrier":
+			if val == "true" {
+				parts = append(parts, "security_barrier=true")
+			}
+		case "security_invoker", "check_option":
+			if materialized {
+				continue
+			}
+			if key == "security_invoker" && val == "true" {
+				parts = append(parts, "security_invoker=true")
+			}
+			if key == "check_option" && (val == "local" || val == "cascaded") {
+				parts = append(parts, "check_option="+val)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	kind := "VIEW"
+	if materialized {
+		kind = "MATERIALIZED VIEW"
+	}
+	return fmt.Sprintf("ALTER %s %s SET (%s)", kind, quoteQualifiedTable(schema, name), strings.Join(parts, ", ")), true
+}
+
+type rangeTypeDef struct {
+	schema        string
+	name          string
+	subtype       string
+	opclassSchema string
+	opclass       string
+	collSchema    string
+	collName      string
+	canonical     string
+	subtypeDiff   string
+}
+
+// formatCreateRangeType emits CREATE TYPE ... AS RANGE. Operator classes outside
+// pg_catalog are omitted; this does not create operator classes.
+func formatCreateRangeType(r rangeTypeDef) string {
+	parts := []string{"SUBTYPE = " + strings.TrimSpace(r.subtype)}
+	if r.opclassSchema == "pg_catalog" && strings.TrimSpace(r.opclass) != "" {
+		parts = append(parts, "SUBTYPE_OPCLASS = "+quoteIdentifier(r.opclass))
+	}
+	if r.collSchema != "" && r.collName != "" {
+		parts = append(parts, "COLLATION = "+quoteQualifiedType(r.collSchema, r.collName))
+	}
+	if r.canonical != "" {
+		parts = append(parts, "CANONICAL = "+r.canonical)
+	}
+	if r.subtypeDiff != "" {
+		parts = append(parts, "SUBTYPE_DIFF = "+r.subtypeDiff)
+	}
+	return fmt.Sprintf("CREATE TYPE %s AS RANGE (%s)", quoteQualifiedType(r.schema, r.name), strings.Join(parts, ", "))
+}
+
+func formatRangeFunc(schema, name, args string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	return quoteQualifiedType(schema, name) + "(" + args + ")"
+}
+
 // formatCommentOn emits COMMENT ON statements.
 func formatCommentOn(kind, schema, object, column, description string) string {
 	target := commentTarget(kind, schema, object, column)
@@ -317,6 +407,10 @@ func commentTarget(kind, schema, object, column string) string {
 		return "COLLATION " + quoteQualifiedType(schema, object)
 	case "policy":
 		return "POLICY " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
+	case "trigger":
+		return "TRIGGER " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
+	case "rule":
+		return "RULE " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
