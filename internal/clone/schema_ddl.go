@@ -315,6 +315,8 @@ func commentTarget(kind, schema, object, column string) string {
 		return "TYPE " + quoteQualifiedType(schema, object)
 	case "collation":
 		return "COLLATION " + quoteQualifiedType(schema, object)
+	case "policy":
+		return "POLICY " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
