@@ -121,6 +121,21 @@ func TestConnectionDSN(t *testing.T) {
 	}
 }
 
+func TestConnectionDSNChannelBinding(t *testing.T) {
+	prefer := Connection{Host: "h", Database: "d", User: "u", Password: "p", ChannelBinding: "prefer"}
+	if !strings.Contains(prefer.DSN(), "channel_binding=prefer") {
+		t.Fatalf("DSN = %q, want prefer", prefer.DSN())
+	}
+	disabled := Connection{Host: "h", Database: "d", User: "u", Password: "p", SSLMODE: "disable", ChannelBinding: "prefer"}
+	if strings.Contains(disabled.DSN(), "channel_binding=") {
+		t.Fatalf("DSN = %q, want no channel_binding when sslmode=disable", disabled.DSN())
+	}
+	legacy := Connection{Host: "h", Database: "d", User: "u", Password: "p"}
+	if !strings.Contains(legacy.DSN(), "channel_binding=require") {
+		t.Fatalf("DSN = %q, want require when binding is unset", legacy.DSN())
+	}
+}
+
 func TestConnectionSignatureNormalizesPort(t *testing.T) {
 	withPort := Connection{Host: "h", Port: "5433", Database: "d", User: "u"}
 	emptyPort := Connection{Host: "h", Database: "d", User: "u"}

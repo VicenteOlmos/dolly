@@ -10,8 +10,8 @@
 │                            ││ User: deploy                              │
 │ > 1 connect                ││ Password: ********                        │
 │   2 schema                 ││ SSLMODE:                                  │
-│   3 dump                   ││ Schemas: app, billing                     │
-│   4 clone                  ││                                           │
+│   3 dump                   ││ Channel binding:                          │
+│   4 clone                  ││ Schemas: app, billing                     │
 │   5 config                 ││                                           │
 │                            ││                                           │
 │                            ││                                           │
