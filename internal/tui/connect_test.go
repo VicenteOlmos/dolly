@@ -94,9 +94,9 @@ func TestDBConnOptionsPrepareDSN(t *testing.T) {
 	}{
 		{
 			name: "enabled timeout injects param",
-			opts: dbConnOptions{statementTimeout: "5min"},
+			opts: dbConnOptions{statementTimeout: "5min", applicationName: "dolly"},
 			dsn:  "postgres://u:p@host/db?sslmode=disable",
-			want: []string{"statement_timeout=5min"},
+			want: []string{"statement_timeout=5min", "application_name=dolly"},
 		},
 		{
 			name:  "disabled timeout unchanged",

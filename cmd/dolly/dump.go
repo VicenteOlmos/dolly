@@ -350,12 +350,9 @@ func runDump(args []string) (err error) {
 		return err
 	}
 
-	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
-		var err error
-		dsn, err = appendQueryParam(dsn, "statement_timeout", cfg.DB.StatementTimeout)
-		if err != nil {
-			return err
-		}
+	dsn, err = cfg.ApplySessionGUCs(dsn, appendQueryParam)
+	if err != nil {
+		return err
 	}
 	// Validate all dump options before opening the database or allocating output.
 	opts, err := buildDumpOptions(flags, cfg)

@@ -70,7 +70,7 @@ func subprocessKeywordDSN(dsn string) (clean, password string, err error) {
 				password = libpqValueBytes(tok.rawValue)
 			}
 			continue
-		case "statement_timeout":
+		case "statement_timeout", "lock_timeout", "idle_in_transaction_session_timeout":
 			continue
 		}
 		if !subprocessQueryControls[lower] {
