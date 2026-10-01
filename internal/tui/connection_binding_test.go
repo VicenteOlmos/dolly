@@ -37,7 +37,7 @@ func TestConnectionScreenChannelBindingSpaceCycles(t *testing.T) {
 	}
 	status := ConnStatusIdle
 	var errMsg string
-	screen := newConnectionScreen(&draft, &status, &errMsg, nil, false, nil, nil, nil, SectionEntryInside)
+	screen := newConnectionScreen(&draft, &status, &errMsg, nil, false, nil, nil, nil, SectionEntryInside, nil)
 	cs := screen.(*connectionScreen)
 	enterConnectionFields(cs)
 	cs.focus = 6
@@ -120,7 +120,7 @@ func TestConnectFromDraftUsesEditedTLSFiles(t *testing.T) {
 	}
 	status := ConnStatusIdle
 	var errMsg string
-	screen := newConnectionScreen(&draft, &status, &errMsg, store, false, nil, nil, nil, SectionEntryInside)
+	screen := newConnectionScreen(&draft, &status, &errMsg, store, false, nil, nil, nil, SectionEntryInside, nil)
 	cs := screen.(*connectionScreen)
 	enterConnectionFields(cs)
 

@@ -52,6 +52,21 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 	}
 }
 
+func TestDumpModeSummaryShowsConfigWorkersAndPercent(t *testing.T) {
+	app := NewApp()
+	app.cfg = config.DefaultConfig()
+	app.cfg.Dump.Workers = 3
+	app.cfg.Subset.Percent = 15
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	summary := ds.modeSummary()
+	if !strings.Contains(summary, "workers 3") {
+		t.Fatalf("summary = %q, want workers 3 from config", summary)
+	}
+	if !strings.Contains(summary, "15%") {
+		t.Fatalf("summary = %q, want 15%% from config", summary)
+	}
+}
+
 func TestDumpModeSanitizeToggle(t *testing.T) {
 	app := NewApp()
 	ds := app.screens[ScreenDump].(*dumpScreen)

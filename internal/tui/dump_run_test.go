@@ -231,6 +231,41 @@ func TestDumpOverridesFromDraftExcludeTableFile(t *testing.T) {
 	}
 }
 
+func TestDumpOverridesFromDraftMaxInListSize(t *testing.T) {
+	overrides, err := dumpOverridesFromDraft(DumpDraft{MaxInListText: "120"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.MaxInListSize != 120 {
+		t.Fatalf("MaxInListSize = %d, want 120", overrides.MaxInListSize)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Subset.MaxInListSize = 80
+	opts, err := runopts.BuildDumpOptions(runopts.DumpOverrides{
+		Percent: 10,
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subset := dump.InspectOptions(opts...)
+	if subset == nil || subset.Limits.MaxInListSize != 80 {
+		t.Fatalf("config max_in_list_size = %d, want 80", subset.Limits.MaxInListSize)
+	}
+
+	opts, err = runopts.BuildDumpOptions(runopts.DumpOverrides{
+		Percent:       10,
+		MaxInListSize: 42,
+	}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subset = dump.InspectOptions(opts...)
+	if subset == nil || subset.Limits.MaxInListSize != 42 {
+		t.Fatalf("override max_in_list_size = %d, want 42", subset.Limits.MaxInListSize)
+	}
+}
+
 func TestDumpOverridesFromDraftChunkTableFile(t *testing.T) {
 	overrides, err := dumpOverridesFromDraft(DumpDraft{ChunkTableFile: "tables/chunk.txt"})
 	if err != nil {

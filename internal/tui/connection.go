@@ -52,6 +52,7 @@ type connectionScreen struct {
 	editSnapshot       connections.Connection
 	schemasInput       string
 	saveAsSchemas      []string
+	sessionSchemas     func() []string
 	previewProfileName string
 	fieldCursors       []int
 	schemasCursor      int
@@ -70,6 +71,7 @@ func newConnectionScreen(
 	setDefaultName func(string) error,
 	spinnerFrame *int,
 	entry SectionEntryMode,
+	sessionSchemas func() []string,
 ) ScreenModel {
 	cs := &connectionScreen{
 		draft:           draft,
@@ -80,6 +82,7 @@ func newConnectionScreen(
 		getDefaultName:  getDefaultName,
 		setDefaultName:  setDefaultName,
 		spinnerFrame:    spinnerFrame,
+		sessionSchemas:  sessionSchemas,
 		fieldCursors:    make([]int, 10),
 		fields: []connectionField{
 			{label: "Host", value: &draft.Host},
@@ -344,7 +347,9 @@ func (c *connectionScreen) beginSaveAs() {
 	c.saveAsSchemas = nil
 	if len(c.profiles) > 0 {
 		c.previewListProfile()
-		if schemas := profileSchemas(&c.profiles[c.listCursor]); len(schemas) > 0 {
+	}
+	if c.sessionSchemas != nil {
+		if schemas := c.sessionSchemas(); len(schemas) > 0 {
 			c.saveAsSchemas = append([]string(nil), schemas...)
 		}
 	}

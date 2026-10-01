@@ -81,6 +81,9 @@
     // Hard cap on rows exported per table during subset planning (0 = unlimited).
     "max_rows_per_table": 0,
 
+    // Max primary-key values per IN/ANY batch during subset closure (0 = default 500).
+    "max_in_list_size": 0,
+
     // JSON seed file path for relationship-aware subset dumps.
     // Seed "table" values may be schema.table; a bare name must be unique in dump scope.
     "seed_file": ""
@@ -91,6 +94,8 @@
     // Default base directory for `dolly dump`. Each run writes to {output_dir}/{n}/.
     // Overridden by --output flag at runtime (still treated as base; numbered subdirs used).
     "output_dir": "dolly_dump",
+    // Path to dump history JSON (default .dolly/dump-history.json under the working directory).
+    "history_path": "",
     // Parallel table dump workers (default 1 = serial). CLI --workers overrides when set.
     "workers": 1,
     // Rows per keyset-pagination chunk in --slow-connection mode (default 1000).

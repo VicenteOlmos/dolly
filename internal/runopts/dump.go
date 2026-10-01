@@ -66,6 +66,8 @@ func applySubsetLimits(limits dump.SubsetLimits, o DumpOverrides, cfg *config.Co
 	}
 	if o.MaxInListSize > 0 {
 		limits.MaxInListSize = o.MaxInListSize
+	} else if cfg.Subset.MaxInListSize > 0 {
+		limits.MaxInListSize = cfg.Subset.MaxInListSize
 	}
 	return limits
 }
