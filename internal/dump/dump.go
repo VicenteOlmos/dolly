@@ -49,6 +49,9 @@ type config struct {
 	workers            int
 	planValidator      PlanValidator
 	requireSafeKey     bool
+	startedAt          time.Time
+	serverVersion      string
+	dollyVersion       string
 }
 
 type slowRetryConfig struct {
@@ -199,6 +202,13 @@ func InspectSlowRetry(opts ...Option) (max int, base time.Duration) {
 	return c.slowRetry.max, c.slowRetry.base
 }
 
+// WithDollyVersion records the dolly release string in dump provenance.
+func WithDollyVersion(v string) Option {
+	return func(c *config) {
+		c.dollyVersion = strings.TrimSpace(v)
+	}
+}
+
 // WithSchemas limits introspection and dump to the given schema names.
 // When empty or nil, only the public schema is loaded.
 func WithSchemas(schemas []string) Option {
@@ -347,6 +357,47 @@ func warnSnapshotInconsistent(cfg *config) {
 	fmt.Fprintf(os.Stderr, "warning: dump is not snapshot-consistent; tables are read outside a shared snapshot\n")
 }
 
+// serverVersionReader is overridden in tests to avoid mocking SHOW server_version on every dump.
+var serverVersionReader = readServerVersion
+
+func readServerVersion(ctx context.Context, q querier) (string, error) {
+	for _, query := range []string{"SHOW server_version", "SELECT current_setting('server_version')"} {
+		rows, err := q.QueryContext(ctx, query)
+		if err != nil {
+			continue
+		}
+		var serverVersion string
+		if rows.Next() {
+			err = rows.Scan(&serverVersion)
+		} else {
+			err = fmt.Errorf("server version query returned no rows")
+		}
+		closeErr := rows.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if err == nil {
+			return strings.TrimSpace(serverVersion), nil
+		}
+	}
+	return "", fmt.Errorf("read server version: server version query failed")
+}
+
+func captureDumpRuntime(ctx context.Context, q querier, cfg *config) error {
+	if cfg.startedAt.IsZero() {
+		cfg.startedAt = time.Now()
+	}
+	if cfg.serverVersion != "" {
+		return nil
+	}
+	serverVersion, err := serverVersionReader(ctx, q)
+	if err != nil {
+		return err
+	}
+	cfg.serverVersion = serverVersion
+	return nil
+}
+
 func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 	if cfg.provenance == nil {
 		return nil
@@ -363,6 +414,15 @@ func provenanceForWrite(cfg *config, tables []db.Table) *Provenance {
 	p.SnapshotConsistent = dumpSnapshotConsistent(cfg)
 	if cfg.withoutTransaction {
 		p.NoTransaction = true
+	}
+	if cfg.serverVersion != "" {
+		p.ServerVersion = cfg.serverVersion
+	}
+	if cfg.dollyVersion != "" {
+		p.DollyVersion = cfg.dollyVersion
+	}
+	if !cfg.startedAt.IsZero() {
+		p.ElapsedMs = time.Since(cfg.startedAt).Milliseconds()
 	}
 	return &p
 }
@@ -394,8 +454,6 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		return plan.Run(ctx)
 	}
 
-	startedAt := time.Now()
-
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
@@ -415,6 +473,11 @@ func Dump(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Option)
 		defer tx.Rollback()
 		q = tx
 	}
+
+	if err := captureDumpRuntime(ctx, q, &cfg); err != nil {
+		return err
+	}
+	startedAt := cfg.startedAt
 
 	if cfg.slowConnection && cfg.subset != nil {
 		return fmt.Errorf("slow connection mode and subset dump are incompatible")

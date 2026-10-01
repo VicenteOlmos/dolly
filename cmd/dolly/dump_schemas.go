@@ -19,6 +19,21 @@ type dumpSchemasFlag struct {
 	values []string
 }
 
+type dumpExcludeSchemasFlag struct {
+	set    bool
+	values []string
+}
+
+func (f *dumpExcludeSchemasFlag) String() string {
+	return strings.Join(f.values, ",")
+}
+
+func (f *dumpExcludeSchemasFlag) Set(s string) error {
+	f.set = true
+	f.values = parseCommaSeparatedSchemas(s)
+	return nil
+}
+
 func (f *dumpSchemasFlag) String() string {
 	return strings.Join(f.values, ",")
 }
@@ -99,4 +114,38 @@ func resolveEffectiveDumpSchemas(ctx context.Context, dsn string, cliSet bool, c
 		}
 	}
 	return normalized, nil
+}
+
+func resolveEffectiveExcludeDumpSchemas(excludeSet bool, excludeValues []string, cfg *config.Config) ([]string, error) {
+	var raw []string
+	if excludeSet {
+		raw = excludeValues
+	} else if cfg != nil && len(cfg.Dump.ExcludeSchemas) > 0 {
+		raw = cfg.Dump.ExcludeSchemas
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return normalizeDumpSchemaList(raw)
+}
+
+func applyDumpSchemaExclusions(schemas, exclude []string) ([]string, error) {
+	if len(exclude) == 0 {
+		return schemas, nil
+	}
+	remove := make(map[string]struct{}, len(exclude))
+	for _, name := range exclude {
+		remove[name] = struct{}{}
+	}
+	out := make([]string, 0, len(schemas))
+	for _, name := range schemas {
+		if _, skip := remove[name]; skip {
+			continue
+		}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("dump schema scope is empty after applying exclude schemas")
+	}
+	return out, nil
 }

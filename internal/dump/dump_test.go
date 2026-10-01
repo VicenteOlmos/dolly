@@ -17,6 +17,12 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/testutil"
 )
 
+func init() {
+	serverVersionReader = func(context.Context, querier) (string, error) {
+		return "PostgreSQL 16.2", nil
+	}
+}
+
 func TestDumpFullFlow(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -77,6 +83,67 @@ func TestDumpFullFlow(t *testing.T) {
 	}
 	if len(meta.Tables) != 1 || meta.Tables[0].RowCount == nil || *meta.Tables[0].RowCount != 2 {
 		t.Fatalf("users row_count = %v, want 2", meta.Tables)
+	}
+}
+
+func TestDumpProvenanceRuntimeFields(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	dir := t.TempDir()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SHOW server_version`).WillReturnRows(sqlmock.NewRows([]string{"server_version"}).AddRow("PostgreSQL 16.2"))
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(1))
+	mock.ExpectQuery(`SELECT t\.table_schema, t\.table_name, s\.n_live_tup[\s\S]*table_schema IN \(\$1\)`).
+		WithArgs("public").
+		WillReturnRows(tablesRows)
+
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+	emptyUniqueIndexMock(mock)
+
+	streamRows := sqlmock.NewRows([]string{"id"}).AddRow(1)
+	mock.ExpectQuery("SELECT .* FROM .*").WillReturnRows(streamRows)
+	mock.ExpectCommit()
+
+	origReader := serverVersionReader
+	serverVersionReader = readServerVersion
+	t.Cleanup(func() { serverVersionReader = origReader })
+
+	err = Dump(context.Background(), sqlDB, dir, WithoutSequences(),
+		WithDollyVersion("1.2.3"),
+		WithProvenance(Provenance{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil {
+		t.Fatal("expected provenance")
+	}
+	if meta.Provenance.ServerVersion != "PostgreSQL 16.2" {
+		t.Fatalf("server_version = %q", meta.Provenance.ServerVersion)
+	}
+	if meta.Provenance.DollyVersion != "1.2.3" {
+		t.Fatalf("dolly_version = %q", meta.Provenance.DollyVersion)
+	}
+	if meta.Provenance.ElapsedMs < 0 {
+		t.Fatalf("elapsed_ms = %d", meta.Provenance.ElapsedMs)
 	}
 }
 

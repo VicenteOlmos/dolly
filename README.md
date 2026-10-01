@@ -119,7 +119,7 @@ For dump and restore without cloning, pass a PostgreSQL DSN:
 ```bash
 export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
 dolly dump --dsn "$DB" --output ./dolly_dump
-dolly dump --dsn "$DB" --schemas app,public --output ./dolly_dump
+dolly dump --dsn "$DB" --schemas app,public --exclude-schema staging --output ./dolly_dump
 dolly dump list --output ./dolly_dump
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
 ```
@@ -165,7 +165,7 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | Command | Purpose |
 |---|---|
 | `dolly tui` | Interactive cockpit for connecting, dumping, and cloning. |
-| `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. Refuses when the effective schema scope has no tables. |
+| `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. `--exclude-schema` (or `dump.exclude_schemas`) removes schemas after includes resolve. Refuses when the effective schema scope has no tables. Dump metadata records PostgreSQL and dolly versions when available. |
 | `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. Empty schema scope fails closed; nonempty scope with no eligible percent roots reports a candidate-root diagnostic. |
 | `dolly dump list` | List local dump history without a database connection. |
 | `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. `--schemas` overrides saved connection profile schemas. `ALWAYS` identity columns use `INSERT ... OVERRIDING SYSTEM VALUE` on the row-by-row path; COPY keeps identity columns in the column list. |
