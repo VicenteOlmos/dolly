@@ -117,7 +117,7 @@ func loadTextSearchMappings(ctx context.Context, q *sql.DB, schemas []string) ([
 	query := fmt.Sprintf(`
 		SELECT cn.nspname, c.cfgname, tt.alias,
 		       COALESCE(dn.nspname, ''), COALESCE(d.dictname, ''),
-		       m.mapordering, m.maptokentype
+		       m.mapseqno, m.maptokentype
 		FROM pg_ts_config_map m
 		JOIN pg_ts_config c ON c.oid = m.mapcfg
 		JOIN pg_namespace cn ON cn.oid = c.cfgnamespace
@@ -132,7 +132,7 @@ func loadTextSearchMappings(ctx context.Context, q *sql.DB, schemas []string) ([
 		      AND dep.objid = c.oid
 		      AND dep.deptype = 'e'
 		  )
-		ORDER BY cn.nspname, c.cfgname, m.maptokentype, m.mapordering`, inClause)
+		ORDER BY cn.nspname, c.cfgname, m.maptokentype, m.mapseqno`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list text search mappings: %w", err)

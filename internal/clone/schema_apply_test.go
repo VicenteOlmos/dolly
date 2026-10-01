@@ -190,7 +190,7 @@ func expectPreTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "cfgname", "nspname", "prsname"}))
 	srcMock.ExpectQuery(`FROM pg_ts_config_map`).WillReturnRows(
 		sqlmock.NewRows([]string{
-			"nspname", "cfgname", "alias", "nspname", "dictname", "mapordering", "maptokentype",
+			"nspname", "cfgname", "alias", "nspname", "dictname", "mapseqno", "maptokentype",
 		}))
 }
 
