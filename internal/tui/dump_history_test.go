@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -162,6 +163,18 @@ func TestDumpHistoryFilterNoMatches(t *testing.T) {
 	lines := renderDumpHistoryLines(h, 5)
 	if len(lines) != 1 || !containsPlain(lines[0], "no matching dumps") {
 		t.Fatalf("lines = %v, want muted no matching dumps", lines)
+	}
+}
+
+func TestDumpHistoryFilterUnicodeBackspace(t *testing.T) {
+	h := &DumpHistoryState{FilterEditing: true}
+	h.AppendFilterRune("café")
+	h.BackspaceFilterDraft()
+	if h.FilterDraft != "caf" {
+		t.Fatalf("FilterDraft = %q, want caf", h.FilterDraft)
+	}
+	if !utf8.ValidString(h.FilterDraft) {
+		t.Fatalf("FilterDraft invalid UTF-8: %q", h.FilterDraft)
 	}
 }
 

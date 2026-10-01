@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -243,7 +244,8 @@ func (h *DumpHistoryState) BackspaceFilterDraft() {
 	if h == nil || h.FilterDraft == "" {
 		return
 	}
-	h.FilterDraft = h.FilterDraft[:len(h.FilterDraft)-1]
+	_, size := utf8.DecodeLastRuneInString(h.FilterDraft)
+	h.FilterDraft = h.FilterDraft[:len(h.FilterDraft)-size]
 	h.clampCursorToVisible()
 }
 
