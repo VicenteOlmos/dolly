@@ -136,6 +136,32 @@ func formatTableCheckConstraint(name, pgConstraintDef string) string {
 	return fmt.Sprintf("CONSTRAINT %s CHECK (%s)", quoteIdentifier(name), def)
 }
 
+// formatTableExcludeConstraint adds CONSTRAINT name EXCLUDE (...).
+func formatTableExcludeConstraint(name, pgConstraintDef string) string {
+	def := strings.TrimSpace(pgConstraintDef)
+	if strings.HasPrefix(strings.ToUpper(def), "EXCLUDE") {
+		return fmt.Sprintf("CONSTRAINT %s %s", quoteIdentifier(name), def)
+	}
+	return fmt.Sprintf("CONSTRAINT %s EXCLUDE %s", quoteIdentifier(name), def)
+}
+
+// formatTablePrimaryKeyConstraint adds CONSTRAINT name PRIMARY KEY (...).
+func formatTablePrimaryKeyConstraint(pk primaryConstraint) string {
+	quoted := make([]string, len(pk.columns))
+	for i, name := range pk.columns {
+		quoted[i] = quoteIdentifier(name)
+	}
+	clause := fmt.Sprintf("CONSTRAINT %s PRIMARY KEY (%s)", quoteIdentifier(pk.name), strings.Join(quoted, ", "))
+	if pk.deferrable {
+		if pk.deferred {
+			clause += " DEFERRABLE INITIALLY DEFERRED"
+		} else {
+			clause += " DEFERRABLE"
+		}
+	}
+	return clause
+}
+
 // formatAlterDomainAddConstraint uses pg_get_constraintdef output for domain CHECK.
 func formatAlterDomainAddConstraint(schema, domain, constraintName, pgConstraintDef string) string {
 	def := strings.TrimSpace(pgConstraintDef)
