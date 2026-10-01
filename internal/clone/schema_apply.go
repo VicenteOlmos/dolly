@@ -175,6 +175,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	routineDefs := make([]string, len(routines))
 	for i, routine := range routines {
 		routineDefs[i] = routine.def
+		if routineSkipsBodyCheck(routine.name, ranges) {
+			routineDefs[i] = formatUncheckedRoutine(routine.def)
+		}
 	}
 	if err := applySQLDefs(ctx, tgtDB, routineDefs, "function"); err != nil {
 		return err

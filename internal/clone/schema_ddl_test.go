@@ -204,6 +204,20 @@ func TestFormatCreateRangeType(t *testing.T) {
 	if defaultMultirangeName("int4range") != "int4multirange" || defaultMultirangeName("span") != "span_multirange" {
 		t.Fatal("default multirange name")
 	}
+	wrapped := formatUncheckedRoutine(`CREATE FUNCTION app.span_canonical(r app.span) RETURNS app.span LANGUAGE sql AS 'SELECT $1'`)
+	if !strings.Contains(wrapped, "check_function_bodies") || !strings.Contains(wrapped, "span_canonical") {
+		t.Fatalf("unchecked routine = %s", wrapped)
+	}
+	ranges := []rangeTypeDef{{
+		canonicalSchema: "app", canonicalName: "span_canonical",
+		subtypeDiffSchema: "app", subtypeDiffName: "span_diff",
+	}}
+	if !routineSkipsBodyCheck("app.span_canonical", ranges) || routineSkipsBodyCheck("app.other", ranges) {
+		t.Fatal("body check skip should cover only range helper functions")
+	}
+	if routineSkipsBodyCheck("app.span_canonical", []rangeTypeDef{{canonicalSchema: "pg_catalog", canonicalName: "int4range_canonical"}}) {
+		t.Fatal("pg_catalog helpers do not need a shell")
+	}
 }
 
 func TestFormatTableCheckConstraint(t *testing.T) {

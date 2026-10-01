@@ -1034,8 +1034,10 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 			return nil, fmt.Errorf("scan range type: %w", err)
 		}
 		r.canonicalSchema = canSchema
+		r.canonicalName = canName
 		r.canonical = formatRangeFunc(canSchema, canName)
 		r.subtypeDiffSchema = diffSchema
+		r.subtypeDiffName = diffName
 		r.subtypeDiff = formatRangeFunc(diffSchema, diffName)
 		out = append(out, r)
 	}
