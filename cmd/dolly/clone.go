@@ -97,9 +97,6 @@ func parseCloneFlags(args []string) (cloneFlags, error) {
 			return flags, fmt.Errorf("invalid --on-conflict %q: %w", flags.OnConflict, err)
 		}
 	}
-	if flags.ReplaceSet && flags.OnConflictSet && flags.Replace && flags.OnConflict != "" && flags.OnConflict != "error" {
-		return flags, errors.New("--replace cannot be combined with --on-conflict other than error")
-	}
 
 	if flags.Connection != "" && !flags.FastForward {
 		return flags, errors.New("--connection requires -ff (non-interactive fast-forward mode)")
@@ -427,16 +424,14 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 	if err != nil {
 		return fmt.Errorf("invalid restore_on_conflict %q: %w", onConflict, err)
 	}
-	if replace && policy != restore.ConflictError {
-		return errors.New("restore.replace cannot be combined with restore.on_conflict other than error")
-	}
 	if replace {
 		if !flags.Yes {
 			return errors.New("clone with replace truncates the target; pass --yes to confirm")
 		}
 		fmt.Fprintf(os.Stderr, "info: target database: %s\n", databaseFromDSN(targetURL))
 		restoreOpts = append(restoreOpts, restore.WithReplace())
-	} else if policy != restore.ConflictError {
+	}
+	if policy != restore.ConflictError {
 		restoreOpts = append(restoreOpts, restore.WithConflictPolicy(policy))
 	}
 

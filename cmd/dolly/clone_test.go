@@ -153,12 +153,12 @@ func TestParseCloneFlags(t *testing.T) {
 		},
 		{
 			name: "clone overrides",
-			args: []string{"-ff", "--replace", "--on-conflict", "error", "--skip-create", "--dump-dir", "/tmp/dumps"},
+			args: []string{"-ff", "--replace", "--on-conflict", "skip", "--skip-create", "--dump-dir", "/tmp/dumps"},
 			want: cloneFlags{
 				FastForward:   true,
 				Replace:       true,
 				ReplaceSet:    true,
-				OnConflict:    "error",
+				OnConflict:    "skip",
 				OnConflictSet: true,
 				SkipCreate:    true,
 				SkipCreateSet: true,
@@ -177,9 +177,15 @@ func TestParseCloneFlags(t *testing.T) {
 			wantErr: "invalid --on-conflict",
 		},
 		{
-			name:    "replace with skip conflict",
-			args:    []string{"-ff", "--replace", "--on-conflict", "skip"},
-			wantErr: "--replace cannot be combined",
+			name: "replace with skip conflict",
+			args: []string{"-ff", "--replace", "--on-conflict", "skip"},
+			want: cloneFlags{
+				FastForward:   true,
+				Replace:       true,
+				ReplaceSet:    true,
+				OnConflict:    "skip",
+				OnConflictSet: true,
+			},
 		},
 	}
 
@@ -674,7 +680,7 @@ func TestRunCloneRestoreOptionsWired(t *testing.T) {
 	cloneLoadConfig = func(path string) (*config.Config, error) {
 		cfg := config.DefaultConfig()
 		cfg.Clone.Replace = true
-		cfg.Clone.RestoreOnConflict = "error"
+		cfg.Clone.RestoreOnConflict = "skip"
 		return cfg, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
@@ -691,8 +697,8 @@ func TestRunCloneRestoreOptionsWired(t *testing.T) {
 	if len(capturedOpts.RestoreOpts) == 0 {
 		t.Fatal("expected RestoreOpts to be set")
 	}
-	if len(capturedOpts.RestoreOpts) != 2 {
-		t.Fatalf("expected 2 RestoreOpts (schemas + replace), got %d", len(capturedOpts.RestoreOpts))
+	if len(capturedOpts.RestoreOpts) != 3 {
+		t.Fatalf("expected 3 RestoreOpts (schemas + replace + skip), got %d", len(capturedOpts.RestoreOpts))
 	}
 }
 
@@ -761,7 +767,7 @@ func TestRunCloneCLIOverridesConfig(t *testing.T) {
 		Yes:           true,
 		Replace:       true,
 		ReplaceSet:    true,
-		OnConflict:    "error",
+		OnConflict:    "skip",
 		OnConflictSet: true,
 		SkipCreate:    true,
 		SkipCreateSet: true,
@@ -778,8 +784,8 @@ func TestRunCloneCLIOverridesConfig(t *testing.T) {
 	if capturedOpts.DumpDir != "/cli/dumps" {
 		t.Fatalf("DumpDir = %q, want /cli/dumps", capturedOpts.DumpDir)
 	}
-	if len(capturedOpts.RestoreOpts) != 2 {
-		t.Fatalf("expected schemas + replace restore opts, got %d", len(capturedOpts.RestoreOpts))
+	if len(capturedOpts.RestoreOpts) != 3 {
+		t.Fatalf("expected schemas + replace + skip restore opts, got %d", len(capturedOpts.RestoreOpts))
 	}
 }
 
