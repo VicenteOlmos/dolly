@@ -7,22 +7,22 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestLoadRLSTablesQueryIncludesViews(t *testing.T) {
+func TestLoadRLSTablesQuerySkipsViews(t *testing.T) {
 	t.Parallel()
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectQuery(`relkind IN \('r', 'p', 'v'\)`).WillReturnRows(
+	mock.ExpectQuery(`relkind IN \('r', 'p'\)\s+AND n\.nspname`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}).
-			AddRow("app", "secure_view", true),
+			AddRow("app", "items", true),
 	)
 	tables, err := loadRLSTables(context.Background(), db, []string{"app"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tables) != 1 || tables[0].table != "secure_view" {
+	if len(tables) != 1 || tables[0].table != "items" {
 		t.Fatalf("tables = %+v", tables)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

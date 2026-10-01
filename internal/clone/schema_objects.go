@@ -1899,7 +1899,7 @@ func loadRLSTables(ctx context.Context, q *sql.DB, schemas []string) ([]rlsTable
 		FROM pg_class c
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relrowsecurity
-		  AND c.relkind IN ('r', 'p', 'v')
+		  AND c.relkind IN ('r', 'p')
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
