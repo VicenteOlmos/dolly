@@ -113,6 +113,22 @@ func TestSetDSNParam(t *testing.T) {
 		{name: "edge/multi-space", dsn: "host=localhost  port=5432   dbname=mydb", key: k, val: v,
 			has: []string{"host=localhost", "port=5432", "statement_timeout=5min"}},
 	}
+	for _, tt := range []struct {
+		name, val, want string
+	}{
+		{name: "app-name/spaces", val: "dolly worker", want: "application_name='dolly worker'"},
+		{name: "app-name/single-quote", val: "O'Brien", want: "application_name='O''Brien'"},
+		{name: "app-name/backslash", val: `foo\bar`, want: `application_name='foo\\bar'`},
+		{name: "app-name/plain", val: "dolly", want: "application_name=dolly"},
+	} {
+		cases = append(cases, tc{
+			name: tt.name,
+			dsn:  "host=localhost port=5432 dbname=mydb",
+			key:  "application_name",
+			val:  tt.val,
+			want: "host=localhost port=5432 dbname=mydb " + tt.want,
+		})
+	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := SetDSNParam(tt.dsn, tt.key, tt.val)
