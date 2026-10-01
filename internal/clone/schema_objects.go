@@ -900,7 +900,7 @@ func columnStatisticsTargetQuery(inClause string) string {
 		WHERE c.relkind IN ('r', 'p')
 		  AND a.attnum > 0
 		  AND NOT a.attisdropped
-		  AND a.attstattarget > 0
+		  AND a.attstattarget >= 0
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, a.attnum`, inClause)
 }

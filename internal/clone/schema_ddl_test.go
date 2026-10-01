@@ -350,12 +350,25 @@ func TestFormatAlterTableReloptions(t *testing.T) {
 		"fillfactor":                         "90",
 		"unknown_option":                     "nope",
 	})
-	want := `ALTER TABLE "app"."events" SET (autovacuum_analyze_scale_factor=0.05, autovacuum_enabled=false, autovacuum_vacuum_scale_factor=0.15, fillfactor=90, parallel_workers=4, toast_tuple_target=2048)`
+	want := `ALTER TABLE "app"."events" SET (autovacuum_analyze_scale_factor=0.05, autovacuum_enabled=off, autovacuum_vacuum_scale_factor=0.15, fillfactor=90, parallel_workers=4, toast_tuple_target=2048)`
 	if !ok || got != want {
 		t.Fatalf("got (%q, %v), want (%q, true)", got, ok, want)
 	}
 	if _, ok := formatAlterTableReloptions("app", "events", map[string]string{"fillfactor": "nope"}); ok {
 		t.Fatal("invalid fillfactor must be omitted")
+	}
+}
+
+func TestFormatTableReloptionFragmentAutovacuumEnabledOff(t *testing.T) {
+	t.Parallel()
+	fragment, ok := formatTableReloptionFragment("autovacuum_enabled", "off")
+	if !ok || fragment != "autovacuum_enabled=off" {
+		t.Fatalf("got (%q, %v), want (autovacuum_enabled=off, true)", fragment, ok)
+	}
+	got, ok := formatAlterTableReloptions("app", "events", map[string]string{"autovacuum_enabled": "off"})
+	want := `ALTER TABLE "app"."events" SET (autovacuum_enabled=off)`
+	if !ok || got != want {
+		t.Fatalf("got (%q, %v), want (%q, true)", got, ok, want)
 	}
 }
 

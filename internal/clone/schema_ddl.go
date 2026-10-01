@@ -285,11 +285,11 @@ func formatTableReloptionFragment(name, rawValue string) (string, bool) {
 		}
 		return fmt.Sprintf("fillfactor=%d", ff), true
 	case "autovacuum_enabled":
-		val := strings.ToLower(rawValue)
-		if val != "true" && val != "false" {
+		emit, ok := formatReloptionBooleanValue(rawValue)
+		if !ok {
 			return "", false
 		}
-		return "autovacuum_enabled=" + val, true
+		return "autovacuum_enabled=" + emit, true
 	case "autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor":
 		if !isReloptionNumericText(rawValue) {
 			return "", false
@@ -301,6 +301,28 @@ func formatTableReloptionFragment(name, rawValue string) (string, bool) {
 			return "", false
 		}
 		return fmt.Sprintf("%s=%d", name, n), true
+	default:
+		return "", false
+	}
+}
+
+// formatReloptionBooleanValue normalizes PostgreSQL boolean reloption spellings for replay.
+// Accepted (case-insensitive): on/off/true/false/yes/no/1/0. Emits on/off, or the stored
+// on/off token when that is what PostgreSQL recorded.
+func formatReloptionBooleanValue(rawValue string) (string, bool) {
+	trimmed := strings.TrimSpace(rawValue)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "on", "true", "yes", "1":
+		if lower == "on" || lower == "off" {
+			return lower, true
+		}
+		return "on", true
+	case "off", "false", "no", "0":
+		if lower == "on" || lower == "off" {
+			return lower, true
+		}
+		return "off", true
 	default:
 		return "", false
 	}
