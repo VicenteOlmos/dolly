@@ -773,6 +773,11 @@ func formatEnableRLS(schema, table string, force bool) string {
 func formatCreatePolicy(schema, table string, pol policyDef) string {
 	var parts []string
 	parts = append(parts, "CREATE POLICY", quoteIdentifier(pol.name), "ON", quoteQualifiedTable(schema, table))
+	if pol.permissive {
+		parts = append(parts, "AS PERMISSIVE")
+	} else {
+		parts = append(parts, "AS RESTRICTIVE")
+	}
 	if pol.command != "" && pol.command != "*" {
 		parts = append(parts, "FOR", pol.command)
 	}
@@ -788,9 +793,6 @@ func formatCreatePolicy(schema, table string, pol policyDef) string {
 	}
 	if pol.withCheck != "" {
 		parts = append(parts, "WITH CHECK ("+pol.withCheck+")")
-	}
-	if !pol.permissive {
-		parts = append(parts, "AS RESTRICTIVE")
 	}
 	return strings.Join(parts, " ")
 }
