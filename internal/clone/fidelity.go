@@ -60,7 +60,7 @@ func userTriggerStates(ctx context.Context, db *sql.DB) ([]triggerState, error) 
 		FROM pg_trigger t
 		JOIN pg_class c ON c.oid = t.tgrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE c.relkind = 'r' AND NOT t.tgisinternal
+		WHERE c.relkind IN ('r', 'p') AND NOT t.tgisinternal
 		  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
 		ORDER BY n.nspname, c.relname, t.tgname`)
 	if err != nil {

@@ -101,10 +101,12 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
+	srcMock.ExpectQuery(`FROM pg_publication`).WillReturnRows(
+		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}))
+		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind", "populated", "options"}))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(
@@ -132,12 +134,14 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 }
 
 func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
-	srcMock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "aggkind"}))
-	srcMock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
+	srcMock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(sqlmock.NewRows([]string{"name", "aggkind"}))
+	srcMock.ExpectQuery(`a\.aggkind IN \('n', 'o'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
 	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "oid"}))
+	srcMock.ExpectQuery(`FROM pg_operator`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "oprname", "nspname", "proname", "left", "right"}))
 }
 
 func TestColumnSQLType(t *testing.T) {
@@ -460,11 +464,13 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
+	srcMock.ExpectQuery(`FROM pg_publication`).WillReturnRows(
+		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind", "reloptions"}).
-			AddRow("app", "active_users", "SELECT id FROM users", false, "security_barrier=true,check_option=local"))
+		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind", "populated", "reloptions"}).
+			AddRow("app", "active_users", "SELECT id FROM users", false, true, "security_barrier=true,check_option=local"))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(
@@ -530,18 +536,22 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
-	mock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
-	mock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
+	mock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
+	mock.ExpectQuery(`a\.aggkind IN \('n', 'o'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	mock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(sqlmock.NewRows([]string{"oid", "name", "def"}).AddRow(1, "app.valid_value(integer)", "CREATE FUNCTION app.valid_value(integer) RETURNS boolean LANGUAGE sql AS 'SELECT true'"))
 	mock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(sqlmock.NewRows([]string{"oid", "ref"}))
+	mock.ExpectQuery(`FROM pg_operator`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "oprname", "nspname", "proname", "left", "right"}))
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
 	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}).AddRow("app", "items", "i", "items_code_idx"))
 	mock.ExpectQuery(`attstorage`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "storage"}).AddRow("app", "items", "code", "e"))
 	mock.ExpectQuery(`attcompression`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "compression"}))
 	mock.ExpectQuery(`pg_options_to_table`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "option_value"}))
 	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}).AddRow("app", "items", "items_code_idx", `CREATE UNIQUE INDEX "items_code_idx" ON "app"."items" (code)`, false))
+	mock.ExpectQuery(`FROM pg_publication`).WillReturnRows(
+		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "nspname", "relname"}))
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
-	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized", "options"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true, "fillfactor=70"))
+	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized", "populated", "options"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true, true, "fillfactor=70"))
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
 	mock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
@@ -820,16 +830,51 @@ func TestFormatAggregateNormal(t *testing.T) {
 	}
 }
 
-func TestLoadAggregatesRejectsOrderedSet(t *testing.T) {
+func TestLoadAggregatesRejectsHypothetical(t *testing.T) {
 	conn, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	mock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(
-		sqlmock.NewRows([]string{"name", "aggkind"}).AddRow(`"public"."percentile"(double precision)`, "o"))
+	mock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(
+		sqlmock.NewRows([]string{"name", "aggkind"}).AddRow(`"public"."rank"(integer)`, "h"))
 	_, err = loadAggregates(context.Background(), conn, []string{"public"})
-	if err == nil || !strings.Contains(err.Error(), "ordered-set aggregate") {
+	if err == nil || !strings.Contains(err.Error(), "hypothetical aggregate") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestFormatAggregateOrderedSet(t *testing.T) {
+	got := formatAggregate(aggregateSpec{
+		schema: "public", name: "percentile_cont", args: "double precision",
+		aggkind: "o", stype: "float8", sfuncSchema: "pg_catalog", sfunc: "float8_accum",
+		parallel: "u",
+	})
+	if !strings.Contains(got, "(ORDER BY double precision)") {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestFormatCreatePublication(t *testing.T) {
+	got := formatCreatePublication(publicationSpec{
+		name: "events_pub", insert: true, update: false, delete: true, truncate: true,
+		tables: []publicationTable{
+			{schema: "app", name: "users"},
+			{schema: "app", name: "events"},
+		},
+	})
+	want := `CREATE PUBLICATION "events_pub" FOR TABLE ONLY "app"."users", ONLY "app"."events" WITH (publish = 'insert, delete, truncate')`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestFormatCreateOperator(t *testing.T) {
+	got := formatCreateOperator(operatorSpec{
+		schema: "app", name: "===", funcSchema: "app", funcName: "eq_text",
+		leftType: "text", rightType: "text",
+	})
+	if !strings.Contains(got, `CREATE OPERATOR "app"."==="`) || !strings.Contains(got, "LEFTARG = text") {
+		t.Fatalf("got %s", got)
 	}
 }

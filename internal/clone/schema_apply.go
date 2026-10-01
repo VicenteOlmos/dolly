@@ -45,7 +45,7 @@ type uniqueConstraint struct {
 // order), triggers, rules, comments, grants, and RLS.
 //
 // Limitations (prefer pg_dump when it is on PATH):
-//   - Ordered-set and hypothetical aggregates, exclusion constraints, and operator classes are not replayed.
+//   - Hypothetical aggregates, exclusion constraints, and operator classes are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
@@ -182,6 +182,13 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err := applySQLDefs(ctx, tgtDB, aggregates, "aggregate"); err != nil {
 		return err
 	}
+	operators, err := loadOperators(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyOperators(ctx, tgtDB, operators); err != nil {
+		return err
+	}
 	if err := applyRangeTypes(ctx, tgtDB, ranges, true); err != nil {
 		return err
 	}
@@ -289,6 +296,14 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyReplicaIdentities(ctx, tgtDB, replicaIdentities); err != nil {
+		return err
+	}
+
+	publications, err := loadPublications(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyPublications(ctx, tgtDB, publications); err != nil {
 		return err
 	}
 
