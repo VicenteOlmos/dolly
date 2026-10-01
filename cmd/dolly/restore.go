@@ -45,6 +45,7 @@ type restoreFlags struct {
 	AckPartialState     bool
 	PartialStateFile    string
 	PartialStateFileSet bool
+	ExcludeTables       []string
 }
 
 func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
@@ -63,6 +64,10 @@ func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
 	fs.IntVar(&flags.Workers, "workers", 0, "parallel table restore workers (default: config restore.workers or 1; max 16)")
 	fs.BoolVar(&flags.AckPartialState, "ack-partial-state", false, "acknowledge partial-state risk for parallel restore (required when workers > 1)")
 	fs.StringVar(&flags.PartialStateFile, "partial-state-file", "", "partial-state manifest path (default: config restore.partial_state_file or input/.dolly-restore-partial-state.json)")
+	fs.Func("exclude-table", "exact qualified table to skip during restore (repeatable; schema.table or bare name when unique in dump)", func(s string) error {
+		flags.ExcludeTables = append(flags.ExcludeTables, s)
+		return nil
+	})
 	return fs
 }
 
@@ -125,6 +130,7 @@ func restoreFlagsToOverrides(flags restoreFlags) runopts.RestoreOverrides {
 		PartialStateFileSet: flags.PartialStateFileSet,
 		AckPartialState:     flags.AckPartialState,
 		Yes:                 flags.Yes,
+		ExcludeTables:       flags.ExcludeTables,
 	}
 }
 
@@ -227,6 +233,9 @@ func runRestore(args []string) (err error) {
 		return err
 	}
 
+	var tableStats restore.TableSelectionStats
+	opts = append(opts, restore.WithTableSelectionStats(&tableStats))
+
 	opts = append(opts, restore.WithProgress(func(ev restore.ProgressEvent) {
 		if flags.JSON {
 			return
@@ -249,12 +258,14 @@ func runRestore(args []string) (err error) {
 			sch = []string{}
 		}
 		result := map[string]any{
-			"ok":              true,
-			"command":         "restore",
-			"input_dir":       flags.Input,
-			"target_database": databaseFromDSN(dsn),
-			"schemas":         sch,
-			"table_count":     len(meta.Tables),
+			"ok":               true,
+			"command":          "restore",
+			"input_dir":        flags.Input,
+			"target_database":  databaseFromDSN(dsn),
+			"schemas":          sch,
+			"table_count":      len(meta.Tables),
+			"tables_restored":  tableStats.TablesRestored,
+			"tables_excluded":  tableStats.TablesExcluded,
 		}
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {

@@ -141,7 +141,11 @@
     "workers": 1,
     // Partial-state manifest path for parallel restore. CLI --partial-state-file overrides when set.
     // When unset, restore uses {input_dir}/.dolly-restore-partial-state.json.
-    "partial_state_file": ""
+    "partial_state_file": "",
+
+    // Exact qualified tables to skip during restore (schema.table; bare name when unique in dump).
+    // CLI --exclude-table replaces this list when present.
+    "exclude_tables": []
   },
 
   // ── Database pool ────────────────────────────────────────────────────────

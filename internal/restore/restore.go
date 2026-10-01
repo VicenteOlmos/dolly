@@ -34,11 +34,20 @@ type config struct {
 	replace            bool
 	withoutTransaction bool
 	schemas            []string
+	excludeTables      []string
+	excludedTableKeys  map[string]bool
 	onProgress         func(ProgressEvent)
 	dsn                string // pgx connection string for COPY path
 	schemaSQL          bool   // auto-apply schema.sql when target tables missing
 	workers            int
 	partialStatePath   string
+	tableStats         *TableSelectionStats
+}
+
+// TableSelectionStats records restore table inclusion counts for JSON reporting.
+type TableSelectionStats struct {
+	TablesRestored int
+	TablesExcluded int
 }
 
 // Option configures Restore behavior.
@@ -70,6 +79,20 @@ func WithoutTransaction() Option {
 func WithSchemas(schemas []string) Option {
 	return func(c *config) {
 		c.schemas = append([]string(nil), schemas...)
+	}
+}
+
+// WithExcludeTables skips listed tables during restore (exact schema.table or bare name).
+func WithExcludeTables(selectors []string) Option {
+	return func(c *config) {
+		c.excludeTables = append([]string(nil), selectors...)
+	}
+}
+
+// WithTableSelectionStats captures restored/excluded table counts on success.
+func WithTableSelectionStats(stats *TableSelectionStats) Option {
+	return func(c *config) {
+		c.tableStats = stats
 	}
 }
 
@@ -171,6 +194,18 @@ func InspectReplace(opts ...Option) bool {
 	return c.replace
 }
 
+// InspectExcludeTables returns exclude selectors captured from opts.
+func InspectExcludeTables(opts ...Option) []string {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	if len(c.excludeTables) == 0 {
+		return nil
+	}
+	return append([]string(nil), c.excludeTables...)
+}
+
 // InspectPartialStateManifest returns the partial-state manifest path from opts.
 func InspectPartialStateManifest(opts ...Option) string {
 	var c config
@@ -200,6 +235,19 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	meta.Tables = dump.SortTables(meta.Tables)
 	if len(meta.Tables) == 0 {
 		return &EmptyDumpError{InputDir: inputDir}
+	}
+	filtered, excluded, excludedKeys, err := ApplyRestoreTableExclusions(meta.Tables, cfg.excludeTables)
+	if err != nil {
+		return err
+	}
+	if len(filtered) == 0 {
+		return &EmptyTableSetError{InputDir: inputDir}
+	}
+	meta.Tables = filtered
+	cfg.excludedTableKeys = excludedKeys
+	if cfg.tableStats != nil {
+		cfg.tableStats.TablesRestored = len(filtered)
+		cfg.tableStats.TablesExcluded = excluded
 	}
 	dataPaths, err := verifyNDJSONFiles(meta, inputDir)
 	if err != nil {
@@ -347,7 +395,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	if tx != nil {
 		seqQ = tx
 	}
-	if err := RestoreSequencesFromMetadata(ctx, seqQ, meta, schemaFilter); err != nil {
+	if err := RestoreSequencesFromMetadata(ctx, seqQ, meta, schemaFilter, cfg.excludedTableKeys); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
 	if err := SyncSequencesToData(ctx, seqQ, meta.Tables); err != nil {

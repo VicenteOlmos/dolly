@@ -157,7 +157,7 @@ Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para
 | `dolly dump` | Exporta datos a directorios de volcado NDJSON numerados. |
 | `dolly dump --percent N` | Volcado parcial: raíces recientes más cierre de claves foráneas; la salida puede superar el `N%`. |
 | `dolly dump list` | Enumera el historial local de volcados sin conectarse a una base de datos. |
-| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. `--schemas` anula los esquemas del perfil guardado. Las columnas identity `ALWAYS` usan `INSERT ... OVERRIDING SYSTEM VALUE` en la ruta fila a fila; COPY mantiene esas columnas en la lista explícita. |
+| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. `--exclude-table` repetible omite tablas (y sus secuencias asociadas). `--schemas` anula los esquemas del perfil guardado. |
 | `dolly clone` | Clona con `schema-replay`, `template`, `logical-stream` o `physical-backup`. Los flags `--replace`, `--on-conflict`, `--skip-create` y `--dump-dir` anulan las claves `clone.*` correspondientes en esa ejecución. |
 | `dolly config` | Crea o inspecciona `config.jsonc` con `init` y `show`. |
 | `dolly version` | Muestra la versión de compilación. |
@@ -201,6 +201,20 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 ```
 
 Este modo puede dejar avances parciales si falla durante el proceso. Prefiera el modo predeterminado cuando necesite una reversión atómica.
+
+### Exclusiones de tablas en restore
+
+**Cuándo usarlo** cuando el volcado incluye tablas que no desea cargar en el destino.
+
+**Comando**
+
+```bash
+dolly restore --dsn "$DB" --input ./dolly_dump/1 --exclude-table public.audit_log
+```
+
+**Resultado/artefactos** carga todas las tablas del volcado salvo las excluidas; no se ejecuta setval en secuencias de tablas omitidas. La salida `--json` añade `tables_restored` y `tables_excluded` sin cambiar las claves existentes.
+
+**Restricción/advertencia** los selectores usan la misma gramática `schema.table` que `--include-table` en dump; un nombre sin esquema debe coincidir con exactamente una tabla del volcado. Las exclusiones desconocidas fallan antes de cargar; excluir todas las tablas produce un error de conjunto vacío. Equivalente en config: `restore.exclude_tables` (`--exclude-table` reemplaza la lista cuando se indica).
 
 La restauración paralela (`--workers` mayor que 1) exige `--ack-partial-state` y escribe `.dolly-restore-partial-state.json` hasta el éxito completo. El manifiesto registra host, puerto, base de datos y una huella del conjunto de tablas del volcado; la restauración falla de forma segura si el destino o el conjunto de tablas no coincide con el manifiesto. La TUI exige activar el reconocimiento de riesgo de estado parcial en la pantalla de historial antes de un restore paralelo cuando los workers son mayores que 1 (no se guarda en la configuración).
 

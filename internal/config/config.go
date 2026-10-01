@@ -51,10 +51,11 @@ type Config struct {
 		MaxInListSize   int    `json:"max_in_list_size"`
 	} `json:"subset"`
 	Restore struct {
-		Workers           int    `json:"workers"`
-		PartialStateFile  string `json:"partial_state_file"`
-		RestoreOnConflict string `json:"restore_on_conflict"`
-		Replace           bool   `json:"replace"`
+		Workers           int      `json:"workers"`
+		PartialStateFile  string   `json:"partial_state_file"`
+		RestoreOnConflict string   `json:"restore_on_conflict"`
+		Replace           bool     `json:"replace"`
+		ExcludeTables     []string `json:"exclude_tables"`
 	} `json:"restore"`
 	Dump struct {
 		OutputDir         string   `json:"output_dir"`
@@ -122,6 +123,7 @@ func DefaultConfig() *Config {
 	cfg.Connections.Scope = "project"
 	cfg.Restore.Workers = 1
 	cfg.Restore.RestoreOnConflict = "error"
+	cfg.Restore.ExcludeTables = []string{}
 	cfg.Dump.OutputDir = "dolly_dump"
 	cfg.Dump.Workers = 1
 	cfg.Dump.SlowChunkSize = 1000

@@ -44,14 +44,16 @@ func schemaSet(schemas []string) map[string]bool {
 // applies setval on the target database. This prevents serial/identity
 // collisions after a standalone restore. When schemas is non-empty, only
 // sequences in those schemas are restored.
-func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.Metadata, schemas []string) error {
+func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.Metadata, schemas []string, excludedTables map[string]bool) error {
 	if len(meta.Sequences) == 0 {
 		return nil
 	}
 
 	schemaFilter := schemaSet(schemas)
 	restoredColumns := make(map[string]bool)
+	restoredTables := make(map[string]bool, len(meta.Tables))
 	for _, table := range meta.Tables {
+		restoredTables[table.Schema+"\x00"+table.Name] = true
 		for _, column := range table.Columns {
 			restoredColumns[table.Schema+"\x00"+table.Name+"\x00"+column.Name] = true
 		}
@@ -64,7 +66,7 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 		if err := validateSequenceDataType(seq.DataType); err != nil {
 			return fmt.Errorf("sequence %s.%s: %w", seq.Schema, seq.Name, err)
 		}
-		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns, omittedParents)
+		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns, restoredTables, excludedTables, omittedParents)
 		if err != nil {
 			return err
 		}
@@ -123,7 +125,7 @@ func omittedPartitionParentSet(meta dump.Metadata) map[string]bool {
 	return set
 }
 
-func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.SequenceState, restoredColumns, omittedParents map[string]bool) (bool, error) {
+func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.SequenceState, restoredColumns, restoredTables, excludedTables, omittedParents map[string]bool) (bool, error) {
 	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT tbl_ns.nspname, tbl.relname, a.attname
 		FROM pg_class seq
 		JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
@@ -145,13 +147,18 @@ func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.Sequ
 	if err := rows.Scan(&schema, &table, &column); err != nil {
 		return false, fmt.Errorf("scan sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
 	}
-	if !restoredColumns[schema+"\x00"+table+"\x00"+column] && !omittedParents[schema+"."+table] {
+	colKey := schema + "\x00" + table + "\x00" + column
+	tableKey := schema + "\x00" + table
+	if restoredColumns[colKey] || omittedParents[schema+"."+table] {
+		return true, nil
+	}
+	if excludedTables != nil && excludedTables[tableKey] {
+		return false, nil
+	}
+	if restoredTables[tableKey] {
 		return false, fmt.Errorf("sequence %s.%s is not owned by a restored column", seq.Schema, seq.Name)
 	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("validate sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
-	}
-	return true, nil
+	return false, fmt.Errorf("sequence %s.%s is not owned by a restored column", seq.Schema, seq.Name)
 }
 
 // sequenceSyncBatch is the table count per SyncSequencesToData lookup.
