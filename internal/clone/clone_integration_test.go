@@ -660,7 +660,7 @@ func TestPreflightSchemaReplayLive(t *testing.T) {
 
 	requirePgDumpMajorMatch(t, srcDB)
 
-	if err := Preflight(ctx, Options{
+	if _, err := Preflight(ctx, Options{
 		SourceDSN:  srcDSN,
 		CloneName:  cloneName,
 		SkipCreate: true,
@@ -698,7 +698,7 @@ func TestDotenvSourceDumpAndClonePreflightParity(t *testing.T) {
 
 	requirePgDumpMajorMatch(t, dumpDB)
 
-	if err := Preflight(ctx, Options{
+	if _, err := Preflight(ctx, Options{
 		SourceDSN:  dsn,
 		CloneName:  "dolly_pf_parity_unused",
 		SkipCreate: false,
@@ -723,7 +723,7 @@ func TestReplicationPreflightLive(t *testing.T) {
 	targetDir := t.TempDir()
 	ctx := context.Background()
 
-	if err := Preflight(ctx, Options{
+	if _, err := Preflight(ctx, Options{
 		SourceDSN: dsn,
 		CloneName: "unused",
 		TargetDir: targetDir,
@@ -1436,7 +1436,7 @@ func TestPreflightScopedSchemaReplayPG16(t *testing.T) {
 	}
 
 	t.Run("unselected inaccessible succeeds", func(t *testing.T) {
-		if err := Preflight(ctx, scopedOpts, &SchemaReplayStrategy{}); err != nil {
+		if _, err := Preflight(ctx, scopedOpts, &SchemaReplayStrategy{}); err != nil {
 			t.Fatalf("scoped preflight should ignore audit.secret: %v", err)
 		}
 	})
@@ -1448,7 +1448,7 @@ func TestPreflightScopedSchemaReplayPG16(t *testing.T) {
 			TargetDSN:  fix.tgtDSN,
 			SkipCreate: true,
 		}
-		err := Preflight(ctx, legacyOpts, &SchemaReplayStrategy{})
+		_, err := Preflight(ctx, legacyOpts, &SchemaReplayStrategy{})
 		if err == nil {
 			t.Fatal("expected legacy unscoped failure for audit.secret")
 		}
@@ -1491,7 +1491,7 @@ func TestPreflightScopedSchemaReplayPG16(t *testing.T) {
 			}
 		})
 
-		err = Preflight(ctx, scopedOpts, &SchemaReplayStrategy{})
+		_, err = Preflight(ctx, scopedOpts, &SchemaReplayStrategy{})
 		if err == nil {
 			t.Fatal("expected failure for inaccessible selected table")
 		}

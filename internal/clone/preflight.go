@@ -139,44 +139,48 @@ func resolvePreflightDSNs(opts Options) (preflightDSNs, error) {
 }
 
 // Preflight validates reachability, permissions, and versions before clone side effects.
-func Preflight(ctx context.Context, opts Options, strat Strategy) error {
+// On success it may return non-fatal schema-replay gap warnings (stderr / JSON); these do not fail the clone.
+func Preflight(ctx context.Context, opts Options, strat Strategy) ([]string, error) {
 	dsns, err := resolvePreflightDSNs(opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	name := strat.Name()
 
 	sourceConn, err := sqlOpenDB(dsns.sourceDSN)
 	if err != nil {
-		return fmt.Errorf("open source connection: %w", err)
+		return nil, fmt.Errorf("open source connection: %w", err)
 	}
 	defer sourceConn.Close()
 
 	if name == "physical-backup" {
 		if err := pingDB(ctx, sourceConn, dsns.sourceDB, name); err != nil {
-			return err
+			return nil, err
 		}
-		return runReplicationPreflight(ctx, sourceConn, opts)
+		if err := runReplicationPreflight(ctx, sourceConn, opts); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 
 	if err := pingDB(ctx, sourceConn, dsns.sourceDB, name); err != nil {
-		return err
+		return nil, err
 	}
 
 	var adminConn *sql.DB
 	if !dsns.sameInst {
 		adminConn, err = sqlOpenDB(dsns.adminDSN)
 		if err != nil {
-			return fmt.Errorf("open admin connection: %w", err)
+			return nil, fmt.Errorf("open admin connection: %w", err)
 		}
 		defer adminConn.Close()
 		if err := pingDB(ctx, adminConn, "postgres", name); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if name == "template" && !dsns.sameInst {
-		return &PreflightError{
+		return nil, &PreflightError{
 			Kind:     PreflightPermission,
 			Strategy: name,
 			Hint:     "use schema-replay or logical-stream for cross-server clones",
@@ -185,40 +189,40 @@ func Preflight(ctx context.Context, opts Options, strat Strategy) error {
 
 	cacheKey, err := permissionCacheKey(dsns, opts, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	now := permissionCacheNow()
 	if _, hit, err := lookupPermissionCache(opts.PermissionCache, cacheKey, now); err != nil {
-		return fmt.Errorf("permission cache: %w", err)
+		return nil, fmt.Errorf("permission cache: %w", err)
 	} else if !hit {
 		role, err := runPermissionChecks(ctx, sourceConn, adminConn, dsns, opts, name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		entry, err := buildPermissionCacheEntry(cacheKey, dsns, opts, name, role, opts.PermissionCache.TTL)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := storePermissionCache(opts.PermissionCache, entry); err != nil {
-			return fmt.Errorf("permission cache: %w", err)
+			return nil, fmt.Errorf("permission cache: %w", err)
 		}
 	}
 
 	sourceMajor, err := scanServerMajor(ctx, sourceConn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !dsns.sameInst {
 		if adminConn == nil {
-			return fmt.Errorf("internal preflight: missing admin connection for version check")
+			return nil, fmt.Errorf("internal preflight: missing admin connection for version check")
 		}
 		targetMajor, err := scanServerMajor(ctx, adminConn)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if targetMajor < sourceMajor {
-			return &PreflightError{
+			return nil, &PreflightError{
 				Kind:      PreflightVersion,
 				Strategy:  name,
 				SourceVer: strconv.Itoa(sourceMajor),
@@ -229,15 +233,15 @@ func Preflight(ctx context.Context, opts Options, strat Strategy) error {
 	}
 
 	if name == "logical-stream" {
-		return nil
+		return nil, nil
 	}
 	if name != "schema-replay" {
-		return nil
+		return nil, nil
 	}
 
 	out, err := pgDumpVersion()
 	if err != nil {
-		return &PreflightError{
+		return nil, &PreflightError{
 			Kind:     PreflightVersion,
 			Strategy: name,
 			Hint:     "install pg_dump matching the source server major version",
@@ -245,10 +249,10 @@ func Preflight(ctx context.Context, opts Options, strat Strategy) error {
 	}
 	clientMajor, err := parsePgDumpMajor(out)
 	if err != nil {
-		return fmt.Errorf("parse pg_dump version: %w", err)
+		return nil, fmt.Errorf("parse pg_dump version: %w", err)
 	}
 	if clientMajor != sourceMajor {
-		return &PreflightError{
+		return nil, &PreflightError{
 			Kind:      PreflightVersion,
 			Strategy:  name,
 			SourceVer: strconv.Itoa(sourceMajor),
@@ -256,7 +260,17 @@ func Preflight(ctx context.Context, opts Options, strat Strategy) error {
 			Hint:      "install pg_dump client tools with the same major version as the source server",
 		}
 	}
-	return nil
+
+	if _, err := schemaToolLookPath("pg_dump"); err == nil {
+		return nil, nil
+	}
+
+	scope := canonicalizeEffectiveScope(SchemasFromOptions(opts))
+	counts, err := scanSchemaReplayGapCounts(ctx, sourceConn, scope)
+	if err != nil {
+		return nil, err
+	}
+	return SchemaReplayGapWarnings(counts), nil
 }
 
 func runPermissionChecks(

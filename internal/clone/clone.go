@@ -52,6 +52,8 @@ type Options struct {
 	// RowTransform rewrites logical-stream rows before they are copied. Set from
 	// sanitization so large clones can redact without an NDJSON dump.
 	RowTransform dump.RowTransform
+	// PreflightWarnings receives schema-replay gap warnings after a successful preflight when non-nil.
+	PreflightWarnings *[]string
 }
 
 func schemaOnlyDumpArgs(cleanDSN string, schemas []string, includePrivileges bool) []string {
@@ -252,8 +254,12 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if err := preflightFunc(ctx, opts, strat); err != nil {
+	warnings, err := preflightFunc(ctx, opts, strat)
+	if err != nil {
 		return err
+	}
+	if opts.PreflightWarnings != nil {
+		*opts.PreflightWarnings = warnings
 	}
 	return strat.Execute(ctx, opts)
 }
