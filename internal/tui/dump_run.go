@@ -17,6 +17,12 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/schemacapture"
 )
 
+var (
+	tuiLoadConfig    = config.LoadConfig
+	tuiDumpRun       = dump.Dump
+	tuiSchemaCapture = schemacapture.Capture
+)
+
 // dumpMetadataTables reads table stats from metadata.json for result summary.
 func dumpMetadataTables(dir string) (tables []DumpTableStat, ok bool) {
 	meta, err := dump.ReadMetadata(dir)
@@ -57,7 +63,16 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 		effectiveSchemas = []string{"public"}
 	}
 
-	cfg, err := config.LoadConfig(config.ResolveConfigPath())
+	cfg, err := tuiLoadConfig(config.ResolveConfigPath())
+	if err != nil {
+		return err
+	}
+
+	excludeSchemas, err := dump.ResolveEffectiveExcludeSchemas(false, nil, cfg)
+	if err != nil {
+		return err
+	}
+	effectiveSchemas, err = dump.ApplySchemaExclusions(effectiveSchemas, excludeSchemas)
 	if err != nil {
 		return err
 	}
@@ -93,11 +108,11 @@ func (productionDumpRunner) Run(ctx context.Context, db *sql.DB, outputDir strin
 			Sanitized:      &sanitized,
 		}))
 	}
-	if err := dump.Dump(ctx, db, outputDir, opts...); err != nil {
+	if err := tuiDumpRun(ctx, db, outputDir, opts...); err != nil {
 		return err
 	}
 	if sourceDSN != "" {
-		if err := schemacapture.Capture(ctx, sourceDSN, outputDir, effectiveSchemas); err != nil && onProgress != nil {
+		if err := tuiSchemaCapture(ctx, sourceDSN, outputDir, effectiveSchemas); err != nil && onProgress != nil {
 			onProgress(dump.ProgressEvent{Phase: "schema_capture_warning", Table: err.Error()})
 		}
 	}
