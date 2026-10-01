@@ -7,7 +7,7 @@
 │           ||    ||         ││                ││ run            ││                │
 │                            ││                ││ (dump/clone)   ││ F1/Esc close · │
 │            dolly           ││                ││                ││ n/p pages ·    │
-│                            ││                ││ 1-5  [global]  ││ 1/6 Keys       │
+│                            ││                ││ 1-5  [global]  ││ 1/7 Keys       │
 │   1 connect                ││                ││ jump to screen ││                │
 │   2 schema                 ││                ││ Ctrl+Tab       ││                │
 │   3 dump                   ││                ││ [global]  next ││                │
