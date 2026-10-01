@@ -579,3 +579,69 @@ func TestFormatCreateCompositeType(t *testing.T) {
 		t.Fatalf("collated composite: got %q, want %q", gotColl, wantColl)
 	}
 }
+
+func TestFormatCreateEventTrigger(t *testing.T) {
+	t.Parallel()
+	got := formatCreateEventTrigger(eventTriggerRow{
+		name:     "audit_ddl",
+		event:    "ddl_command_end",
+		tags:     []string{"CREATE TABLE", "CREATE INDEX"},
+		fnSchema: "app",
+		fnName:   "log_ddl",
+		fnArgs:   "",
+		prokind:  "f",
+	})
+	want := `CREATE EVENT TRIGGER "audit_ddl" ON ddl_command_end WHEN TAG IN ('CREATE TABLE', 'CREATE INDEX') EXECUTE FUNCTION "app"."log_ddl"()`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	proc := formatCreateEventTrigger(eventTriggerRow{
+		name:     "notify",
+		event:    "sql_drop",
+		fnSchema: "app",
+		fnName:   "notify_drop",
+		fnArgs:   "text",
+		prokind:  "p",
+	})
+	if !strings.Contains(proc, "EXECUTE PROCEDURE") || !strings.Contains(proc, `"notify_drop"(text)`) {
+		t.Fatalf("procedure trigger: %q", proc)
+	}
+}
+
+func TestFormatTextSearchObjects(t *testing.T) {
+	t.Parallel()
+	dict := formatCreateTextSearchDictionary(textSearchDictionary{
+		schema:     "app",
+		name:       "en_stem",
+		tmplSchema: "pg_catalog",
+		tmplName:   "snowball",
+		initOption: "Language = english, StopWords = english",
+	})
+	wantDict := `CREATE TEXT SEARCH DICTIONARY "app"."en_stem" (TEMPLATE = "snowball", Language = english, StopWords = english)`
+	if dict != wantDict {
+		t.Fatalf("dictionary: got %q, want %q", dict, wantDict)
+	}
+	cfg := formatCreateTextSearchConfiguration(textSearchConfiguration{
+		schema:       "app",
+		name:         "search",
+		parserSchema: "pg_catalog",
+		parserName:   "default",
+	})
+	wantCfg := `CREATE TEXT SEARCH CONFIGURATION "app"."search" (PARSER = "default")`
+	if cfg != wantCfg {
+		t.Fatalf("configuration: got %q, want %q", cfg, wantCfg)
+	}
+	mapStmt := formatAlterTextSearchConfigurationMapping(textSearchMapping{
+		schema: "app",
+		name:   "search",
+		token:  "asciiword",
+		dicts: []qualifiedName{
+			{schema: "app", name: "en_stem"},
+			{schema: "pg_catalog", name: "simple"},
+		},
+	})
+	wantMap := `ALTER TEXT SEARCH CONFIGURATION "app"."search" ADD MAPPING FOR asciiword WITH "app"."en_stem", "simple"`
+	if mapStmt != wantMap {
+		t.Fatalf("mapping: got %q, want %q", mapStmt, wantMap)
+	}
+}
