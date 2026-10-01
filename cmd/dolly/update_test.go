@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -457,6 +458,11 @@ func TestRunUpdateContextCancel(t *testing.T) {
 		return rec.Result(), nil
 	})
 
+	target := filepath.Join(t.TempDir(), "dolly")
+	if err := os.WriteFile(target, []byte("dolly"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -466,6 +472,17 @@ func TestRunUpdateContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stderr = stderrW
+	stderrText := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, stderrR)
+		stderrText <- buf.String()
+	}()
+	finishStderr := func() string {
+		os.Stderr = oldStderr
+		_ = stderrW.Close()
+		return <-stderrText
+	}
 
 	var runErr error
 	done := make(chan struct{})
@@ -473,6 +490,7 @@ func TestRunUpdateContextCancel(t *testing.T) {
 		runErr = runUpdateWithContext(ctx, []string{"--check"}, &updateRunInject{
 			http:             client,
 			installedVersion: "0.3.1",
+			targetPath:       target,
 		})
 		close(done)
 	}()
@@ -481,25 +499,24 @@ func TestRunUpdateContextCancel(t *testing.T) {
 	case <-downloadStarted:
 		cancel()
 	case <-time.After(5 * time.Second):
-		t.Fatal("download did not start")
+		cancel()
+		<-done
+		t.Fatalf("download did not start; err=%v stderr=%s", runErr, finishStderr())
 	}
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("runUpdate did not return promptly after cancel")
+		t.Fatalf("runUpdate did not return promptly after cancel; stderr=%s", finishStderr())
 	}
 
-	stderrW.Close()
-	os.Stderr = oldStderr
-	var stderr bytes.Buffer
-	_, _ = io.Copy(&stderr, stderrR)
+	stderr := finishStderr()
 
 	if !errors.Is(runErr, errTextHandled) {
 		t.Fatalf("err = %v, want errTextHandled", runErr)
 	}
-	if !strings.Contains(stderr.String(), "context canceled") {
-		t.Fatalf("stderr = %q, want context canceled", stderr.String())
+	if !strings.Contains(stderr, "context canceled") {
+		t.Fatalf("stderr = %q, want context canceled", stderr)
 	}
 }
 

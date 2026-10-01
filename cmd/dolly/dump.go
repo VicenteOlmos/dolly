@@ -70,6 +70,9 @@ type dumpFlags struct {
 	Schemas           []string
 	SchemasSet        bool
 	schemasFlag       dumpSchemasFlag
+	ExcludeSchemas    []string
+	ExcludeSchemasSet bool
+	excludeSchemasFlag dumpExcludeSchemasFlag
 	JSON              bool
 }
 
@@ -119,6 +122,7 @@ func dumpFlagSet(flags *dumpFlags) *flag.FlagSet {
 	fs.IntVar(&flags.Workers, "workers", 0, "parallel table dump workers (default: config dump.workers or 1; max 16)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	fs.Var(&flags.schemasFlag, "schemas", "comma-separated source schema names (overrides saved profile and dump.schemas config)")
+	fs.Var(&flags.excludeSchemasFlag, "exclude-schema", "comma-separated schema names to remove from the dump schema set after includes are resolved (overrides dump.exclude_schemas config)")
 	return fs
 }
 
@@ -150,6 +154,8 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 
 	flags.Schemas = append([]string(nil), flags.schemasFlag.values...)
 	flags.SchemasSet = flags.schemasFlag.set
+	flags.ExcludeSchemas = append([]string(nil), flags.excludeSchemasFlag.values...)
+	flags.ExcludeSchemasSet = flags.excludeSchemasFlag.set
 
 	return flags, nil
 }
@@ -294,6 +300,7 @@ func appendDumpRuntimeOpts(base []dump.Option, flags dumpFlags, seq int, baseDir
 	runOpts = append(runOpts, dump.WithSchemas(schemas))
 	runOpts = append(runOpts, dump.SanitizationOptions(sanitized)...)
 	sanitizationEnabled := sanitized
+	runOpts = append(runOpts, dump.WithDollyVersion(version))
 	runOpts = append(runOpts, dump.WithProvenance(dump.Provenance{
 		Seq:             seq,
 		BaseDir:         baseDir,
@@ -387,6 +394,14 @@ func runDump(args []string) (err error) {
 	}
 
 	schemas, err := resolveEffectiveDumpSchemas(ctx, dsn, flags.SchemasSet, flags.Schemas, profileSchemas, cfg)
+	if err != nil {
+		return err
+	}
+	excludeSchemas, err := resolveEffectiveExcludeDumpSchemas(flags.ExcludeSchemasSet, flags.ExcludeSchemas, cfg)
+	if err != nil {
+		return err
+	}
+	schemas, err = applyDumpSchemaExclusions(schemas, excludeSchemas)
 	if err != nil {
 		return err
 	}
