@@ -100,6 +100,9 @@ func ensureConnectTimeout(dsn string) string {
 }
 
 func (l postgresSchemaLoader) openAndPing(ctx context.Context, dsn string) (*sql.DB, error) {
+	if err := connections.ValidateDSNTLSFiles(dsn); err != nil {
+		return nil, fmt.Errorf("tls files: %s", connections.RedactMessage(err.Error()))
+	}
 	prepared, err := l.prepareDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("configure connection: %s", connections.RedactMessage(err.Error()))
