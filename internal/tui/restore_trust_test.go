@@ -3,7 +3,7 @@ package tui
 import "testing"
 
 func TestRestoreHelpDescribesExplicitTrust(t *testing.T) {
-	for _, flag := range CLICatalog()[1].Flags {
+	for _, flag := range catalogCommand("restore").Flags {
 		if flag.Name == "trust-schema-sql" && flag.Default == "" {
 			return
 		}

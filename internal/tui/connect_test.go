@@ -8,6 +8,16 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
+func TestOpenAndPingRejectsMissingTLSFiles(t *testing.T) {
+	loader := defaultPostgresSchemaLoader()
+	ctx := context.Background()
+	dsn := "postgres://u@h/db?sslmode=verify-full&sslrootcert=/nonexistent/dolly-root.crt"
+	_, err := loader.openAndPing(ctx, dsn)
+	if err == nil || !strings.Contains(err.Error(), "sslrootcert") {
+		t.Fatalf("openAndPing = %v, want sslrootcert error before connect", err)
+	}
+}
+
 func TestConnectionDraftDSN(t *testing.T) {
 	tests := []struct {
 		name string
