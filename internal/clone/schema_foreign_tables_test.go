@@ -8,6 +8,14 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func expectForeignTableMetaRows(mock sqlmock.Sqlmock, rows *sqlmock.Rows) {
+	mock.ExpectQuery(`pg_foreign_table`).WillReturnRows(rows)
+}
+
+func expectForeignTableColumnRows(mock sqlmock.Sqlmock, rows *sqlmock.Rows) {
+	mock.ExpectQuery(`attfdwoptions`).WillReturnRows(rows)
+}
+
 func TestLoadForeignTablesRejectsMissingServer(t *testing.T) {
 	src, mock, err := sqlmock.New()
 	if err != nil {
@@ -15,12 +23,12 @@ func TestLoadForeignTablesRejectsMissingServer(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = src.Close() })
 
-	mock.ExpectQuery(`pg_foreign_table`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value"}).
-			AddRow("app", "remote_data", nil, nil, nil))
-	mock.ExpectQuery(`format_type\(a\.atttypid, a\.atttypmod\)`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "attname", "format_type", "attnotnull"}).
-			AddRow("app", "remote_data", "id", "integer", true))
+	expectForeignTableMetaRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value", "relispartition", "bound", "parent_schema", "parent_name"}).
+			AddRow("app", "remote_data", nil, nil, nil, false, "", "", ""))
+	expectForeignTableColumnRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "sql_type", "nullable", "option_name", "option_value"}).
+			AddRow("app", "remote_data", "id", "integer", true, nil, nil))
 
 	_, err = loadForeignTables(context.Background(), src, []string{"app"})
 	if err == nil {
@@ -41,13 +49,13 @@ func TestLoadForeignTablesPreservesColumnNullability(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = src.Close() })
 
-	mock.ExpectQuery(`pg_foreign_table`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value"}).
-			AddRow("app", "remote_data", "srv", nil, nil))
-	mock.ExpectQuery(`format_type\(a\.atttypid, a\.atttypmod\)`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "attname", "format_type", "nullable"}).
-			AddRow("app", "remote_data", "id", "integer", false).
-			AddRow("app", "remote_data", "note", "text", true))
+	expectForeignTableMetaRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value", "relispartition", "bound", "parent_schema", "parent_name"}).
+			AddRow("app", "remote_data", "srv", nil, nil, false, "", "", ""))
+	expectForeignTableColumnRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "sql_type", "nullable", "option_name", "option_value"}).
+			AddRow("app", "remote_data", "id", "integer", false, nil, nil).
+			AddRow("app", "remote_data", "note", "text", true, nil, nil))
 
 	tables, err := loadForeignTables(context.Background(), src, []string{"app"})
 	if err != nil {
@@ -57,12 +65,109 @@ func TestLoadForeignTablesPreservesColumnNullability(t *testing.T) {
 		t.Fatalf("tables = %+v", tables)
 	}
 	ft := tables[0]
-	got := formatCreateForeignTable(ft.schema, ft.name, ft.server, ft.columns, ft.options)
+	got := formatCreateForeignTable(ft)
 	want := `CREATE FOREIGN TABLE "app"."remote_data" ("id" integer NOT NULL, "note" text) SERVER "srv"`
 	if got != want {
 		t.Fatalf("ddl = %q, want %q", got, want)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadForeignTablesPreservesColumnFDWOptions(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+
+	expectForeignTableMetaRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value", "relispartition", "bound", "parent_schema", "parent_name"}).
+			AddRow("app", "remote_data", "srv", nil, nil, false, "", "", ""))
+	expectForeignTableColumnRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "sql_type", "nullable", "option_name", "option_value"}).
+			AddRow("app", "remote_data", "local_id", "integer", true, "column_name", "remote_id"))
+
+	tables, err := loadForeignTables(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := formatCreateForeignTable(tables[0])
+	want := `CREATE FOREIGN TABLE "app"."remote_data" ("local_id" integer OPTIONS (column_name 'remote_id')) SERVER "srv"`
+	if got != want {
+		t.Fatalf("ddl = %q, want %q", got, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadForeignTablesForeignPartition(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+
+	expectForeignTableMetaRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value", "relispartition", "bound", "parent_schema", "parent_name"}).
+			AddRow("app", "f_part", "srv", nil, nil, true, "FOR VALUES FROM (0) TO (10)", "app", "parent"))
+	expectForeignTableColumnRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "sql_type", "nullable", "option_name", "option_value"}).
+			AddRow("app", "f_part", "id", "integer", true, nil, nil))
+
+	tables, err := loadForeignTables(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := formatCreateForeignTable(tables[0])
+	want := `CREATE FOREIGN TABLE "app"."f_part" ("id" integer) SERVER "srv" PARTITION OF "app"."parent" FOR VALUES FROM (0) TO (10)`
+	if got != want {
+		t.Fatalf("ddl = %q, want %q", got, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadForeignTablesQualifiesUserDefinedColumnType(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+
+	expectForeignTableMetaRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value", "relispartition", "bound", "parent_schema", "parent_name"}).
+			AddRow("app", "remote_data", "srv", nil, nil, false, "", "", ""))
+	expectForeignTableColumnRows(mock,
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "sql_type", "nullable", "option_name", "option_value"}).
+			AddRow("app", "remote_data", "m", `"app"."mood"`, true, nil, nil))
+
+	tables, err := loadForeignTables(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := formatCreateForeignTable(tables[0])
+	if !strings.Contains(got, `"app"."mood"`) {
+		t.Fatalf("ddl = %q, want schema-qualified mood type", got)
+	}
+	if strings.Contains(got, " mood") && !strings.Contains(got, `"app"."mood"`) {
+		t.Fatalf("ddl = %q, must not use bare mood type name", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFormatCreateForeignTableQualifiedUDTType(t *testing.T) {
+	t.Parallel()
+	cols := []foreignTableColumn{
+		{name: "m", sqlType: `"app"."mood"`, nullable: true},
+	}
+	got := formatCreateForeignTableParts("app", "remote_data", "srv", cols, nil, "", "", "")
+	if !strings.Contains(got, `"app"."mood"`) {
+		t.Fatalf("ddl = %q", got)
 	}
 }

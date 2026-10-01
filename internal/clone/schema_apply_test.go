@@ -113,9 +113,9 @@ func expectPublicationCatalog(srcMock sqlmock.Sqlmock) {
 
 func expectForeignTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`pg_foreign_table`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value"}))
-	srcMock.ExpectQuery(`format_type\(a\.atttypid, a\.atttypmod\)`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "attname", "format_type", "attnotnull"}))
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value", "relispartition", "bound", "parent_schema", "parent_name"}))
+	srcMock.ExpectQuery(`attfdwoptions`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "sql_type", "nullable", "option_name", "option_value"}))
 }
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
