@@ -579,3 +579,24 @@ func TestFormatCreateCompositeType(t *testing.T) {
 		t.Fatalf("collated composite: got %q, want %q", gotColl, wantColl)
 	}
 }
+
+func TestFormatCreateForeignTable(t *testing.T) {
+	t.Parallel()
+	cols := []foreignTableColumn{
+		{name: "id", sqlType: "integer", nullable: false},
+		{name: "name", sqlType: "text", nullable: true},
+	}
+	got := formatCreateForeignTable("app", "remote_items", "pg_server", cols, map[string]string{
+		"schema_name": "public",
+		"table_name":  "items",
+	})
+	want := `CREATE FOREIGN TABLE "app"."remote_items" ("id" integer NOT NULL, "name" text) SERVER "pg_server" OPTIONS (schema_name 'public', table_name 'items')`
+	if got != want {
+		t.Fatalf("formatCreateForeignTable() = %q, want %q", got, want)
+	}
+	gotNoOpts := formatCreateForeignTable("app", "plain", "srv", cols, nil)
+	wantNoOpts := `CREATE FOREIGN TABLE "app"."plain" ("id" integer NOT NULL, "name" text) SERVER "srv"`
+	if gotNoOpts != wantNoOpts {
+		t.Fatalf("without options: got %q, want %q", gotNoOpts, wantNoOpts)
+	}
+}

@@ -111,7 +111,15 @@ func expectPublicationCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"pubname", "nspname", "relname", "prqual", "colnames"}))
 }
 
+func expectForeignTableCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`pg_foreign_table`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "srvname", "option_name", "option_value"}))
+	srcMock.ExpectQuery(`format_type\(a\.atttypid, a\.atttypmod\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "format_type", "attnotnull"}))
+}
+
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
+	expectForeignTableCatalog(srcMock)
 	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
 	srcMock.ExpectQuery(`attstorage`).WillReturnRows(
@@ -489,6 +497,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
 	expectClassicInheritCatalog(srcMock)
 
+	expectForeignTableCatalog(srcMock)
 	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
 	srcMock.ExpectQuery(`attstorage`).WillReturnRows(
@@ -586,6 +595,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	}))
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
 	expectClassicInheritCatalog(mock)
+	expectForeignTableCatalog(mock)
 	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}).AddRow("app", "items", "i", "items_code_idx"))
 	mock.ExpectQuery(`attstorage`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "storage"}).AddRow("app", "items", "code", "e"))
 	mock.ExpectQuery(`attcompression`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "compression"}))
