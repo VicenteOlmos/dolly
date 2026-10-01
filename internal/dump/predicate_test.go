@@ -114,6 +114,11 @@ func TestValidateSeeds(t *testing.T) {
 			seeds:   []RowPredicate{{Table: "tbl_a", Column: "id", Op: PredicateEq, Values: []any{1, 2}}},
 			wantErr: "eq requires exactly one",
 		},
+		{
+			name:    "like on integer column",
+			seeds:   []RowPredicate{{Table: "tbl_a", Column: "id", Op: PredicateLike, Value: "1%"}},
+			wantErr: "requires a text column",
+		},
 	}
 
 	for _, tt := range tests {

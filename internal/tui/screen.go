@@ -146,6 +146,7 @@ type DumpDraft struct {
 	NoTransaction       bool
 	SlowConnection      bool
 	RequireSafeKey      bool
+	RequireSafeKeySet   bool
 	Sanitize            bool
 	SanitizeSet         bool
 	PercentText         string

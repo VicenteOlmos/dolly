@@ -9,6 +9,51 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/runopts"
 )
 
+func TestDumpOverridesRequireSafeKeyFromDraft(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.RequireSafeKey = true
+
+	overrides, err := dumpOverridesFromDraft(DumpDraft{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overrides.RequireSafeKeySet {
+		t.Fatal("empty draft must not set RequireSafeKeySet")
+	}
+	opts, err := runopts.BuildDumpOptions(overrides, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dump.InspectRequireSafeKey(opts...) {
+		t.Fatal("expected require_safe_key from config when draft untouched")
+	}
+
+	overrides, err = dumpOverridesFromDraft(DumpDraft{RequireSafeKey: false, RequireSafeKeySet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err = runopts.BuildDumpOptions(overrides, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dump.InspectRequireSafeKey(opts...) {
+		t.Fatal("draft false must override config true")
+	}
+
+	cfg.Dump.RequireSafeKey = false
+	overrides, err = dumpOverridesFromDraft(DumpDraft{RequireSafeKey: true, RequireSafeKeySet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err = runopts.BuildDumpOptions(overrides, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dump.InspectRequireSafeKey(opts...) {
+		t.Fatal("draft true must override config false")
+	}
+}
+
 func TestDumpOverridesFromDraftChunkSize(t *testing.T) {
 	overrides, err := dumpOverridesFromDraft(DumpDraft{ChunkSizeText: "500"})
 	if err != nil {

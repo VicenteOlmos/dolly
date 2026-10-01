@@ -64,6 +64,7 @@ type dumpScreen struct {
 	restoreRunning         *bool
 	hasSession             func() bool
 	sanitizeDefault        func() bool
+	requireSafeKeyDefault  func() bool
 	nav                    SectionNav
 	pathCursor             int
 	modeField              int
@@ -94,20 +95,21 @@ type dumpScreen struct {
 	trustedSchemaSQL       bool
 }
 
-func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool, sanitizeDefault func() bool) ScreenModel {
+func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool, sanitizeDefault func() bool, requireSafeKeyDefault func() bool) ScreenModel {
 	return &dumpScreen{
-		draft:           draft,
-		hasSession:      hasSession,
-		sanitizeDefault: sanitizeDefault,
-		dumpStatus:      dumpStatus,
-		dumpLog:         dumpLog,
-		dumpError:       dumpError,
-		dumpResult:      dumpResult,
-		dumpProgress:    dumpProgress,
-		restoreProgress: restoreProgress,
-		restoreRunning:  restoreRunning,
-		spinnerFrame:    spinnerFrame,
-		nav:             NewSectionNav(dumpSectionCount),
+		draft:                 draft,
+		hasSession:            hasSession,
+		sanitizeDefault:       sanitizeDefault,
+		requireSafeKeyDefault: requireSafeKeyDefault,
+		dumpStatus:            dumpStatus,
+		dumpLog:               dumpLog,
+		dumpError:             dumpError,
+		dumpResult:            dumpResult,
+		dumpProgress:          dumpProgress,
+		restoreProgress:       restoreProgress,
+		restoreRunning:        restoreRunning,
+		spinnerFrame:          spinnerFrame,
+		nav:                   NewSectionNav(dumpSectionCount),
 	}
 }
 
@@ -482,7 +484,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 		}
 	case modeFieldSafe:
 		if k.String() == "k" || k.Code == tea.KeySpace {
-			d.draft.RequireSafeKey = !d.draft.RequireSafeKey
+			d.draft.RequireSafeKey = !d.requireSafeKeyEnabled()
+			d.draft.RequireSafeKeySet = true
 			return true
 		}
 	case modeFieldSanitize:
@@ -535,7 +538,7 @@ func (d *dumpScreen) modeSummary() string {
 	if d.draft.SlowConnection {
 		parts = []string{"slow"}
 	}
-	if d.draft.RequireSafeKey {
+	if d.requireSafeKeyEnabled() {
 		parts = append(parts, "safe-key")
 	}
 	if d.sanitizeEnabled() {
@@ -581,11 +584,29 @@ func (d *dumpScreen) workersLabel() string {
 	return strconv.Itoa(d.draft.Workers)
 }
 
+func (d *dumpScreen) requireSafeKeyEnabled() bool {
+	if d.draft.RequireSafeKeySet {
+		return d.draft.RequireSafeKey
+	}
+	return d.requireSafeKeyDefault != nil && d.requireSafeKeyDefault()
+}
+
 func (d *dumpScreen) sanitizeEnabled() bool {
 	if d.draft.SanitizeSet {
 		return d.draft.Sanitize
 	}
 	return d.sanitizeDefault != nil && d.sanitizeDefault()
+}
+
+func (d *dumpScreen) requireSafeKeyLabel() string {
+	label := "off"
+	if d.requireSafeKeyEnabled() {
+		label = "on"
+	}
+	if !d.draft.RequireSafeKeySet {
+		return label + " (config)"
+	}
+	return label
 }
 
 func (d *dumpScreen) sanitizeLabel() string {
@@ -730,7 +751,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		value string
 	}{
 		{modeFieldSlow, "Slow connection", onOff(d.draft.SlowConnection)},
-		{modeFieldSafe, "Require safe key", onOff(d.draft.RequireSafeKey)},
+		{modeFieldSafe, "Require safe key", d.requireSafeKeyLabel()},
 		{modeFieldSanitize, "Sanitize", d.sanitizeLabel()},
 		{modeFieldWorkers, "Workers", d.workersLabel()},
 		{modeFieldPercent, "Percent", d.modeFieldValue(d.draft.PercentText, d.percentCursor, modeFieldPercent)},

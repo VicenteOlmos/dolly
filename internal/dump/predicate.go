@@ -204,6 +204,9 @@ func ValidateSeeds(seeds []RowPredicate, tables []db.Table) error {
 			if len(p.Values) != 1 {
 				return fmt.Errorf("subset: seed %d: %s requires exactly one value", i, p.Op)
 			}
+			if !isTextishColumnType(col.DataType) {
+				return fmt.Errorf("subset: seed %d: %s requires a text column, got %q", i, p.Op, col.DataType)
+			}
 			if _, ok := p.Values[0].(string); !ok {
 				return fmt.Errorf("subset: seed %d: %s requires a string value", i, p.Op)
 			}
@@ -212,6 +215,15 @@ func ValidateSeeds(seeds []RowPredicate, tables []db.Table) error {
 		}
 	}
 	return nil
+}
+
+func isTextishColumnType(dataType string) bool {
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "text", "varchar", "character", "character varying", "citext", "name":
+		return true
+	default:
+		return false
+	}
 }
 
 func findColumn(t db.Table, name string) (db.Column, bool) {
