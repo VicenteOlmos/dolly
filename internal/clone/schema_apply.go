@@ -394,6 +394,13 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err := applyComments(ctx, tgtDB, objectComments); err != nil {
 		return err
 	}
+	securityLabels, err := loadSecurityLabels(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applySecurityLabels(ctx, tgtDB, securityLabels); err != nil {
+		return err
+	}
 
 	if includePrivileges {
 		grants, err := loadGrants(ctx, srcDB, schemas)

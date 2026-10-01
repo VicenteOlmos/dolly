@@ -1267,7 +1267,45 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		INNER JOIN pg_namespace n ON n.oid = s.stxnamespace
 		WHERE d.classoid = 'pg_statistic_ext'::regclass AND d.objsubid = 0
 		  AND n.nspname IN (%s)
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
+		UNION ALL
+		SELECT 'operator', n.nspname,
+		       o.oprname || '(' || format_type(o.oprleft, NULL) || ', ' || format_type(o.oprright, NULL) || ')',
+		       '', d.description
+		FROM pg_description d
+		INNER JOIN pg_operator o ON o.oid = d.objoid
+		INNER JOIN pg_namespace n ON n.oid = o.oprnamespace
+		WHERE d.classoid = 'pg_operator'::regclass AND d.objsubid = 0
+		  AND n.nspname IN (%s)
+		UNION ALL
+		SELECT 'cast', '',
+		       '(' || format_type(c.castsource, NULL) || ' AS ' || format_type(c.casttarget, NULL) || ')',
+		       '', d.description
+		FROM pg_description d
+		INNER JOIN pg_cast c ON c.oid = d.objoid
+		INNER JOIN pg_type src_t ON src_t.oid = c.castsource
+		INNER JOIN pg_namespace src_ns ON src_ns.oid = src_t.typnamespace
+		INNER JOIN pg_type tgt_t ON tgt_t.oid = c.casttarget
+		INNER JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt_t.typnamespace
+		WHERE d.classoid = 'pg_cast'::regclass AND d.objsubid = 0
+		  AND src_ns.nspname IN (%s)
+		  AND tgt_ns.nspname IN (%s)
+		  AND src_ns.nspname <> 'pg_catalog'
+		  AND tgt_ns.nspname <> 'pg_catalog'
+		UNION ALL
+		SELECT 'publication', '', p.pubname, '', d.description
+		FROM pg_description d
+		INNER JOIN pg_publication p ON p.oid = d.objoid
+		WHERE d.classoid = 'pg_publication'::regclass AND d.objsubid = 0
+		  AND (
+		    p.puballtables
+		    OR EXISTS (
+		      SELECT 1 FROM pg_publication_rel pr
+		      JOIN pg_class c ON c.oid = pr.prrelid
+		      JOIN pg_namespace n ON n.oid = c.relnamespace
+		      WHERE pr.prpubid = p.oid AND n.nspname IN (%s)
+		    )
+		  )
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)
@@ -1293,6 +1331,67 @@ func applyComments(ctx context.Context, tgtDB execer, comments []commentRow) err
 		stmt := formatCommentOn(c.kind, c.schema, c.object, c.column, c.description)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("comment on %s %s.%s: %w", c.kind, c.schema, c.object, err)
+		}
+	}
+	return nil
+}
+
+type securityLabelRow struct {
+	provider string
+	kind     string
+	schema   string
+	object   string
+	column   string
+	label    string
+}
+
+func loadSecurityLabels(ctx context.Context, q *sql.DB, schemas []string) ([]securityLabelRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT sl.provider, 'table', n.nspname, c.relname, '', sl.label
+		FROM pg_seclabel sl
+		INNER JOIN pg_class c ON c.oid = sl.objoid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE sl.classoid = 'pg_class'::regclass AND sl.objsubid = 0
+		  AND c.relkind IN ('r', 'p')
+		  AND n.nspname IN (%s)
+		  AND COALESCE(sl.label, '') <> ''
+		UNION ALL
+		SELECT sl.provider, 'column', n.nspname, c.relname, a.attname, sl.label
+		FROM pg_seclabel sl
+		INNER JOIN pg_class c ON c.oid = sl.objoid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		INNER JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = sl.objsubid
+		WHERE sl.classoid = 'pg_class'::regclass AND sl.objsubid > 0
+		  AND NOT a.attisdropped
+		  AND n.nspname IN (%s)
+		  AND COALESCE(sl.label, '') <> ''
+		ORDER BY 1, 2, 3, 4, 5`, inClause, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list security labels: %w", err)
+	}
+	defer rows.Close()
+
+	var out []securityLabelRow
+	for rows.Next() {
+		var row securityLabelRow
+		if err := rows.Scan(&row.provider, &row.kind, &row.schema, &row.object, &row.column, &row.label); err != nil {
+			return nil, fmt.Errorf("scan security label: %w", err)
+		}
+		if strings.TrimSpace(row.label) == "" {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applySecurityLabels(ctx context.Context, tgtDB execer, labels []securityLabelRow) error {
+	for _, row := range labels {
+		stmt := formatSecurityLabel(row.provider, row.kind, row.schema, row.object, row.column, row.label)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("security label on %s %s.%s: %w", row.kind, row.schema, row.object, err)
 		}
 	}
 	return nil
