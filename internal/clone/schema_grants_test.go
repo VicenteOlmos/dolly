@@ -8,6 +8,159 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func TestReplayTableAndSchemaGrants(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	ctx := context.Background()
+	schemas := []string{"app"}
+
+	mock.ExpectQuery(`relkind IN \('r', 'p', 'v', 'm', 'f'\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "table", "grantee", "privilege", "grantable"}).
+			AddRow("app", "users", "PUBLIC", "SELECT", false).
+			AddRow("app", "users", "reader", "SELECT", false).
+			AddRow("app", "users", "editor", "INSERT", true))
+	mock.ExpectQuery(`aclexplode\(n\.nspacl\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "grantee", "privilege", "grantable"}).
+			AddRow("app", "PUBLIC", "USAGE", false).
+			AddRow("app", "writer", "CREATE", true))
+	grants, err := loadGrants(ctx, src, schemas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyGrants(ctx, rec, grants); err != nil {
+		t.Fatal(err)
+	}
+	script := rec.String()
+	for _, stmt := range []string{
+		`GRANT SELECT ON TABLE "app"."users" TO PUBLIC;`,
+		`GRANT SELECT ON TABLE "app"."users" TO "reader";`,
+		`GRANT INSERT ON TABLE "app"."users" TO "editor" WITH GRANT OPTION;`,
+		`GRANT USAGE ON SCHEMA "app" TO PUBLIC;`,
+		`GRANT CREATE ON SCHEMA "app" TO "writer" WITH GRANT OPTION;`,
+	} {
+		if !strings.Contains(script, stmt) {
+			t.Errorf("missing %s in:\n%s", stmt, script)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplayDefaultPrivileges(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "owner", "objkind", "grantee", "privilege", "grantable", "revoke_public"}).
+			AddRow("app", "owner", "r", "PUBLIC", "SELECT", false, false).
+			AddRow("app", "owner", "S", "reader", "USAGE", true, false).
+			AddRow("app", "owner", "f", "reader", "EXECUTE", false, false).
+			AddRow("app", "owner", "T", "PUBLIC", "USAGE", false, false).
+			AddRow("app", "owner", "r", "reader", "", false, false))
+	rows, err := loadDefaultPrivileges(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyDefaultPrivileges(context.Background(), rec, rows); err != nil {
+		t.Fatal(err)
+	}
+	script := rec.String()
+	for _, stmt := range []string{
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT SELECT ON TABLES TO PUBLIC;`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT USAGE ON SEQUENCES TO "reader" WITH GRANT OPTION;`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT EXECUTE ON FUNCTIONS TO "reader";`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT USAGE ON TYPES TO PUBLIC;`,
+	} {
+		if !strings.Contains(script, stmt) {
+			t.Errorf("missing %s in:\n%s", stmt, script)
+		}
+	}
+	if strings.Count(script, "ALTER DEFAULT PRIVILEGES") != 4 {
+		t.Errorf("expected four default privilege statements, got:\n%s", script)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplayGlobalDefaultPrivilegeRevoke(t *testing.T) {
+	want := `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`
+	got := formatAlterDefaultPrivilege("owner", "", "FUNCTIONS", "EXECUTE", "PUBLIC", true)
+	if got != want {
+		t.Fatalf("formatAlterDefaultPrivilege() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadGlobalDefaultPrivilegeRevoke(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "owner", "objkind", "grantee", "privilege", "grantable", "revoke_public"}).
+			AddRow("", "owner", "f", "", "", false, true))
+	rows, err := loadDefaultPrivileges(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].revoke || rows[0].schema != "" {
+		t.Fatalf("rows = %#v", rows)
+	}
+	rec := &scriptExec{}
+	if err := applyDefaultPrivileges(context.Background(), rec, rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.String(); !strings.Contains(got, `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`) {
+		t.Fatalf("script = %q", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyDefaultPrivilegesRequiresRoleMembership(t *testing.T) {
+	tgt, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tgt.Close() })
+	mock.ExpectQuery(`pg_has_role`).WithArgs("owner").WillReturnRows(
+		sqlmock.NewRows([]string{"member"}).AddRow(false))
+	rows := []defaultPrivilegeRow{{
+		schema: "app", ownerRole: "owner", objKind: "TABLES",
+		privilege: "SELECT", grantee: "PUBLIC",
+	}}
+	err = applyDefaultPrivileges(context.Background(), tgt, rows)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `"owner"`) || !strings.Contains(err.Error(), "member") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDefaultPrivilegeRoleAllowed(t *testing.T) {
+	if err := defaultPrivilegeRoleAllowed("owner", true); err != nil {
+		t.Fatalf("member: %v", err)
+	}
+	err := defaultPrivilegeRoleAllowed("owner", false)
+	if err == nil || !strings.Contains(err.Error(), `"owner"`) {
+		t.Fatalf("non-member: %v", err)
+	}
+}
+
 func TestReplayExtraGrants(t *testing.T) {
 	src, mock, err := sqlmock.New()
 	if err != nil {
@@ -27,7 +180,7 @@ func TestReplayExtraGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`aclexplode\(c\.relacl\)`).WillReturnRows(
+	mock.ExpectQuery(`c\.relkind = 'S'`).WillReturnRows(
 		sqlmock.NewRows([]string{"schema", "sequence", "grantee", "privilege", "grantable"}).
 			AddRow("app", "seq", "PUBLIC", "USAGE", false).
 			AddRow("app", "seq", "reader", "SELECT", false).
