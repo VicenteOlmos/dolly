@@ -17,6 +17,7 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 		NoTransaction:       true,
 		SlowConnection:      true,
 		RequireSafeKey:      true,
+		RequireSafeKeySet:   true,
 		PercentText:         " 25 ",
 		SeedFile:            " seeds.json ",
 		ChunkTables:         "public.orders, public.events",
@@ -32,7 +33,7 @@ func TestDumpOverridesFromDraft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.NoTransaction || !got.SlowConnection || !got.RequireSafeKey || got.Percent != 25 || got.SeedFile != "seeds.json" {
+	if !got.NoTransaction || !got.SlowConnection || !got.RequireSafeKey || !got.RequireSafeKeySet || got.Percent != 25 || got.SeedFile != "seeds.json" {
 		t.Fatalf("overrides = %+v", got)
 	}
 	if !got.WorkersSet || got.Workers != 4 {

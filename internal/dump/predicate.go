@@ -16,6 +16,13 @@ const (
 	PredicateEq     PredicateOp = "eq"
 	PredicateIn     PredicateOp = "in"
 	PredicateIsNull PredicateOp = "is_null"
+	PredicateGt     PredicateOp = "gt"
+	PredicateGte    PredicateOp = "gte"
+	PredicateLt     PredicateOp = "lt"
+	PredicateLte    PredicateOp = "lte"
+	PredicateNe     PredicateOp = "ne"
+	PredicateLike   PredicateOp = "like"
+	PredicateIlike  PredicateOp = "ilike"
 )
 
 // RowPredicate selects rows on one table column.
@@ -186,11 +193,37 @@ func ValidateSeeds(seeds []RowPredicate, tables []db.Table) error {
 			if len(p.Values) != 0 {
 				return fmt.Errorf("subset: seed %d: is_null must not include values", i)
 			}
+		case PredicateGt, PredicateGte, PredicateLt, PredicateLte, PredicateNe:
+			if len(p.Values) != 1 {
+				return fmt.Errorf("subset: seed %d: %s requires exactly one value", i, p.Op)
+			}
+			if err := validateLiteralAgainstType(p.Values[0], col.DataType); err != nil {
+				return fmt.Errorf("subset: seed %d: value type mismatch for column %q: %w", i, p.Column, err)
+			}
+		case PredicateLike, PredicateIlike:
+			if len(p.Values) != 1 {
+				return fmt.Errorf("subset: seed %d: %s requires exactly one value", i, p.Op)
+			}
+			if !isTextishColumnType(col.DataType) {
+				return fmt.Errorf("subset: seed %d: %s requires a text column, got %q", i, p.Op, col.DataType)
+			}
+			if _, ok := p.Values[0].(string); !ok {
+				return fmt.Errorf("subset: seed %d: %s requires a string value", i, p.Op)
+			}
 		default:
 			return fmt.Errorf("subset: seed %d: unsupported operator %q", i, p.Op)
 		}
 	}
 	return nil
+}
+
+func isTextishColumnType(dataType string) bool {
+	switch strings.ToLower(strings.TrimSpace(dataType)) {
+	case "text", "varchar", "character", "character varying", "citext", "name":
+		return true
+	default:
+		return false
+	}
 }
 
 func findColumn(t db.Table, name string) (db.Column, bool) {
@@ -281,6 +314,20 @@ func compilePredicate(p RowPredicate) (compiledWhere, error) {
 		return compiledWhere{sql: fmt.Sprintf("(%s = ANY($1))", col), args: []any{toDriverArrayArg(p.Values)}}, nil
 	case PredicateIsNull:
 		return compiledWhere{sql: fmt.Sprintf("(%s IS NULL)", col), args: nil}, nil
+	case PredicateGt:
+		return compiledWhere{sql: fmt.Sprintf("(%s > $1)", col), args: []any{p.Values[0]}}, nil
+	case PredicateGte:
+		return compiledWhere{sql: fmt.Sprintf("(%s >= $1)", col), args: []any{p.Values[0]}}, nil
+	case PredicateLt:
+		return compiledWhere{sql: fmt.Sprintf("(%s < $1)", col), args: []any{p.Values[0]}}, nil
+	case PredicateLte:
+		return compiledWhere{sql: fmt.Sprintf("(%s <= $1)", col), args: []any{p.Values[0]}}, nil
+	case PredicateNe:
+		return compiledWhere{sql: fmt.Sprintf("(%s <> $1)", col), args: []any{p.Values[0]}}, nil
+	case PredicateLike:
+		return compiledWhere{sql: fmt.Sprintf("(%s LIKE $1)", col), args: []any{p.Values[0]}}, nil
+	case PredicateIlike:
+		return compiledWhere{sql: fmt.Sprintf("(%s ILIKE $1)", col), args: []any{p.Values[0]}}, nil
 	default:
 		return compiledWhere{}, fmt.Errorf("unsupported operator %q", p.Op)
 	}

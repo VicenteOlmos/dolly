@@ -510,7 +510,7 @@ func TestIntegrationDumpMetadataMatchesSchema(t *testing.T) {
 	}
 }
 
-func TestIntegrationDumpChunkTableNoSafeKeyFallsBackToNormalStream(t *testing.T) {
+func TestIntegrationDumpChunkTableNoSafeKeyUsesCTIDResume(t *testing.T) {
 	conn := openIntegrationDB(t)
 	ctx := context.Background()
 	tableName := fmt.Sprintf("chunk_nopk_%d", time.Now().UnixNano())

@@ -240,7 +240,7 @@ dolly dump --dsn "$DB" --output ./dolly_dump \
 
 **Result/artifacts** numbered `{output}/{n}/` with per-table NDJSON, `metadata.json` chunk provenance, transient checkpoint files under the run directory during export, and final metadata published only after completion.
 
-**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key resumes with `ctid` and warns that VACUUM or updates can skip or duplicate rows. `--require-safe-key` refuses that ctid plan. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
+**Constraint/warning** each requested table uses its primary key when present, otherwise an eligible simple or composite `UNIQUE NOT NULL` B-tree key. A table without a safe key resumes with `ctid` and warns that VACUUM or updates can skip or duplicate rows. `--require-safe-key` refuses that ctid plan. Config `dump.require_safe_key` (default `false`) enables the same refusal; the CLI flag overrides when set. Unmatched chunk selectors fail before output. Resume requires the same source, selection, chunk policy, and strategy fingerprint; changed plans fail closed and preserve the interrupted candidate. Rejects `workers > 1` and subset modes (`--percent`, `--seed-file`). `--slow-connection` applies the same per-table planning to every selected table.
 
 ### Shared-snapshot parallel dump
 

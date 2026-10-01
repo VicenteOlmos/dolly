@@ -33,9 +33,11 @@ func buildFKGraph(tables []db.Table) (*fkGraph, error) {
 	for _, t := range tables {
 		for _, fk := range t.ForeignKeys {
 			if _, ok := nameSet[tableKey(fk.ReferencedTableSchema, fk.ReferencedTableName)]; !ok {
+				child := qualifiedName(t.Schema, t.Name)
+				parent := qualifiedName(fk.ReferencedTableSchema, fk.ReferencedTableName)
 				return nil, fmt.Errorf(
-					"foreign key %q on %q references external table %q",
-					fk.ConstraintName, t.Name, fk.ReferencedTableName,
+					"foreign key %q on %s references %s which is outside the dump selection; add it with --include-table",
+					fk.ConstraintName, child, parent,
 				)
 			}
 			edge := fkEdge{

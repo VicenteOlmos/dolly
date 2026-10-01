@@ -143,7 +143,7 @@ Dolly no inspecciona el tamaño de la base de datos ni las condiciones de red, n
 
 `$WORKERS`, `$PERCENT` y `$ROW_CAP` son valores elegidos por el operador; Dolly no los establece automáticamente.
 
-En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, reanuda con `ctid` y advierte que VACUUM o actualizaciones pueden omitir o duplicar filas. `--require-safe-key` rechaza ese plan con `ctid`. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
+En `--chunk-table` y `--slow-connection`, Dolly elige por tabla la PK existente, luego una clave B-tree `UNIQUE NOT NULL` simple o compuesta apta. Si no existe una clave segura, reanuda con `ctid` y advierte que VACUUM o actualizaciones pueden omitir o duplicar filas. `--require-safe-key` rechaza ese plan con `ctid`. La clave de config `dump.require_safe_key` (por defecto `false`) activa el mismo rechazo; el flag de CLI prevalece cuando se indica. La reanudación exige la misma estrategia y huella de clave; los cambios fallan de forma cerrada y preservan los artefactos interrumpidos.
 
 Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para conocer los flags. Más detalle en [Flujos de trabajo y límites habituales](#flujos-de-trabajo-y-límites-habituales) y [Estrategias de clonación](#estrategias-de-clonación).
 

@@ -105,6 +105,8 @@
     "slow_retry_max": 0,
     // Base backoff between slow-connection query retries (default "500ms").
     "slow_retry_base": "500ms",
+    // Refuse ctid resume when a table has no PK or eligible unique key (default false). CLI --require-safe-key overrides when set.
+    "require_safe_key": false,
 
     // Exact source schema names for dump scope. Empty means fallback to public.
     // CLI --schemas overrides saved profile schemas and this list.

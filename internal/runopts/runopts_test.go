@@ -129,6 +129,27 @@ func TestRestoreHistoryOptionsWithOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildDumpOptionsRequireSafeKeyFromConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.RequireSafeKey = true
+	opts, err := BuildDumpOptions(DumpOverrides{}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dump.InspectRequireSafeKey(opts...) {
+		t.Fatal("expected require_safe_key from config")
+	}
+
+	cfg.Dump.RequireSafeKey = true
+	opts, err = BuildDumpOptions(DumpOverrides{RequireSafeKey: false, RequireSafeKeySet: true}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dump.InspectRequireSafeKey(opts...) {
+		t.Fatal("explicit --require-safe-key=false must override config true")
+	}
+}
+
 func TestRestoreHistoryOptionsWorkersOverride(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.DefaultConfig()

@@ -163,6 +163,15 @@ func InspectSlowConnection(opts ...Option) bool {
 	return c.slowConnection
 }
 
+// InspectRequireSafeKey reports whether opts refuse ctid resume for tables without a safe key.
+func InspectRequireSafeKey(opts ...Option) bool {
+	var c config
+	for _, o := range opts {
+		o(&c)
+	}
+	return c.requireSafeKey
+}
+
 // InspectWithoutTransaction reports whether opts skip the read-only transaction wrapper.
 func InspectWithoutTransaction(opts ...Option) bool {
 	var c config
@@ -612,6 +621,7 @@ func copyStrategyRecords(records []TableStrategyRecord) []TableStrategyRecord {
 			Strategy:    rec.Strategy,
 			Resumable:   rec.Resumable,
 			Fingerprint: rec.Fingerprint,
+			KeyFallback: rec.KeyFallback,
 		}
 		if len(rec.KeyColumns) > 0 {
 			out[i].KeyColumns = append([]string(nil), rec.KeyColumns...)

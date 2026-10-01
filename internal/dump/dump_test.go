@@ -1814,6 +1814,12 @@ func assertStrategyRecords(t *testing.T, got []TableStrategyRecord, wantTables [
 			if len(got[i].KeyColumns) == 0 || got[i].Fingerprint == "" {
 				t.Fatalf("record[%d] missing key identity: %+v", i, got[i])
 			}
+			if wantStrategies[i] == KeyStrategyCTID && got[i].KeyFallback != KeyFallbackNoSafeKey {
+				t.Fatalf("record[%d].key_fallback = %q, want %q", i, got[i].KeyFallback, KeyFallbackNoSafeKey)
+			}
+			if wantStrategies[i] != KeyStrategyCTID && got[i].KeyFallback != "" {
+				t.Fatalf("record[%d] unexpected key_fallback: %+v", i, got[i])
+			}
 		} else if len(got[i].KeyColumns) != 0 || got[i].Fingerprint != "" {
 			t.Fatalf("record[%d] should omit key identity: %+v", i, got[i])
 		}

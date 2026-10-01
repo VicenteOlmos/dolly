@@ -157,6 +157,7 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		NoTransaction:     draft.NoTransaction,
 		SlowConnection:    draft.SlowConnection,
 		RequireSafeKey:    draft.RequireSafeKey,
+		RequireSafeKeySet: draft.RequireSafeKeySet,
 		Percent:           percent,
 		SeedFile:          strings.TrimSpace(draft.SeedFile),
 		ChunkTables:       splitChunkTables(draft.ChunkTables),

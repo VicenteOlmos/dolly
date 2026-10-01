@@ -87,14 +87,37 @@ func TestValidateSeeds(t *testing.T) {
 			wantErr: "unknown column",
 		},
 		{
+			name: "valid like",
+			seeds: []RowPredicate{
+				{Table: "tbl_a", Column: "name", Op: PredicateLike, Value: "x%"},
+			},
+		},
+		{
+			name: "valid ilike",
+			seeds: []RowPredicate{
+				{Table: "tbl_a", Column: "name", Op: PredicateIlike, Value: "x%"},
+			},
+		},
+		{
+			name: "valid gt",
+			seeds: []RowPredicate{
+				{Table: "tbl_a", Column: "id", Op: PredicateGt, Value: 1},
+			},
+		},
+		{
 			name:    "unsupported op",
-			seeds:   []RowPredicate{{Table: "tbl_a", Column: "name", Op: "like", Value: "x"}},
+			seeds:   []RowPredicate{{Table: "tbl_a", Column: "name", Op: "contains", Value: "x"}},
 			wantErr: "unsupported operator",
 		},
 		{
 			name:    "eq wrong arity",
 			seeds:   []RowPredicate{{Table: "tbl_a", Column: "id", Op: PredicateEq, Values: []any{1, 2}}},
 			wantErr: "eq requires exactly one",
+		},
+		{
+			name:    "like on integer column",
+			seeds:   []RowPredicate{{Table: "tbl_a", Column: "id", Op: PredicateLike, Value: "1%"}},
+			wantErr: "requires a text column",
 		},
 	}
 
@@ -394,6 +417,18 @@ func TestCompilePredicateUsesBoundArgs(t *testing.T) {
 			pred:     RowPredicate{Column: "nickname", Op: PredicateIsNull},
 			wantSQL:  `("nickname" IS NULL)`,
 			wantArgs: 0,
+		},
+		{
+			name:     "like bound",
+			pred:     RowPredicate{Column: "name", Op: PredicateLike, Values: []any{"%x%"}},
+			wantSQL:  `("name" LIKE $1)`,
+			wantArgs: 1,
+		},
+		{
+			name:     "ne bound",
+			pred:     RowPredicate{Column: "id", Op: PredicateNe, Values: []any{7}},
+			wantSQL:  `("id" <> $1)`,
+			wantArgs: 1,
 		},
 	}
 
