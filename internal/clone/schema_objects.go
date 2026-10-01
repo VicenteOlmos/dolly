@@ -1939,7 +1939,9 @@ func loadPolicies(ctx context.Context, q *sql.DB, schemas []string) ([]struct {
 		       COALESCE(pg_get_expr(pol.polqual, pol.polrelid), ''),
 		       COALESCE(pg_get_expr(pol.polwithcheck, pol.polrelid), ''),
 		       COALESCE(array_to_string(ARRAY(
-		         SELECT rolname FROM pg_roles r WHERE r.oid = ANY (pol.polroles)
+		         SELECT CASE WHEN role_oid = 0 THEN 'PUBLIC' ELSE r.rolname END
+		         FROM unnest(pol.polroles) AS role_oid
+		         LEFT JOIN pg_roles r ON r.oid = role_oid AND role_oid <> 0
 		       ), ','), '')
 		FROM pg_policy pol
 		INNER JOIN pg_class c ON c.oid = pol.polrelid

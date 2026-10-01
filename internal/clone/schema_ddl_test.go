@@ -549,15 +549,37 @@ func TestFormatEnableRLSAndPolicy(t *testing.T) {
 	if !strings.Contains(rls, "ENABLE ROW LEVEL SECURITY") {
 		t.Fatalf("rls stmt: %q", rls)
 	}
-	pol := formatCreatePolicy("app", "users", policyDef{
+	permissive := formatCreatePolicy("app", "users", policyDef{
 		name:       "tenant_isolation",
 		command:    "ALL",
 		roles:      []string{"app_user"},
 		using:      "tenant_id = current_setting('app.tenant_id')::int",
 		permissive: true,
 	})
-	if !strings.Contains(pol, `CREATE POLICY "tenant_isolation"`) || !strings.Contains(pol, "USING (") {
-		t.Fatalf("policy stmt: %q", pol)
+	wantPermissive := `CREATE POLICY "tenant_isolation" ON "app"."users" AS PERMISSIVE FOR ALL TO "app_user" USING (tenant_id = current_setting('app.tenant_id')::int)`
+	if permissive != wantPermissive {
+		t.Fatalf("permissive policy = %q, want %q", permissive, wantPermissive)
+	}
+	restrictive := formatCreatePolicy("app", "users", policyDef{
+		name:        "block_all",
+		command:     "ALL",
+		permissive:  false,
+		using:       "false",
+	})
+	wantRestrictive := `CREATE POLICY "block_all" ON "app"."users" AS RESTRICTIVE FOR ALL USING (false)`
+	if restrictive != wantRestrictive {
+		t.Fatalf("restrictive policy = %q, want %q", restrictive, wantRestrictive)
+	}
+	publicPol := formatCreatePolicy("app", "items", policyDef{
+		name:       "public_read",
+		command:    "SELECT",
+		roles:      []string{"PUBLIC", "app_reader"},
+		using:      "true",
+		permissive: true,
+	})
+	wantPublic := `CREATE POLICY "public_read" ON "app"."items" AS PERMISSIVE FOR SELECT TO PUBLIC, "app_reader" USING (true)`
+	if publicPol != wantPublic {
+		t.Fatalf("public policy = %q, want %q", publicPol, wantPublic)
 	}
 }
 
