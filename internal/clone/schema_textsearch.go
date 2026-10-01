@@ -81,7 +81,7 @@ func loadTextSearchConfigurations(ctx context.Context, q *sql.DB, schemas []stri
 		       pn.nspname, p.prsname
 		FROM pg_ts_config c
 		JOIN pg_namespace n ON n.oid = c.cfgnamespace
-		JOIN pg_parser p ON p.oid = c.cfgparser
+		JOIN pg_ts_parser p ON p.oid = c.cfgparser
 		JOIN pg_namespace pn ON pn.oid = p.prsnamespace
 		WHERE n.nspname IN (%s)
 		  AND n.nspname <> 'pg_catalog'
@@ -121,7 +121,7 @@ func loadTextSearchMappings(ctx context.Context, q *sql.DB, schemas []string) ([
 		FROM pg_ts_config_map m
 		JOIN pg_ts_config c ON c.oid = m.mapcfg
 		JOIN pg_namespace cn ON cn.oid = c.cfgnamespace
-		JOIN pg_ts_token_type tt ON tt.tokentype = m.maptokentype AND tt.prsparser = c.cfgparser
+		JOIN LATERAL pg_catalog.ts_token_type(c.cfgparser) tt ON tt.tokid = m.maptokentype
 		LEFT JOIN pg_ts_dict d ON d.oid = m.mapdict AND m.mapdict <> 0
 		LEFT JOIN pg_namespace dn ON dn.oid = d.dictnamespace
 		WHERE cn.nspname IN (%s)
