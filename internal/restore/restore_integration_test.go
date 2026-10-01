@@ -1318,10 +1318,16 @@ func TestIntegrationParallelRestoreRetryRetainsCommittedManifest(t *testing.T) {
 		t.Fatal("integration DSN did not resolve a restore target")
 	}
 	manifestPath := filepath.Join(dir, "parallel-retry-state.json")
+	labels := []string{
+		"public.dolly_par_restore_parent",
+		"public.dolly_par_restore_child",
+		"public.dolly_par_restore_grandchild",
+	}
 	if err := WritePartialStateManifest(manifestPath, PartialStateManifest{
-		Target:    target,
-		Committed: []string{"public.dolly_par_restore_parent"},
-		Pending:   []string{"public.dolly_par_restore_child", "public.dolly_par_restore_grandchild"},
+		Target:              target,
+		TableSetFingerprint: partialStateTableSetFingerprint(labels),
+		Committed:           []string{"public.dolly_par_restore_parent"},
+		Pending:             []string{"public.dolly_par_restore_child", "public.dolly_par_restore_grandchild"},
 	}); err != nil {
 		t.Fatal(err)
 	}
