@@ -668,7 +668,6 @@ func loadReplicaIdentities(ctx context.Context, q *sql.DB, schemas []string) ([]
 		LEFT JOIN pg_index ix ON ix.indrelid = c.oid AND ix.indisreplident
 		LEFT JOIN pg_class idx_class ON idx_class.oid = ix.indexrelid
 		WHERE c.relkind IN ('r', 'p')
-		  AND NOT c.relispartition
 		  AND c.relreplident <> 'd'
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname`, inClause)
@@ -1141,7 +1140,9 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		WHERE d.classoid = 'pg_constraint'::regclass AND d.objsubid = 0
 		  AND ((con.contype = 'u' AND con.conparentid = 0)
 		    OR (con.contype = 'c' AND con.coninhcount = 0)
-		    OR (con.contype = 'f' AND con.conparentid = 0))
+		    OR (con.contype = 'f' AND con.conparentid = 0)
+		    OR (con.contype = 'p' AND con.conparentid = 0)
+		    OR (con.contype = 'x' AND con.conparentid = 0))
 		  AND n.nspname IN (%s)
 		UNION ALL
 		SELECT 'domain_constraint', n.nspname, t.typname, con.conname, d.description

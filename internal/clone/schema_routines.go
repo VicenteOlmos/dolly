@@ -280,6 +280,12 @@ func loadTriggers(ctx context.Context, q *sql.DB, schemas []string) ([]string, e
 		JOIN pg_class c ON c.oid = t.tgrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE NOT t.tgisinternal
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    WHERE d.classid = 'pg_trigger'::regclass
+		      AND d.objid = t.oid
+		      AND d.deptype = 'e'
+		  )
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, t.tgname`, inClause)
 	return loadEnabledDefs(ctx, q, query, args, "triggers", "TRIGGER")
@@ -293,6 +299,12 @@ func loadRules(ctx context.Context, q *sql.DB, schemas []string) ([]string, erro
 		JOIN pg_class c ON c.oid = r.ev_class
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE r.rulename <> '_RETURN'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    WHERE d.classid = 'pg_rewrite'::regclass
+		      AND d.objid = r.oid
+		      AND d.deptype = 'e'
+		  )
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, r.rulename`, inClause)
 	return loadEnabledDefs(ctx, q, query, args, "rules", "RULE")
