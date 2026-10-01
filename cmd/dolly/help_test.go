@@ -92,7 +92,7 @@ func TestPrintDumpUsage(t *testing.T) {
 
 func TestPrintRestoreUsage(t *testing.T) {
 	out := captureStderr(printRestoreUsage)
-	for _, sub := range []string{"--dsn", "--connection", "--input", "--on-conflict", "--replace", "--no-transaction", "advanced", "--trust-schema-sql", "--yes", "default is atomic", "IF NOT EXISTS"} {
+	for _, sub := range []string{"--dsn", "--connection", "--input", "--schemas", "--on-conflict", "--replace", "--no-transaction", "advanced", "--trust-schema-sql", "--yes", "default is atomic", "IF NOT EXISTS"} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("restore usage missing %q:\n%s", sub, out)
 		}
@@ -101,7 +101,7 @@ func TestPrintRestoreUsage(t *testing.T) {
 
 func TestPrintCloneUsage(t *testing.T) {
 	out := captureStderr(printCloneUsage)
-	for _, sub := range []string{"--ff", "--strategy", "--connection", "--schemas", "clone.schemas", "sanitization.enabled", "config.jsonc"} {
+	for _, sub := range []string{"--ff", "--strategy", "--connection", "--schemas", "--replace", "--on-conflict", "--skip-create", "--dump-dir", "clone.schemas", "sanitization.enabled", "config.jsonc"} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("clone usage missing %q:\n%s", sub, out)
 		}
