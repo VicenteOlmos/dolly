@@ -58,12 +58,12 @@ func TestReplayDefaultPrivileges(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = src.Close() })
 	mock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
-		sqlmock.NewRows([]string{"schema", "owner", "objkind", "grantee", "privilege", "grantable"}).
-			AddRow("app", "owner", "r", "PUBLIC", "SELECT", false).
-			AddRow("app", "owner", "S", "reader", "USAGE", true).
-			AddRow("app", "owner", "f", "reader", "EXECUTE", false).
-			AddRow("app", "owner", "T", "PUBLIC", "USAGE", false).
-			AddRow("app", "owner", "r", "reader", "", false))
+		sqlmock.NewRows([]string{"schema", "owner", "objkind", "grantee", "privilege", "grantable", "revoke_public"}).
+			AddRow("app", "owner", "r", "PUBLIC", "SELECT", false, false).
+			AddRow("app", "owner", "S", "reader", "USAGE", true, false).
+			AddRow("app", "owner", "f", "reader", "EXECUTE", false, false).
+			AddRow("app", "owner", "T", "PUBLIC", "USAGE", false, false).
+			AddRow("app", "owner", "r", "reader", "", false, false))
 	rows, err := loadDefaultPrivileges(context.Background(), src, []string{"app"})
 	if err != nil {
 		t.Fatal(err)
@@ -91,35 +91,73 @@ func TestReplayDefaultPrivileges(t *testing.T) {
 	}
 }
 
-func TestReplayIndexGrants(t *testing.T) {
+func TestReplayGlobalDefaultPrivilegeRevoke(t *testing.T) {
+	want := `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`
+	got := formatAlterDefaultPrivilege("owner", "", "FUNCTIONS", "EXECUTE", "PUBLIC", true)
+	if got != want {
+		t.Fatalf("formatAlterDefaultPrivilege() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadGlobalDefaultPrivilegeRevoke(t *testing.T) {
 	src, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = src.Close() })
-	mock.ExpectQuery(`c\.relkind = 'i'`).WillReturnRows(
-		sqlmock.NewRows([]string{"schema", "index", "grantee", "privilege", "grantable"}).
-			AddRow("app", "users_pkey", "PUBLIC", "SELECT", false).
-			AddRow("app", "users_email_idx", "reader", "SELECT", true))
-	grants, err := loadIndexGrants(context.Background(), src, []string{"app"})
+	mock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "owner", "objkind", "grantee", "privilege", "grantable", "revoke_public"}).
+			AddRow("", "owner", "f", "", "", false, true))
+	rows, err := loadDefaultPrivileges(context.Background(), src, []string{"app"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(rows) != 1 || !rows[0].revoke || rows[0].schema != "" {
+		t.Fatalf("rows = %#v", rows)
+	}
 	rec := &scriptExec{}
-	if err := applyIndexGrants(context.Background(), rec, grants); err != nil {
+	if err := applyDefaultPrivileges(context.Background(), rec, rows); err != nil {
 		t.Fatal(err)
 	}
-	script := rec.String()
-	for _, stmt := range []string{
-		`GRANT SELECT ON INDEX "app"."users_pkey" TO PUBLIC;`,
-		`GRANT SELECT ON INDEX "app"."users_email_idx" TO "reader" WITH GRANT OPTION;`,
-	} {
-		if !strings.Contains(script, stmt) {
-			t.Errorf("missing %s in:\n%s", stmt, script)
-		}
+	if got := rec.String(); !strings.Contains(got, `ALTER DEFAULT PRIVILEGES FOR ROLE "owner" REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`) {
+		t.Fatalf("script = %q", got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestApplyDefaultPrivilegesRequiresRoleMembership(t *testing.T) {
+	tgt, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tgt.Close() })
+	mock.ExpectQuery(`pg_has_role`).WithArgs("owner").WillReturnRows(
+		sqlmock.NewRows([]string{"member"}).AddRow(false))
+	rows := []defaultPrivilegeRow{{
+		schema: "app", ownerRole: "owner", objKind: "TABLES",
+		privilege: "SELECT", grantee: "PUBLIC",
+	}}
+	err = applyDefaultPrivileges(context.Background(), tgt, rows)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `"owner"`) || !strings.Contains(err.Error(), "member") {
+		t.Fatalf("error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDefaultPrivilegeRoleAllowed(t *testing.T) {
+	if err := defaultPrivilegeRoleAllowed("owner", true); err != nil {
+		t.Fatalf("member: %v", err)
+	}
+	err := defaultPrivilegeRoleAllowed("owner", false)
+	if err == nil || !strings.Contains(err.Error(), `"owner"`) {
+		t.Fatalf("non-member: %v", err)
 	}
 }
 

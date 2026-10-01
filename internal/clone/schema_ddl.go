@@ -547,24 +547,27 @@ func formatGrantSchema(privileges, schema, grantee string) string {
 	)
 }
 
-// formatGrantIndex emits GRANT privileges ON INDEX.
-func formatGrantIndex(privileges, schema, index, grantee string) string {
+// formatAlterDefaultPrivilege emits ALTER DEFAULT PRIVILEGES ... GRANT/REVOKE ... ON objKind.
+// When schema is empty the statement is global (no IN SCHEMA).
+func formatAlterDefaultPrivilege(ownerRole, schema, objKind, privilege, grantee string, revoke bool) string {
+	action := "GRANT"
+	dir := "TO"
+	if revoke {
+		action = "REVOKE"
+		dir = "FROM"
+	}
+	scope := ""
+	if schema != "" {
+		scope = " IN SCHEMA " + quoteIdentifier(schema)
+	}
 	return fmt.Sprintf(
-		"GRANT %s ON INDEX %s TO %s",
-		privileges,
-		quoteQualifiedTable(schema, index),
-		quoteGrantee(grantee),
-	)
-}
-
-// formatAlterDefaultPrivilege emits ALTER DEFAULT PRIVILEGES ... GRANT ... ON objKind.
-func formatAlterDefaultPrivilege(ownerRole, schema, objKind, privilege, grantee string) string {
-	return fmt.Sprintf(
-		"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT %s ON %s TO %s",
+		"ALTER DEFAULT PRIVILEGES FOR ROLE %s%s %s %s ON %s %s %s",
 		quoteIdentifier(ownerRole),
-		quoteIdentifier(schema),
+		scope,
+		action,
 		privilege,
 		objKind,
+		dir,
 		quoteGrantee(grantee),
 	)
 }

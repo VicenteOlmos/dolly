@@ -126,9 +126,7 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`acldefault\('T', t\.typowner\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "grantee", "grantable"}))
 	srcMock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "owner", "defaclobjtype", "grantee", "privilege_type", "grantable"}))
-	srcMock.ExpectQuery(`c\.relkind = 'i'`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
+		sqlmock.NewRows([]string{"nspname", "owner", "defaclobjtype", "grantee", "privilege_type", "grantable", "revoke_public"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
@@ -492,9 +490,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	srcMock.ExpectQuery(`acldefault\('T', t\.typowner\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "grantee", "grantable"}))
 	srcMock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "owner", "defaclobjtype", "grantee", "privilege_type", "grantable"}))
-	srcMock.ExpectQuery(`c\.relkind = 'i'`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
+		sqlmock.NewRows([]string{"nspname", "owner", "defaclobjtype", "grantee", "privilege_type", "grantable", "revoke_public"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(

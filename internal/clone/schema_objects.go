@@ -1679,41 +1679,70 @@ type defaultPrivilegeRow struct {
 	privilege string
 	grantee   string
 	grantable bool
+	revoke    bool
 }
 
 func loadDefaultPrivileges(ctx context.Context, q *sql.DB, schemas []string) ([]defaultPrivilegeRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT n.nspname, owner.rolname, d.defaclobjtype,
+		SELECT COALESCE(n.nspname, ''), owner.rolname, d.defaclobjtype,
 		       COALESCE(grantee_role.rolname, 'PUBLIC'),
-		       priv.privilege_type, priv.is_grantable
+		       COALESCE(priv.privilege_type, ''), COALESCE(priv.is_grantable, false),
+		       CASE d.defaclobjtype
+		         WHEN 'f' THEN NOT EXISTS (
+		           SELECT 1 FROM aclexplode(COALESCE(d.defaclacl, acldefault('f', d.defaclrole))) acl
+		           WHERE acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')
+		         WHEN 'T' THEN NOT EXISTS (
+		           SELECT 1 FROM aclexplode(COALESCE(d.defaclacl, acldefault('T', d.defaclrole))) acl
+		           WHERE acl.grantee = 0 AND acl.privilege_type = 'USAGE')
+		         ELSE false
+		       END
 		FROM pg_default_acl d
-		JOIN pg_namespace n ON n.oid = d.defaclnamespace
+		LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
 		JOIN pg_roles owner ON owner.oid = d.defaclrole
-		CROSS JOIN LATERAL aclexplode(d.defaclacl) priv
+		LEFT JOIN LATERAL aclexplode(d.defaclacl) priv ON true
 		LEFT JOIN pg_roles grantee_role ON grantee_role.oid = priv.grantee
 		WHERE d.defaclacl IS NOT NULL
-		  AND n.nspname IN (%s)
-		ORDER BY n.nspname, owner.rolname, d.defaclobjtype, 4`, inClause)
+		  AND (d.defaclnamespace = 0 OR n.nspname IN (%s))
+		ORDER BY (d.defaclnamespace <> 0), 1, owner.rolname, d.defaclobjtype, 4`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list default privileges: %w", err)
 	}
 	defer rows.Close()
 
+	type revokeKey struct {
+		schema, ownerRole, objKind string
+	}
+	seenRevoke := make(map[revokeKey]bool)
 	var out []defaultPrivilegeRow
 	for rows.Next() {
 		var schema, ownerRole, objCode, grantee, priv string
-		var grantable bool
-		if err := rows.Scan(&schema, &ownerRole, &objCode, &grantee, &priv, &grantable); err != nil {
+		var grantable, revokePublic bool
+		if err := rows.Scan(&schema, &ownerRole, &objCode, &grantee, &priv, &grantable, &revokePublic); err != nil {
 			return nil, fmt.Errorf("scan default privilege: %w", err)
-		}
-		priv = strings.TrimSpace(priv)
-		if priv == "" {
-			continue
 		}
 		objKind, ok := defaultPrivilegeObjectKind(objCode)
 		if !ok {
+			continue
+		}
+		rkey := revokeKey{schema: schema, ownerRole: ownerRole, objKind: objKind}
+		if revokePublic && !seenRevoke[rkey] {
+			seenRevoke[rkey] = true
+			revokePriv, ok := defaultPrivilegeRevokeFromPublic(objCode)
+			if ok {
+				out = append(out, defaultPrivilegeRow{
+					schema:    schema,
+					ownerRole: ownerRole,
+					objKind:   objKind,
+					privilege: revokePriv,
+					grantee:   "PUBLIC",
+					revoke:    true,
+				})
+			}
+		}
+		priv = strings.TrimSpace(priv)
+		if priv == "" {
 			continue
 		}
 		out = append(out, defaultPrivilegeRow{
@@ -1726,6 +1755,17 @@ func loadDefaultPrivileges(ctx context.Context, q *sql.DB, schemas []string) ([]
 		})
 	}
 	return out, rows.Err()
+}
+
+func defaultPrivilegeRevokeFromPublic(objCode string) (string, bool) {
+	switch objCode {
+	case "f":
+		return "EXECUTE", true
+	case "T":
+		return "USAGE", true
+	default:
+		return "", false
+	}
 }
 
 func defaultPrivilegeObjectKind(code string) (string, bool) {
@@ -1743,87 +1783,47 @@ func defaultPrivilegeObjectKind(code string) (string, bool) {
 	}
 }
 
+type defaultPrivRoleChecker interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func defaultPrivilegeRoleAllowed(ownerRole string, member bool) error {
+	if member {
+		return nil
+	}
+	return fmt.Errorf(
+		"cannot replay ALTER DEFAULT PRIVILEGES FOR ROLE %s: restore role must be a member of that role",
+		quoteIdentifier(ownerRole),
+	)
+}
+
+func ensureDefaultPrivilegeRole(ctx context.Context, q defaultPrivRoleChecker, ownerRole string) error {
+	var member bool
+	if err := q.QueryRowContext(ctx, `SELECT pg_has_role(current_user, $1, 'MEMBER')`, ownerRole).Scan(&member); err != nil {
+		return fmt.Errorf("check membership for default privilege role %s: %w", ownerRole, err)
+	}
+	return defaultPrivilegeRoleAllowed(ownerRole, member)
+}
+
 func applyDefaultPrivileges(ctx context.Context, tgtDB execer, rows []defaultPrivilegeRow) error {
+	checker, canCheck := tgtDB.(defaultPrivRoleChecker)
+	checkedOwners := make(map[string]bool)
 	for _, g := range rows {
-		stmt := formatAlterDefaultPrivilege(g.ownerRole, g.schema, g.objKind, g.privilege, g.grantee)
-		if g.grantable {
+		if canCheck && !checkedOwners[g.ownerRole] {
+			checkedOwners[g.ownerRole] = true
+			if err := ensureDefaultPrivilegeRole(ctx, checker, g.ownerRole); err != nil {
+				return err
+			}
+		}
+		stmt := formatAlterDefaultPrivilege(g.ownerRole, g.schema, g.objKind, g.privilege, g.grantee, g.revoke)
+		if !g.revoke && g.grantable {
 			stmt += " WITH GRANT OPTION"
 		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			if g.schema == "" {
+				return fmt.Errorf("default privilege for role %s: %w", g.ownerRole, err)
+			}
 			return fmt.Errorf("default privilege in schema %s: %w", g.schema, err)
-		}
-	}
-	return nil
-}
-
-type indexGrantRow struct {
-	schema     string
-	index      string
-	grantee    string
-	privileges []string
-	grantable  bool
-}
-
-func loadIndexGrants(ctx context.Context, q *sql.DB, schemas []string) ([]indexGrantRow, error) {
-	inClause, args := schemaINClause(schemas)
-	query := fmt.Sprintf(`
-		SELECT n.nspname, c.relname, COALESCE(r.rolname, 'PUBLIC'), priv.privilege_type, priv.is_grantable
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		CROSS JOIN LATERAL aclexplode(c.relacl) priv
-		LEFT JOIN pg_roles r ON r.oid = priv.grantee
-		WHERE c.relkind = 'i'
-		  AND n.nspname IN (%s)
-		ORDER BY n.nspname, c.relname, 3`, inClause)
-	rows, err := q.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list index grants: %w", err)
-	}
-	defer rows.Close()
-
-	type key struct {
-		schema, index, grantee string
-		grantable              bool
-	}
-	byKey := make(map[key][]string)
-	var order []key
-	for rows.Next() {
-		var schema, index, grantee, priv string
-		var grantable bool
-		if err := rows.Scan(&schema, &index, &grantee, &priv, &grantable); err != nil {
-			return nil, fmt.Errorf("scan index grant: %w", err)
-		}
-		k := key{schema: schema, index: index, grantee: grantee, grantable: grantable}
-		if _, ok := byKey[k]; !ok {
-			order = append(order, k)
-		}
-		byKey[k] = append(byKey[k], strings.ToUpper(priv))
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list index grants: %w", err)
-	}
-	var out []indexGrantRow
-	for _, k := range order {
-		out = append(out, indexGrantRow{
-			schema:     k.schema,
-			index:      k.index,
-			grantee:    k.grantee,
-			privileges: byKey[k],
-			grantable:  k.grantable,
-		})
-	}
-	return out, nil
-}
-
-func applyIndexGrants(ctx context.Context, tgtDB execer, grants []indexGrantRow) error {
-	for _, g := range grants {
-		privs := strings.Join(g.privileges, ", ")
-		stmt := formatGrantIndex(privs, g.schema, g.index, g.grantee)
-		if g.grantable {
-			stmt += " WITH GRANT OPTION"
-		}
-		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("grant on index %s.%s: %w", g.schema, g.index, err)
 		}
 	}
 	return nil
