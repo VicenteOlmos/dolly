@@ -28,7 +28,6 @@ type publicationTable struct {
 
 func loadPublications(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
-	pubArgs := append(append([]any{}, args...), args...)
 
 	pubQuery := fmt.Sprintf(`
 		SELECT DISTINCT p.pubname, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate,
@@ -47,7 +46,7 @@ func loadPublications(ctx context.Context, q *sql.DB, schemas []string) ([]strin
 		     WHERE pn.pnpubid = p.oid AND n.nspname IN (%s)
 		   )
 		ORDER BY p.pubname`, inClause, inClause)
-	pubRows, err := q.QueryContext(ctx, pubQuery, pubArgs...)
+	pubRows, err := q.QueryContext(ctx, pubQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list publications: %w", err)
 	}
