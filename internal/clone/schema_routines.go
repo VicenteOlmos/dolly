@@ -82,7 +82,7 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), a.aggkind, p.proparallel,
+		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), a.aggkind, a.aggnumdirectargs, p.proparallel,
 		       format_type(a.aggtranstype, NULL),
 		       sn.nspname, sp.proname, a.aggtransspace,
 		       COALESCE(fn.nspname, ''), COALESCE(fp.proname, ''), a.aggfinalextra,
@@ -128,7 +128,7 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 		var spec aggregateSpec
 		var initVal, minit sql.NullString
 		if err := rows.Scan(
-			&spec.schema, &spec.name, &spec.args, &spec.aggkind, &spec.parallel,
+			&spec.schema, &spec.name, &spec.args, &spec.aggkind, &spec.aggNumDirect, &spec.parallel,
 			&spec.stype,
 			&spec.sfuncSchema, &spec.sfunc, &spec.sspace,
 			&spec.finalSchema, &spec.final, &spec.finalExtra,
@@ -155,6 +155,7 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 
 type aggregateSpec struct {
 	schema, name, args, aggkind, parallel, stype string
+	aggNumDirect                                 int
 	sfuncSchema, sfunc                           string
 	sspace                                       int
 	finalSchema, final                           string
@@ -218,9 +219,43 @@ func formatAggregate(a aggregateSpec) string {
 	}
 	sig := a.args
 	if a.aggkind == "o" {
-		sig = "ORDER BY " + a.args
+		sig = formatOrderedAggregateSignature(a.args, a.aggNumDirect)
 	}
 	return fmt.Sprintf("CREATE AGGREGATE %s(%s) (%s)", quoteQualifiedTable(a.schema, a.name), sig, strings.Join(clauses, ", "))
+}
+
+func splitFunctionIdentityArguments(args string) []string {
+	if args == "" {
+		return nil
+	}
+	var out []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(args[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	out = append(out, strings.TrimSpace(args[start:]))
+	return out
+}
+
+func formatOrderedAggregateSignature(args string, numDirect int) string {
+	types := splitFunctionIdentityArguments(args)
+	if numDirect <= 0 || numDirect >= len(types) {
+		return "ORDER BY " + args
+	}
+	direct := strings.Join(types[:numDirect], ", ")
+	ordered := strings.Join(types[numDirect:], ", ")
+	return direct + " ORDER BY " + ordered
 }
 
 func loadRoutineDeps(ctx context.Context, q *sql.DB, schemas []string) ([]depEdge, error) {

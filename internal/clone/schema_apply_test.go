@@ -90,6 +90,15 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 		WillReturnRows(allFKDefs)
 }
 
+func expectPublicationCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`FROM pg_publication p`).WillReturnRows(
+		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "puballtables", "pubviaroot"}))
+	srcMock.ExpectQuery(`pg_publication_namespace`).WillReturnRows(
+		sqlmock.NewRows([]string{"pubname", "nspname"}))
+	srcMock.ExpectQuery(`pg_publication_rel`).WillReturnRows(
+		sqlmock.NewRows([]string{"pubname", "nspname", "relname", "prqual", "colnames"}))
+}
+
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
@@ -101,8 +110,7 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
-	srcMock.ExpectQuery(`FROM pg_publication`).WillReturnRows(
-		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "nspname", "relname"}))
+	expectPublicationCatalog(srcMock)
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
@@ -464,8 +472,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
-	srcMock.ExpectQuery(`FROM pg_publication`).WillReturnRows(
-		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "nspname", "relname"}))
+	expectPublicationCatalog(srcMock)
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
@@ -548,8 +555,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`attcompression`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "compression"}))
 	mock.ExpectQuery(`pg_options_to_table`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "option_value"}))
 	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}).AddRow("app", "items", "items_code_idx", `CREATE UNIQUE INDEX "items_code_idx" ON "app"."items" (code)`, false))
-	mock.ExpectQuery(`FROM pg_publication`).WillReturnRows(
-		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "nspname", "relname"}))
+	expectPublicationCatalog(mock)
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
 	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized", "populated", "options"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true, true, "fillfactor=70"))
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
@@ -846,11 +852,12 @@ func TestLoadAggregatesRejectsHypothetical(t *testing.T) {
 
 func TestFormatAggregateOrderedSet(t *testing.T) {
 	got := formatAggregate(aggregateSpec{
-		schema: "public", name: "percentile_cont", args: "double precision",
-		aggkind: "o", stype: "float8", sfuncSchema: "pg_catalog", sfunc: "float8_accum",
+		schema: "public", name: "percentile_cont", args: "double precision, double precision",
+		aggkind: "o", aggNumDirect: 1, stype: "float8", sfuncSchema: "pg_catalog", sfunc: "float8_accum",
 		parallel: "u",
 	})
-	if !strings.Contains(got, "(ORDER BY double precision)") {
+	want := `CREATE AGGREGATE "public"."percentile_cont"(double precision ORDER BY double precision) (SFUNC = "pg_catalog"."float8_accum", STYPE = float8, PARALLEL = UNSAFE)`
+	if got != want {
 		t.Fatalf("got %s", got)
 	}
 }
@@ -863,7 +870,36 @@ func TestFormatCreatePublication(t *testing.T) {
 			{schema: "app", name: "events"},
 		},
 	})
-	want := `CREATE PUBLICATION "events_pub" FOR TABLE ONLY "app"."users", ONLY "app"."events" WITH (publish = 'insert, delete, truncate')`
+	want := `CREATE PUBLICATION "events_pub" FOR ONLY "app"."users", ONLY "app"."events" WITH (publish = 'insert, delete, truncate')`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestFormatCreatePublicationFilteredTable(t *testing.T) {
+	got := formatCreatePublication(publicationSpec{
+		name: "filtered_pub", insert: true, update: true, delete: true, truncate: true,
+		tables: []publicationTable{
+			{schema: "app", name: "events", columns: []string{"id", "name"}, qual: "id > 0"},
+		},
+	})
+	want := `CREATE PUBLICATION "filtered_pub" FOR ONLY "app"."events" ("id", "name") WHERE (id > 0)`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestFormatCreatePublicationSchemaAndAllTables(t *testing.T) {
+	got := formatCreatePublication(publicationSpec{
+		name: "mixed_pub", insert: true, update: true, delete: true, truncate: true,
+		allTables:               true,
+		publishViaPartitionRoot: true,
+		schemas:                 []string{"billing"},
+		tables: []publicationTable{
+			{schema: "app", name: "users"},
+		},
+	})
+	want := `CREATE PUBLICATION "mixed_pub" FOR ALL TABLES, TABLES IN SCHEMA "billing", ONLY "app"."users" WITH (publish_via_partition_root = true)`
 	if got != want {
 		t.Fatalf("got %s", got)
 	}
