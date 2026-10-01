@@ -403,9 +403,9 @@ func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
 		CREATE SCHEMA app;
 		CREATE TYPE app.span;
 		CREATE FUNCTION app.span_canonical(r app.span) RETURNS app.span
-			LANGUAGE plpgsql IMMUTABLE AS $$ BEGIN RETURN r; END $$;
+			LANGUAGE sql IMMUTABLE AS 'SELECT $1';
 		CREATE FUNCTION app.span_diff(x integer, y integer) RETURNS double precision
-			LANGUAGE sql IMMUTABLE AS $$ SELECT (y - x)::float8 $$;
+			LANGUAGE sql IMMUTABLE AS 'SELECT ($2 - $1)::float8';
 		CREATE TYPE app.span AS RANGE (
 			SUBTYPE = integer,
 			CANONICAL = app.span_canonical,
