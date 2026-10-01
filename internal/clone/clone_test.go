@@ -406,8 +406,8 @@ func TestRunPreflightFailureSkipsExecute(t *testing.T) {
 	baseDir := t.TempDir()
 
 	origPF := preflightFunc
-	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) error {
-		return &PreflightError{
+	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) ([]string, error) {
+		return nil, &PreflightError{
 			Kind:     PreflightPermission,
 			Strategy: strat.Name(),
 			Role:     "app_user",
@@ -451,11 +451,9 @@ func TestRunSkipsCreate(t *testing.T) {
 	sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
 	defer func() { sqlOpenDB = origOpen }()
 
-	expectPreflightSchemaReplay(mock, struct {
-		sourceDB, cloneName   string
-		skipCreate, crossInst bool
-		sourceVer, targetVer  int
-	}{sourceDB: "db_src", cloneName: "db_clone", skipCreate: true})
+	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
+		sourceDB: "db_src", cloneName: "db_clone", skipCreate: true,
+	})
 
 	origDump := dumpFunc
 	dumpFunc = func(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...dump.Option) error {
@@ -512,11 +510,9 @@ func TestRunRewritesCustomTargetURLToCloneName(t *testing.T) {
 	}
 	defer func() { sqlOpenDB = origOpen }()
 
-	expectPreflightSchemaReplay(mock, struct {
-		sourceDB, cloneName   string
-		skipCreate, crossInst bool
-		sourceVer, targetVer  int
-	}{sourceDB: "db_src", cloneName: "db_clone", skipCreate: true, crossInst: true})
+	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
+		sourceDB: "db_src", cloneName: "db_clone", skipCreate: true, crossInst: true,
+	})
 
 	origDump := dumpFunc
 	dumpFunc = func(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...dump.Option) error {
@@ -626,11 +622,9 @@ func TestRunCreatesTempChildUnderDumpDir(t *testing.T) {
 	sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
 	defer func() { sqlOpenDB = origOpen }()
 
-	expectPreflightSchemaReplay(mock, struct {
-		sourceDB, cloneName   string
-		skipCreate, crossInst bool
-		sourceVer, targetVer  int
-	}{sourceDB: "db_src", cloneName: "db_clone", skipCreate: true})
+	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
+		sourceDB: "db_src", cloneName: "db_clone", skipCreate: true,
+	})
 
 	origDump := dumpFunc
 	dumpFunc = func(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...dump.Option) error {
@@ -688,9 +682,9 @@ func TestRunMaxOpenConnsSequentialRestore(t *testing.T) {
 
 	origPF := preflightFunc
 	seen := 0
-	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) error {
+	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) ([]string, error) {
 		seen = MaxOpenConns
-		return errors.New("stop after preflight")
+		return nil, errors.New("stop after preflight")
 	}
 	defer func() { preflightFunc = origPF }()
 
@@ -721,10 +715,10 @@ func TestRunMaxOpenConnsConcurrentIsolation(t *testing.T) {
 
 	start := make(chan struct{})
 	observed := make(chan int, 16)
-	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) error {
+	preflightFunc = func(ctx context.Context, opts Options, strat Strategy) ([]string, error) {
 		observed <- MaxOpenConns
 		<-start
-		return errors.New("stop after preflight")
+		return nil, errors.New("stop after preflight")
 	}
 
 	const workers = 8
