@@ -49,3 +49,25 @@ func IsNoDataFilesError(err error) bool {
 	var noData *NoDataFilesError
 	return errors.As(err, &noData)
 }
+
+// ErrEmptyTableSet marks restore attempts whose table exclusions leave nothing to load.
+var ErrEmptyTableSet = errors.New("empty table set")
+
+// EmptyTableSetError reports restore exclusions that remove every dump table.
+type EmptyTableSetError struct {
+	InputDir string
+}
+
+func (e *EmptyTableSetError) Error() string {
+	return "restore table set is empty after exclusions"
+}
+
+func (e *EmptyTableSetError) Is(target error) bool {
+	return target == ErrEmptyTableSet
+}
+
+// IsEmptyTableSetError reports whether err is an empty post-exclusion table set.
+func IsEmptyTableSetError(err error) bool {
+	var empty *EmptyTableSetError
+	return errors.As(err, &empty)
+}
