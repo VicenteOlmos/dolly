@@ -1,6 +1,7 @@
 package runopts
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
@@ -49,7 +50,9 @@ func TestRestoreHistoryOptionsUseRestoreSection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Restore.Workers = 2
 
-	opts, err := RestoreHistoryOptions(cfg, dir, []string{"public"}, false, "postgres://localhost/db")
+	opts, err := RestoreHistoryOptionsWithOverrides(cfg, dir, []string{"public"}, false, "postgres://localhost/db", RestoreHistoryUserOverrides{
+		AckPartialState: true,
+	})
 	if err != nil {
 		t.Fatalf("RestoreHistoryOptions: %v", err)
 	}
@@ -132,8 +135,9 @@ func TestRestoreHistoryOptionsWorkersOverride(t *testing.T) {
 	cfg.Restore.Workers = 1
 
 	opts, err := RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
-		Workers:    4,
-		WorkersSet: true,
+		Workers:         4,
+		WorkersSet:      true,
+		AckPartialState: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -150,5 +154,17 @@ func TestRestoreHistoryOptionsWorkersOverride(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected parallel restore with replace to fail")
+	}
+}
+
+func TestRestoreHistoryOptionsWorkersRequireAck(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.DefaultConfig()
+	_, err := RestoreHistoryOptionsWithOverrides(cfg, dir, nil, false, "", RestoreHistoryUserOverrides{
+		Workers:    2,
+		WorkersSet: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ack-partial-state") {
+		t.Fatalf("err = %v, want ack requirement", err)
 	}
 }

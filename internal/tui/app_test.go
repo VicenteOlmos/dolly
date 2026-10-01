@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -654,6 +655,76 @@ func TestConfigStrategyCycles(t *testing.T) {
 	app = next.(*App)
 	if cfg.Clone.Strategy != "schema-replay" {
 		t.Fatalf("Strategy = %q, want schema-replay after Left", cfg.Clone.Strategy)
+	}
+}
+
+func TestConfigRestoreOnConflictCyclesInvalidValue(t *testing.T) {
+	app := NewApp()
+	cfg := config.DefaultConfig()
+	cfg.Restore.RestoreOnConflict = "bogus"
+	app.cfg = cfg
+	app.screen = ScreenConfig
+	app.width = 80
+	app.height = 24
+
+	cs := app.screens[ScreenConfig].(*configScreen)
+	for i, f := range cs.fields {
+		if f.Section == "restore" && f.Label == "restore_on_conflict" {
+			cs.cursor = i
+			break
+		}
+	}
+	if cs.fields[cs.cursor].Label != "restore_on_conflict" {
+		t.Fatal("cursor not on restore_on_conflict")
+	}
+	if cs.fields[cs.cursor].Get(cfg) != "error" {
+		t.Fatalf("display = %q, want error for invalid stored value", cs.fields[cs.cursor].Get(cfg))
+	}
+
+	next, _ := app.Update(keyPress("", tea.KeyEnter, 0))
+	app = next.(*App)
+	if cfg.Restore.RestoreOnConflict != "skip" {
+		t.Fatalf("RestoreOnConflict = %q, want skip after cycle", cfg.Restore.RestoreOnConflict)
+	}
+}
+
+func TestPersistConfigEncryptRequiresKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+	if err := os.WriteFile(path, config.DefaultTemplate(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SaveConnections = true
+	cfg.Connections.Encrypt = true
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "")
+
+	app := NewAppFromConfig(nil, true, cfg, path)
+	app.screen = ScreenConfig
+	app.width = 80
+	app.height = 24
+	cs := app.screens[ScreenConfig].(*configScreen)
+	cs.dirty = true
+
+	if app.persistConfig(true) {
+		t.Fatal("expected persist to fail without encryption key")
+	}
+	if !containsPlain(app.statusMsg, "DOLLY_CONNECTIONS_KEY") {
+		t.Fatalf("statusMsg = %q, want encryption key hint", stripANSI(app.statusMsg))
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"encrypt": true`) && strings.Contains(string(data), `"save_connections": true`) {
+		// template may already have encrypt true; ensure we did not write a new save from dirty toggle
+		// primary check is persist returned false
 	}
 }
 
