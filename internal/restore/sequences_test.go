@@ -46,7 +46,7 @@ func TestRestoreSequencesFromMetadataRestoresOwnedSequence(t *testing.T) {
 	expectSequenceOwner(mock, "public", "users", "id")
 	expectSequenceCurrentValueLess(mock)
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 5, false\)`).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -70,7 +70,7 @@ func TestRestoreSequencesFromMetadataAcceptsOmittedPartitionParent(t *testing.T)
 	expectSequenceOwner(mock, "public", "events", "id")
 	expectSequenceCurrentValueLess(mock)
 	mock.ExpectExec(`SELECT setval\('"public"\."events_id_seq"'::regclass, 5, false\)`).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -92,7 +92,7 @@ func TestRestoreSequencesFromMetadataRejectsUnrelatedOwnerWhenParentsOmitted(t *
 		Provenance: &dump.Provenance{OmittedPartitionParents: []string{"public.events"}},
 	}
 	expectSequenceOwner(mock, "private", "secrets", "id")
-	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil)
+	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "not owned by a restored column") {
 		t.Fatalf("err = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestRestoreSequencesFromMetadataRejectsUnownedMetadata(t *testing.T) {
 	defer sqlDB.Close()
 	meta := sequenceMetadata("public", "users", "id", "other_seq")
 	expectSequenceOwner(mock, "private", "secrets", "id")
-	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil)
+	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "not owned by a restored column") {
 		t.Fatalf("err = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRestoreSequencesFromMetadataSkipsStandaloneSequence(t *testing.T) {
 	defer sqlDB.Close()
 	meta := sequenceMetadata("public", "users", "id", "other_seq")
 	mock.ExpectQuery(`SELECT tbl_ns.nspname, tbl.relname, a.attname`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column"}))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -146,7 +146,7 @@ func TestRestoreSequencesFromMetadataContinuesPastStandaloneSequence(t *testing.
 	expectSequenceOwner(mock, "public", "users", "id")
 	expectSequenceCurrentValueLess(mock)
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 5, false\)`).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -165,7 +165,7 @@ func TestRestoreSequencesFromMetadataScopesSchemas(t *testing.T) {
 	expectSequenceOwner(mock, "public", "users", "id")
 	expectSequenceCurrentValueLess(mock)
 	mock.ExpectExec(`SELECT setval`).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, []string{"public"}, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, []string{"public"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -190,7 +190,7 @@ func TestRestoreSequencesFromMetadataMonotonicSkipsHigherTarget(t *testing.T) {
 	mock.ExpectQuery(`SELECT last_value, is_called`).
 		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(100, true))
 	// No setval expected — the monotonic check should skip it.
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -215,7 +215,7 @@ func TestRestoreSequencesFromMetadataMonotonicAppliesLowerTarget(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(10, true))
 	mock.ExpectExec(`SELECT setval\('"public"\."users_id_seq"'::regclass, 50, true\)`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -241,7 +241,7 @@ func TestRestoreSequencesFromMetadataMonotonicSkipsHigherTargetNotCalled(t *test
 	mock.ExpectQuery(`SELECT last_value, is_called`).
 		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(100, false))
 	// No setval Exec expected — the monotonic guard must skip it.
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -263,7 +263,7 @@ func TestRestoreSequencesFromMetadataMonotonicReadErrorFailsClosed(t *testing.T)
 	expectSequenceOwner(mock, "public", "users", "id")
 	mock.ExpectQuery(`SELECT last_value, is_called`).
 		WillReturnError(context.DeadlineExceeded)
-	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil)
+	err = RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -328,7 +328,7 @@ func TestRestoreSequencesAppliesOptionsBeforeSetval(t *testing.T) {
 	mock.ExpectExec(`ALTER SEQUENCE "public"\."users_id_seq" AS integer INCREMENT BY 2 NO CYCLE`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT setval`).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -352,7 +352,7 @@ func TestRestoreSequencesAppliesOptionsWhenSetvalSkipped(t *testing.T) {
 	expectSequenceDefinition(mock, "bigint", 1, 1, 1000, 1, false)
 	mock.ExpectExec(`^ALTER SEQUENCE "public"\."users_id_seq" INCREMENT BY 4$`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -375,7 +375,7 @@ func TestRestoreSequencesSkipsAlterWhenDefinitionMatches(t *testing.T) {
 	expectSequenceCurrentValueLess(mock)
 	expectSequenceDefinition(mock, "integer", 2, 1, 1000, 1, false)
 	mock.ExpectExec(`SELECT setval`).WillReturnResult(sqlmock.NewResult(1, 1))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -392,7 +392,7 @@ func TestRestoreSequencesRejectsUnsafeDataType(t *testing.T) {
 	for _, bad := range []string{"integer; SELECT pg_sleep(10); --", "bigint; DROP TABLE t; --", "text"} {
 		meta := sequenceMetadata("public", "users", "id", "users_id_seq")
 		meta.Sequences[0].DataType = bad
-		err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil)
+		err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "data_type") {
 			t.Fatalf("data_type %q: err = %v", bad, err)
 		}
@@ -422,7 +422,7 @@ func TestRestoreSequencesOmitsBoundsThatExcludeAdvancedValue(t *testing.T) {
 	expectSequenceDefinition(mock, "integer", 1, 1, 1000000, 1, false)
 	mock.ExpectExec(`^ALTER SEQUENCE "public"\."users_id_seq" AS bigint INCREMENT BY 4$`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil); err != nil {
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

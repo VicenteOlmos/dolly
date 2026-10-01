@@ -219,7 +219,7 @@ func TestRunParallelRestore_levelOrderingAndWorkerCap(t *testing.T) {
 		active.Add(-1)
 		return nil
 	}
-	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool) error { return nil }
+	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool, []db.Table) error { return nil }
 	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error { return nil }
 	defer func() {
 		parallelLoadTableCopy = orig
@@ -351,7 +351,7 @@ func TestRunParallelRestore_sequenceGatingAndManifestRetention(t *testing.T) {
 	origLoad := parallelLoadTableCopy
 	origSeq := parallelRestoreSequences
 	parallelLoadTableCopy = func(context.Context, string, db.Table, string) error { return nil }
-	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool) error {
+	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool, []db.Table) error {
 		return errors.New("setval denied")
 	}
 	defer func() {
@@ -418,7 +418,7 @@ func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
 		loaded = append(loaded, qualifiedLabel(table.Schema, table.Name))
 		return errors.New("copy posts failed")
 	}
-	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool) error {
+	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool, []db.Table) error {
 		seqRestoreCalled.Store(true)
 		t.Fatal("sequence restore must not run after retry failure")
 		return nil
@@ -612,7 +612,7 @@ func TestRunParallelRestore_dottedIdentifiers(t *testing.T) {
 		loaded = append(loaded, qualifiedLabel(table.Schema, table.Name))
 		return nil
 	}
-	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool) error { return nil }
+	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string, map[string]bool, []db.Table) error { return nil }
 	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error { return nil }
 	defer func() {
 		parallelLoadTableCopy = orig

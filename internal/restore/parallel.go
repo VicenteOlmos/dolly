@@ -312,7 +312,7 @@ func runParallelRestore(
 	}
 
 	seqQ := execQuerier(dbConn)
-	if err := parallelRestoreSequences(ctx, seqQ, meta, schemaFilter, cfg.excludedTableKeys); err != nil {
+	if err := parallelRestoreSequences(ctx, seqQ, meta, schemaFilter, cfg.excludedTableKeys, cfg.allDumpTables); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
 	if err := parallelSyncSequences(ctx, seqQ, meta.Tables); err != nil {

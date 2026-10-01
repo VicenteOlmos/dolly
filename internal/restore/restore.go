@@ -36,6 +36,7 @@ type config struct {
 	schemas            []string
 	excludeTables      []string
 	excludedTableKeys  map[string]bool
+	allDumpTables      []db.Table
 	onProgress         func(ProgressEvent)
 	dsn                string // pgx connection string for COPY path
 	schemaSQL          bool   // auto-apply schema.sql when target tables missing
@@ -236,6 +237,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	if len(meta.Tables) == 0 {
 		return &EmptyDumpError{InputDir: inputDir}
 	}
+	cfg.allDumpTables = append([]db.Table(nil), meta.Tables...)
 	filtered, excluded, excludedKeys, err := ApplyRestoreTableExclusions(meta.Tables, cfg.excludeTables)
 	if err != nil {
 		return err
@@ -395,7 +397,7 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	if tx != nil {
 		seqQ = tx
 	}
-	if err := RestoreSequencesFromMetadata(ctx, seqQ, meta, schemaFilter, cfg.excludedTableKeys); err != nil {
+	if err := RestoreSequencesFromMetadata(ctx, seqQ, meta, schemaFilter, cfg.excludedTableKeys, cfg.allDumpTables); err != nil {
 		return fmt.Errorf("restore sequences: %w", err)
 	}
 	if err := SyncSequencesToData(ctx, seqQ, meta.Tables); err != nil {

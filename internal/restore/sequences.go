@@ -43,10 +43,16 @@ func schemaSet(schemas []string) map[string]bool {
 // RestoreSequencesFromMetadata reads sequence state from dump metadata and
 // applies setval on the target database. This prevents serial/identity
 // collisions after a standalone restore. When schemas is non-empty, only
-// sequences in those schemas are restored.
-func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.Metadata, schemas []string, excludedTables map[string]bool) error {
+// sequences in those schemas are restored. allDumpTables is the full table
+// list from metadata before restore exclusions; pass nil to use meta.Tables.
+func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.Metadata, schemas []string, excludedTables map[string]bool, allDumpTables []db.Table) error {
 	if len(meta.Sequences) == 0 {
 		return nil
+	}
+
+	dumpTables := allDumpTables
+	if len(dumpTables) == 0 {
+		dumpTables = meta.Tables
 	}
 
 	schemaFilter := schemaSet(schemas)
@@ -65,6 +71,9 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 		}
 		if err := validateSequenceDataType(seq.DataType); err != nil {
 			return fmt.Errorf("sequence %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+		if ownerKey, ok := sequenceOwnerTableKeyFromMetadata(seq, dumpTables); ok && excludedTables != nil && excludedTables[ownerKey] {
+			continue
 		}
 		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns, restoredTables, excludedTables, omittedParents)
 		if err != nil {
@@ -125,14 +134,33 @@ func omittedPartitionParentSet(meta dump.Metadata) map[string]bool {
 	return set
 }
 
+// sequenceOwnerTableKeyFromMetadata maps a dump sequence to its owning table
+// using PostgreSQL's default serial/identity sequence naming.
+func sequenceOwnerTableKeyFromMetadata(seq dump.SequenceState, tables []db.Table) (string, bool) {
+	for _, tbl := range tables {
+		if tbl.Schema != seq.Schema {
+			continue
+		}
+		for _, col := range tbl.Columns {
+			if seq.Name == tbl.Name+"_"+col.Name+"_seq" {
+				return tableKey(tbl.Schema, tbl.Name), true
+			}
+		}
+	}
+	return "", false
+}
+
 func validateSequenceOwnership(ctx context.Context, q execQuerier, seq dump.SequenceState, restoredColumns, restoredTables, excludedTables, omittedParents map[string]bool) (bool, error) {
 	rows, err := q.QueryContext(ctx, fmt.Sprintf(`SELECT tbl_ns.nspname, tbl.relname, a.attname
 		FROM pg_class seq
+		JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
 		JOIN pg_depend dep ON dep.objid = seq.oid AND dep.deptype IN ('a', 'i')
 		JOIN pg_class tbl ON tbl.oid = dep.refobjid
 		JOIN pg_namespace tbl_ns ON tbl_ns.oid = tbl.relnamespace
 		JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum = dep.refobjsubid AND NOT a.attisdropped
-		WHERE seq.oid = %s::regclass`, quoteLiteral(quoteQualifiedTable(seq.Schema, seq.Name))))
+		WHERE seq.relkind = 'S'
+		  AND seq_ns.nspname = %s AND seq.relname = %s`,
+		quoteLiteral(seq.Schema), quoteLiteral(seq.Name)))
 	if err != nil {
 		return false, fmt.Errorf("validate sequence ownership %s.%s: %w", seq.Schema, seq.Name, err)
 	}
