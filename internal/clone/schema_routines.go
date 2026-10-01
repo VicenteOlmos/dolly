@@ -68,25 +68,21 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 		FROM pg_aggregate a
 		JOIN pg_proc p ON p.oid = a.aggfnoid
 		JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE n.nspname IN (%s) AND a.aggkind <> 'n'
+		WHERE n.nspname IN (%s) AND a.aggkind = 'h'
 		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
 		ORDER BY n.nspname, p.proname
 		LIMIT 1`, inClause)
 	var name, kind string
 	switch err := q.QueryRowContext(ctx, unsupported, args...).Scan(&name, &kind); err {
 	case nil:
-		label := "ordered-set"
-		if kind == "h" {
-			label = "hypothetical"
-		}
-		return nil, fmt.Errorf("catalog schema replay does not support %s aggregate %s; install pg_dump to clone this schema", label, name)
+		return nil, fmt.Errorf("catalog schema replay does not support hypothetical aggregate %s; install pg_dump to clone this schema", name)
 	case sql.ErrNoRows:
 	default:
 		return nil, fmt.Errorf("list aggregates: %w", err)
 	}
 
 	query := fmt.Sprintf(`
-		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), p.proparallel,
+		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), a.aggkind, a.aggnumdirectargs, p.proparallel,
 		       format_type(a.aggtranstype, NULL),
 		       sn.nspname, sp.proname, a.aggtransspace,
 		       COALESCE(fn.nspname, ''), COALESCE(fp.proname, ''), a.aggfinalextra,
@@ -119,7 +115,7 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 		LEFT JOIN pg_namespace invn ON invn.oid = invp.pronamespace
 		LEFT JOIN pg_proc mfp ON a.aggmfinalfn <> 0 AND mfp.oid = a.aggmfinalfn
 		LEFT JOIN pg_namespace mfn ON mfn.oid = mfp.pronamespace
-		WHERE n.nspname IN (%s) AND a.aggkind = 'n'
+		WHERE n.nspname IN (%s) AND a.aggkind IN ('n', 'o')
 		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
 		ORDER BY n.nspname, p.proname, p.oid`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -132,7 +128,7 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 		var spec aggregateSpec
 		var initVal, minit sql.NullString
 		if err := rows.Scan(
-			&spec.schema, &spec.name, &spec.args, &spec.parallel,
+			&spec.schema, &spec.name, &spec.args, &spec.aggkind, &spec.aggNumDirect, &spec.parallel,
 			&spec.stype,
 			&spec.sfuncSchema, &spec.sfunc, &spec.sspace,
 			&spec.finalSchema, &spec.final, &spec.finalExtra,
@@ -158,20 +154,21 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 }
 
 type aggregateSpec struct {
-	schema, name, args, parallel, stype    string
-	sfuncSchema, sfunc                     string
-	sspace                                 int
-	finalSchema, final                     string
-	finalExtra                             bool
-	combineSchema, combine                 string
-	serialSchema, serial                   string
-	deserialSchema, deserial               string
-	initVal                                sql.NullString
-	msfuncSchema, msfunc, mstype           string
-	msspace                                int
-	minit                                  sql.NullString
-	minvSchema, minv, mfinalSchema, mfinal string
-	mfinalExtra                            bool
+	schema, name, args, aggkind, parallel, stype string
+	aggNumDirect                                 int
+	sfuncSchema, sfunc                           string
+	sspace                                       int
+	finalSchema, final                           string
+	finalExtra                                   bool
+	combineSchema, combine                       string
+	serialSchema, serial                         string
+	deserialSchema, deserial                     string
+	initVal                                      sql.NullString
+	msfuncSchema, msfunc, mstype                 string
+	msspace                                      int
+	minit                                        sql.NullString
+	minvSchema, minv, mfinalSchema, mfinal       string
+	mfinalExtra                                  bool
 }
 
 func formatAggregate(a aggregateSpec) string {
@@ -220,7 +217,45 @@ func formatAggregate(a aggregateSpec) string {
 	default:
 		clauses = append(clauses, "PARALLEL = UNSAFE")
 	}
-	return fmt.Sprintf("CREATE AGGREGATE %s(%s) (%s)", quoteQualifiedTable(a.schema, a.name), a.args, strings.Join(clauses, ", "))
+	sig := a.args
+	if a.aggkind == "o" {
+		sig = formatOrderedAggregateSignature(a.args, a.aggNumDirect)
+	}
+	return fmt.Sprintf("CREATE AGGREGATE %s(%s) (%s)", quoteQualifiedTable(a.schema, a.name), sig, strings.Join(clauses, ", "))
+}
+
+func splitFunctionIdentityArguments(args string) []string {
+	if args == "" {
+		return nil
+	}
+	var out []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				out = append(out, strings.TrimSpace(args[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	out = append(out, strings.TrimSpace(args[start:]))
+	return out
+}
+
+func formatOrderedAggregateSignature(args string, numDirect int) string {
+	types := splitFunctionIdentityArguments(args)
+	if numDirect <= 0 || numDirect >= len(types) {
+		return "ORDER BY " + args
+	}
+	direct := strings.Join(types[:numDirect], ", ")
+	ordered := strings.Join(types[numDirect:], ", ")
+	return direct + " ORDER BY " + ordered
 }
 
 func loadRoutineDeps(ctx context.Context, q *sql.DB, schemas []string) ([]depEdge, error) {

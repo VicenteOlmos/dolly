@@ -906,6 +906,7 @@ type viewRow struct {
 	name         string
 	definition   string
 	materialized bool
+	populated    bool
 	options      string
 }
 
@@ -913,6 +914,7 @@ func loadViews(ctx context.Context, q *sql.DB, schemas []string) ([]viewRow, err
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
 		SELECT n.nspname, c.relname, pg_get_viewdef(c.oid, true), c.relkind = 'm',
+		       CASE WHEN c.relkind = 'm' THEN c.relispopulated ELSE true END,
 		       COALESCE(array_to_string(c.reloptions, ','), '')
 		FROM pg_class c
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -928,7 +930,7 @@ func loadViews(ctx context.Context, q *sql.DB, schemas []string) ([]viewRow, err
 	var out []viewRow
 	for rows.Next() {
 		var v viewRow
-		if err := rows.Scan(&v.schema, &v.name, &v.definition, &v.materialized, &v.options); err != nil {
+		if err := rows.Scan(&v.schema, &v.name, &v.definition, &v.materialized, &v.populated, &v.options); err != nil {
 			return nil, fmt.Errorf("scan view: %w", err)
 		}
 		out = append(out, v)
@@ -943,7 +945,7 @@ func applyViews(ctx context.Context, tgtDB execer, views []viewRow) error {
 	for pass := 0; pass < maxPasses && len(pending) > 0; pass++ {
 		var remaining []viewRow
 		for _, v := range pending {
-			stmt := formatCreateView(v.schema, v.name, v.definition, v.materialized)
+			stmt := formatCreateView(v.schema, v.name, v.definition, v.materialized, v.populated)
 			if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 				remaining = append(remaining, v)
 				continue
@@ -951,14 +953,20 @@ func applyViews(ctx context.Context, tgtDB execer, views []viewRow) error {
 			if err := applyViewOptions(ctx, tgtDB, v); err != nil {
 				return err
 			}
+			if err := refreshMaterializedViewIfPopulated(ctx, tgtDB, v); err != nil {
+				return err
+			}
 		}
 		if len(remaining) == len(pending) {
 			v := pending[0]
-			stmt := formatCreateView(v.schema, v.name, v.definition, v.materialized)
+			stmt := formatCreateView(v.schema, v.name, v.definition, v.materialized, v.populated)
 			if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 				return fmt.Errorf("create view %s.%s: %w", v.schema, v.name, err)
 			}
 			if err := applyViewOptions(ctx, tgtDB, v); err != nil {
+				return err
+			}
+			if err := refreshMaterializedViewIfPopulated(ctx, tgtDB, v); err != nil {
 				return err
 			}
 			remaining = pending[1:]
@@ -968,6 +976,17 @@ func applyViews(ctx context.Context, tgtDB execer, views []viewRow) error {
 	if len(pending) > 0 {
 		v := pending[0]
 		return fmt.Errorf("create view %s.%s: unresolved dependencies after %d passes", v.schema, v.name, maxPasses)
+	}
+	return nil
+}
+
+func refreshMaterializedViewIfPopulated(ctx context.Context, tgtDB execer, v viewRow) error {
+	if !v.materialized || !v.populated {
+		return nil
+	}
+	stmt := "REFRESH MATERIALIZED VIEW " + quoteQualifiedTable(v.schema, v.name)
+	if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+		return fmt.Errorf("refresh materialized view %s.%s: %w", v.schema, v.name, err)
 	}
 	return nil
 }
