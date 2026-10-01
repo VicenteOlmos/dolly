@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
@@ -44,8 +45,11 @@ type SchemaLoader interface {
 }
 
 type dbConnOptions struct {
-	statementTimeout string
-	maxOpenConns     int
+	statementTimeout                string
+	lockTimeout                     string
+	idleInTransactionSessionTimeout string
+	applicationName                 string
+	maxOpenConns                    int
 }
 
 func (o dbConnOptions) effectiveMaxOpenConns() int {
@@ -56,10 +60,16 @@ func (o dbConnOptions) effectiveMaxOpenConns() int {
 }
 
 func (o dbConnOptions) prepareDSN(dsn string) (string, error) {
-	if o.statementTimeout == "" || o.statementTimeout == "0" {
-		return dsn, nil
+	cfg := &config.Config{}
+	cfg.DB.StatementTimeout = o.statementTimeout
+	cfg.DB.LockTimeout = o.lockTimeout
+	cfg.DB.IdleInTransactionSessionTimeout = o.idleInTransactionSessionTimeout
+	cfg.DB.ApplicationName = o.applicationName
+	out, err := cfg.ApplySessionGUCs(dsn, connections.SetDSNParam)
+	if err != nil {
+		return "", err
 	}
-	return connections.SetDSNParam(dsn, "statement_timeout", o.statementTimeout)
+	return out, nil
 }
 
 type postgresSchemaLoader struct {
