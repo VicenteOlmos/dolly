@@ -168,7 +168,7 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. `--exclude-schema` (or `dump.exclude_schemas`) removes schemas after includes resolve. Refuses when the effective schema scope has no tables. Dump metadata records PostgreSQL and dolly versions when available. |
 | `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. Empty schema scope fails closed; nonempty scope with no eligible percent roots reports a candidate-root diagnostic. |
 | `dolly dump list` | List local dump history without a database connection. |
-| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. `--schemas` overrides saved connection profile schemas. `ALWAYS` identity columns use `INSERT ... OVERRIDING SYSTEM VALUE` on the row-by-row path; COPY keeps identity columns in the column list. |
+| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. Repeatable `--exclude-table` skips tables (and their owned sequences). `--schemas` overrides saved connection profile schemas. |
 | `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. CLI flags `--replace`, `--on-conflict`, `--skip-create`, and `--dump-dir` override matching `clone.*` config keys for that run. |
 | `dolly config` | Create or inspect `config.jsonc` with `init` and `show`. |
 | `dolly update` | Install the latest stable GitHub release (`--check` verifies without replacing; Windows defers replacement to a hidden helper). |
@@ -315,6 +315,20 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 ```
 
 Serial `--no-transaction` mode can leave partial progress if it fails mid-way. Parallel restore (`--workers > 1`) always requires `--ack-partial-state` and writes a manifest until full success. Prefer the default when you need atomic rollback.
+
+### Restore table exclusions
+
+**Use when** a dump lists tables you do not want loaded into the target.
+
+**Command**
+
+```bash
+dolly restore --dsn "$DB" --input ./dolly_dump/1 --exclude-table public.audit_log
+```
+
+**Result/artifacts** loads every dump table except the excluded ones; sequences owned by skipped tables are not setval'd. Successful `--json` output adds `tables_restored` and `tables_excluded` alongside existing fields.
+
+**Constraint/warning** selectors use the same `schema.table` grammar as dump `--include-table`; a bare table name must match exactly one table in the dump. Unknown excludes fail before load; excluding every table fails with an empty table set error. Config equivalent: `restore.exclude_tables` (`--exclude-table` replaces the config list when set).
 
 ### Clone strategies
 

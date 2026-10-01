@@ -30,6 +30,21 @@ func TestParseRestoreFlags(t *testing.T) {
 	}
 }
 
+func TestParseRestoreFlagsExcludeTableRepeatable(t *testing.T) {
+	got, err := parseRestoreFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--input", "/tmp/in",
+		"--exclude-table", "public.users",
+		"--exclude-table", "orders",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ExcludeTables) != 2 || got.ExcludeTables[0] != "public.users" || got.ExcludeTables[1] != "orders" {
+		t.Fatalf("exclude = %v", got.ExcludeTables)
+	}
+}
+
 func TestParseRestoreFlagsSchemas(t *testing.T) {
 	got, err := parseRestoreFlags([]string{
 		"--dsn", "postgres://h-a/db_a",

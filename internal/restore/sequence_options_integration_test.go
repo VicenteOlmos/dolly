@@ -41,7 +41,7 @@ func TestIntegrationRestoreWidensIntegerSequenceToBigint(t *testing.T) {
 			Cycle: ptrBool(false), DataType: "bigint",
 		}},
 	}
-	if err := RestoreSequencesFromMetadata(ctx, conn, meta, []string{schema}); err != nil {
+	if err := RestoreSequencesFromMetadata(ctx, conn, meta, []string{schema}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var dataType string
@@ -85,7 +85,7 @@ func TestIntegrationRestoreKeepsAdvancedSequenceUsable(t *testing.T) {
 			Cycle: ptrBool(true), DataType: "bigint",
 		}},
 	}
-	if err := RestoreSequencesFromMetadata(ctx, conn, meta, []string{schema}); err != nil {
+	if err := RestoreSequencesFromMetadata(ctx, conn, meta, []string{schema}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	var gotMax, last int64
@@ -146,7 +146,7 @@ func TestIntegrationRestoreNonOwnerSkipsMatchingAlter(t *testing.T) {
 			Cycle: ptrBool(false), DataType: "integer",
 		}},
 	}
-	if err := RestoreSequencesFromMetadata(ctx, conn, meta, []string{schema}); err != nil {
+	if err := RestoreSequencesFromMetadata(ctx, conn, meta, []string{schema}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.ExecContext(ctx, "RESET ROLE"); err != nil {
