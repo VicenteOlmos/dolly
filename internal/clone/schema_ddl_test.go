@@ -435,6 +435,70 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	}
 }
 
+func TestFormatCreateCast(t *testing.T) {
+	t.Parallel()
+	withFn, ok := formatCreateCast(castRow{
+		srcSchema: "app", srcType: "status_enum",
+		tgtSchema: "app", tgtType: "text",
+		castMethod: "f", castContext: "a",
+		fnSchema: "app", fnName: "status_to_text", fnArgs: "app.status_enum",
+	})
+	if !ok {
+		t.Fatal("expected cast with function")
+	}
+	wantWithFn := `CREATE CAST ("app"."status_enum" AS "app"."text") WITH FUNCTION "app"."status_to_text"(app.status_enum) AS ASSIGNMENT`
+	if withFn != wantWithFn {
+		t.Fatalf("got %q, want %q", withFn, wantWithFn)
+	}
+	implicit, ok := formatCreateCast(castRow{
+		srcSchema: "app", srcType: "small_id",
+		tgtSchema: "app", tgtType: "bigint",
+		castMethod: "b", castContext: "e",
+	})
+	if !ok {
+		t.Fatal("expected binary cast")
+	}
+	wantImplicit := `CREATE CAST ("app"."small_id" AS "app"."bigint") WITHOUT FUNCTION AS IMPLICIT`
+	if implicit != wantImplicit {
+		t.Fatalf("got %q, want %q", implicit, wantImplicit)
+	}
+	if _, ok := formatCreateCast(castRow{
+		srcSchema: "app", srcType: "a",
+		tgtSchema: "app", tgtType: "b",
+		castMethod: "f", castContext: "i",
+	}); ok {
+		t.Fatal("expected missing function cast to be skipped")
+	}
+	inout, ok := formatCreateCast(castRow{
+		srcSchema: "app", srcType: "in_src",
+		tgtSchema: "app", tgtType: "in_dst",
+		castMethod: "i", castContext: "e",
+	})
+	if !ok {
+		t.Fatal("expected inout cast")
+	}
+	wantInout := `CREATE CAST ("app"."in_src" AS "app"."in_dst") WITH INOUT AS IMPLICIT`
+	if inout != wantInout {
+		t.Fatalf("inout cast: got %q, want %q", inout, wantInout)
+	}
+}
+
+func TestCommentTargetAggregateAndStatistics(t *testing.T) {
+	t.Parallel()
+	if got := commentTarget("aggregate", "app", "my_avg", "integer"); got != `AGGREGATE "app"."my_avg"(integer)` {
+		t.Fatalf("aggregate target = %q", got)
+	}
+	if got := commentTarget("aggregate", "app", `a(b`, "integer"); got != `AGGREGATE "app"."a(b"(integer)` {
+		t.Fatalf("aggregate name with parenthesis = %q", got)
+	}
+	if got := formatCommentOn("aggregate", "app", `a(b`, "integer", "note"); got != `COMMENT ON AGGREGATE "app"."a(b"(integer) IS 'note'` {
+		t.Fatalf("aggregate comment = %q", got)
+	}
+	if got := formatCommentOn("statistics", "app", "users_stats", "", "correlation hints"); got != `COMMENT ON STATISTICS "app"."users_stats" IS 'correlation hints'` {
+		t.Fatalf("statistics comment = %q", got)
+	}
+}
+
 func TestFormatGrantTable(t *testing.T) {
 	t.Parallel()
 	got := formatGrantTable("SELECT, INSERT", "app", "users", "app_reader")
