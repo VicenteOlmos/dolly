@@ -68,6 +68,18 @@ func validateTableColumns(meta, target db.Table) error {
 				meta.Name, mc.Name, mc.PrimaryKey, tc.PrimaryKey,
 			)
 		}
+		if mc.Identity != tc.Identity {
+			return fmt.Errorf(
+				"%s.%s.%s: identity generation mismatch (metadata %q, target %q)",
+				meta.Schema, meta.Name, mc.Name, mc.Identity, tc.Identity,
+			)
+		}
+		if mc.Generated != tc.Generated {
+			return fmt.Errorf(
+				"%s.%s.%s: generated column mismatch (metadata %v, target %v)",
+				meta.Schema, meta.Name, mc.Name, mc.Generated, tc.Generated,
+			)
+		}
 	}
 
 	return nil

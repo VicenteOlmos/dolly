@@ -1,6 +1,9 @@
 package restore
 
 import (
+	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -237,6 +240,56 @@ func TestBuildInsertDefaultValuesConflictRequiresKey(t *testing.T) {
 	}
 	if !strings.Contains(q, "DEFAULT VALUES") {
 		t.Fatalf("query = %s", q)
+	}
+}
+
+func TestConflictKeyPrefersPrimaryKeyOverFirstUniqueKey(t *testing.T) {
+	table := db.Table{
+		Schema: "public",
+		Name:   "events",
+		Columns: []db.Column{
+			{Name: "slug", DataType: "text"},
+			{Name: "id", DataType: "integer", PrimaryKey: true},
+		},
+		UniqueKeys: [][]string{{"slug"}, {"code"}},
+	}
+	if got := conflictKey(table); len(got) != 1 || got[0] != "id" {
+		t.Fatalf("conflictKey = %v, want primary key id", got)
+	}
+	q, _, err := buildInsert(table, ConflictSkip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, `ON CONFLICT ("id") DO NOTHING`) {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+type stubTruncateExecer struct {
+	err error
+}
+
+func (s *stubTruncateExecer) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, errors.New("unexpected query")
+}
+
+func (s *stubTruncateExecer) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return nil, s.err
+}
+
+func TestTruncateTablesWrapsInboundForeignKeyHint(t *testing.T) {
+	fake := &stubTruncateExecer{err: errors.New("permission denied")}
+	tables := []db.Table{{Schema: "public", Name: "users"}}
+	err := truncateTables(context.Background(), fake, tables)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "inbound foreign keys from tables outside the dump") {
+		t.Fatalf("err = %q", msg)
+	}
+	if !strings.Contains(msg, "CASCADE is not used") {
+		t.Fatalf("err = %q", msg)
 	}
 }
 

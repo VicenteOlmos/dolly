@@ -391,10 +391,12 @@ func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
 		{Tables: []string{"public.posts"}},
 	}
 
+	allLabels := []string{"public.users", "public.posts"}
 	seeded := PartialStateManifest{
-		Target:    PartialStateTargetFromConninfo("postgres://localhost/db"),
-		Committed: []string{"public.users"},
-		Pending:   []string{"public.posts"},
+		Target:              PartialStateTargetFromConninfo("postgres://localhost/db"),
+		TableSetFingerprint: partialStateTableSetFingerprint(allLabels),
+		Committed:           []string{"public.users"},
+		Pending:             []string{"public.posts"},
 	}
 	if err := WritePartialStateManifest(manifest, seeded); err != nil {
 		t.Fatal(err)
@@ -473,7 +475,7 @@ func TestRunParallelRestore_retryRetainsSeededCommittedManifest(t *testing.T) {
 	}
 }
 
-func TestRunParallelRestore_differentTargetReloadsCommittedTables(t *testing.T) {
+func TestRunParallelRestore_differentTargetRejectsManifest(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "state.json")
 	users := db.Table{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
@@ -481,29 +483,21 @@ func TestRunParallelRestore_differentTargetReloadsCommittedTables(t *testing.T) 
 	dataPaths := []string{filepath.Join(dir, "users.ndjson")}
 	levels := []RestoreLevel{{Tables: []string{"public.users"}}}
 	seeded := PartialStateManifest{
-		Target:    PartialStateTarget{Host: "other", Port: "5432", Database: "other"},
-		Committed: []string{"public.users"},
-		Pending:   nil,
+		Target:              PartialStateTarget{Host: "other", Port: "5432", Database: "other"},
+		TableSetFingerprint: partialStateTableSetFingerprint([]string{"public.users"}),
+		Committed:           []string{"public.users"},
+		Pending:             nil,
 	}
 	if err := WritePartialStateManifest(manifest, seeded); err != nil {
 		t.Fatal(err)
 	}
 
-	var loaded []string
 	orig := parallelLoadTableCopy
-	origSeq := parallelRestoreSequences
-	origSync := parallelSyncSequences
-	parallelLoadTableCopy = func(_ context.Context, _ string, table db.Table, _ string) error {
-		loaded = append(loaded, qualifiedLabel(table.Schema, table.Name))
+	parallelLoadTableCopy = func(context.Context, string, db.Table, string) error {
+		t.Fatal("copy must not run when manifest target mismatches")
 		return nil
 	}
-	parallelRestoreSequences = func(context.Context, execQuerier, dump.Metadata, []string) error { return nil }
-	parallelSyncSequences = func(context.Context, execQuerier, []db.Table) error { return nil }
-	defer func() {
-		parallelLoadTableCopy = orig
-		parallelRestoreSequences = origSeq
-		parallelSyncSequences = origSync
-	}()
+	defer func() { parallelLoadTableCopy = orig }()
 
 	sqlDB, _, err := sqlmock.New()
 	if err != nil {
@@ -512,11 +506,85 @@ func TestRunParallelRestore_differentTargetReloadsCommittedTables(t *testing.T) 
 	defer sqlDB.Close()
 
 	cfg := parallelTestCfg(manifest, 2)
-	if err := runParallelRestore(context.Background(), &cfg, sqlDB, meta, dataPaths, levels, nil, 2, time.Now()); err != nil {
+	err = runParallelRestore(context.Background(), &cfg, sqlDB, meta, dataPaths, levels, nil, 2, time.Now())
+	if err == nil || !strings.Contains(err.Error(), manifest) || !strings.Contains(err.Error(), "target does not match") {
+		t.Fatalf("err = %v, want target mismatch including manifest path", err)
+	}
+}
+
+func TestRunParallelRestore_missingFingerprintRejectsManifest(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "state.json")
+	users := db.Table{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	posts := db.Table{Schema: "public", Name: "posts", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	meta := dump.Metadata{Schema: "public", Tables: []db.Table{users, posts}}
+	dataPaths := []string{filepath.Join(dir, "users.ndjson"), filepath.Join(dir, "posts.ndjson")}
+	levels := []RestoreLevel{{Tables: []string{"public.users", "public.posts"}}}
+	seeded := PartialStateManifest{
+		Target:    PartialStateTargetFromConninfo("postgres://localhost/db"),
+		Committed: []string{"public.users"},
+		Pending:   []string{"public.posts"},
+	}
+	if err := WritePartialStateManifest(manifest, seeded); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(loaded, []string{"public.users"}) {
-		t.Fatalf("loaded = %v, want reload on a different target", loaded)
+
+	orig := parallelLoadTableCopy
+	parallelLoadTableCopy = func(context.Context, string, db.Table, string) error {
+		t.Fatal("copy must not run when manifest lacks table set fingerprint")
+		return nil
+	}
+	defer func() { parallelLoadTableCopy = orig }()
+
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	cfg := parallelTestCfg(manifest, 2)
+	err = runParallelRestore(context.Background(), &cfg, sqlDB, meta, dataPaths, levels, nil, 2, time.Now())
+	if err == nil || !strings.Contains(err.Error(), manifest) || !strings.Contains(err.Error(), "table set does not match") {
+		t.Fatalf("err = %v, want missing fingerprint rejected including manifest path", err)
+	}
+}
+
+func TestRunParallelRestore_differentTableSetRejectsManifest(t *testing.T) {
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "state.json")
+	users := db.Table{Schema: "public", Name: "users", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	posts := db.Table{Schema: "public", Name: "posts", Columns: []db.Column{{Name: "id", PrimaryKey: true}}}
+	meta := dump.Metadata{Schema: "public", Tables: []db.Table{users, posts}}
+	dataPaths := []string{filepath.Join(dir, "users.ndjson"), filepath.Join(dir, "posts.ndjson")}
+	levels := []RestoreLevel{{Tables: []string{"public.users", "public.posts"}}}
+	target := PartialStateTargetFromConninfo("postgres://localhost/db")
+	seeded := PartialStateManifest{
+		Target:              target,
+		TableSetFingerprint: partialStateTableSetFingerprint([]string{"public.users"}),
+		Committed:           []string{"public.users"},
+		Pending:             nil,
+	}
+	if err := WritePartialStateManifest(manifest, seeded); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := parallelLoadTableCopy
+	parallelLoadTableCopy = func(context.Context, string, db.Table, string) error {
+		t.Fatal("copy must not run when manifest table set mismatches")
+		return nil
+	}
+	defer func() { parallelLoadTableCopy = orig }()
+
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	cfg := parallelTestCfg(manifest, 2)
+	err = runParallelRestore(context.Background(), &cfg, sqlDB, meta, dataPaths, levels, nil, 2, time.Now())
+	if err == nil || !strings.Contains(err.Error(), manifest) || !strings.Contains(err.Error(), "table set does not match") {
+		t.Fatalf("err = %v, want table set mismatch including manifest path", err)
 	}
 }
 

@@ -44,6 +44,28 @@ func TestValidateSchemaExtraTargetColumns(t *testing.T) {
 	}
 }
 
+func TestValidateSchemaIdentityMismatch(t *testing.T) {
+	metaCol := db.Column{Name: "id", DataType: "integer", OrdinalPosition: 1, PrimaryKey: true, Identity: "ALWAYS"}
+	targetCol := db.Column{Name: "id", DataType: "integer", OrdinalPosition: 1, PrimaryKey: true, Identity: "BY DEFAULT"}
+	meta := []db.Table{{Schema: "public", Name: "t", Columns: []db.Column{metaCol}}}
+	target := []db.Table{{Schema: "public", Name: "t", Columns: []db.Column{targetCol}}}
+	err := validateSchema(meta, target)
+	if err == nil || !strings.Contains(err.Error(), "public.t.id") || !strings.Contains(err.Error(), "identity generation mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestValidateSchemaGeneratedMismatch(t *testing.T) {
+	metaCol := db.Column{Name: "total", DataType: "integer", OrdinalPosition: 1, Generated: true}
+	targetCol := db.Column{Name: "total", DataType: "integer", OrdinalPosition: 1, Generated: false}
+	meta := []db.Table{{Schema: "public", Name: "orders", Columns: []db.Column{metaCol}}}
+	target := []db.Table{{Schema: "public", Name: "orders", Columns: []db.Column{targetCol}}}
+	err := validateSchema(meta, target)
+	if err == nil || !strings.Contains(err.Error(), "public.orders.total") || !strings.Contains(err.Error(), "generated column mismatch") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestValidateSchemaTargetMissingColumn(t *testing.T) {
 	col := db.Column{Name: "id", DataType: "integer", OrdinalPosition: 1, PrimaryKey: true}
 	meta := []db.Table{{Name: "t", Columns: []db.Column{col, {Name: "name", DataType: "text", OrdinalPosition: 2}}}}
