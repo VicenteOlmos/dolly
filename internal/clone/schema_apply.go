@@ -141,6 +141,17 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	ranges, err := loadRangeTypes(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyRangeShells(ctx, tgtDB, ranges); err != nil {
+		return err
+	}
+	if err := applyRangeTypes(ctx, tgtDB, ranges, false); err != nil {
+		return err
+	}
+
 	seqs, err := loadSequences(ctx, srcDB, schemas)
 	if err != nil {
 		return err
@@ -169,6 +180,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applySQLDefs(ctx, tgtDB, aggregates, "aggregate"); err != nil {
+		return err
+	}
+	if err := applyRangeTypes(ctx, tgtDB, ranges, true); err != nil {
 		return err
 	}
 	if err := applyDomainCheckConstraints(ctx, tgtDB, domainChecks); err != nil {

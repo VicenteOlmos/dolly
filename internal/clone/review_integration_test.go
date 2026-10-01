@@ -362,3 +362,94 @@ func TestSanitizedCopyEnumPG16(t *testing.T) {
 		t.Fatalf("email = %q, status = %q, err = %v", email, status, err)
 	}
 }
+
+func TestCatalogReplayPublicExtensionSchemaAndMatviewFillfactor(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	if _, err := src.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS hstore SCHEMA public`); err != nil {
+		t.Skipf("hstore is not installed: %v", err)
+	}
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE MATERIALIZED VIEW app.mv AS SELECT 1 AS id WITH NO DATA;
+		ALTER MATERIALIZED VIEW app.mv SET (fillfactor = 70);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	tgt.SetMaxOpenConns(1)
+	if _, err := tgt.ExecContext(ctx, `SET search_path TO app, public`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var nsp string
+	if err := tgt.QueryRowContext(ctx, `SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'hstore'`).Scan(&nsp); err != nil || nsp != "public" {
+		t.Fatalf("hstore schema = %q, err = %v, want public", nsp, err)
+	}
+	var opts string
+	if err := tgt.QueryRowContext(ctx, `SELECT COALESCE(array_to_string(c.reloptions, ','), '') FROM pg_class c WHERE c.oid = 'app.mv'::regclass`).Scan(&opts); err != nil || !strings.Contains(opts, "fillfactor=70") {
+		t.Fatalf("matview options = %q, err = %v", opts, err)
+	}
+}
+
+func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	previous := db.SkipRelationAnnotations
+	db.SkipRelationAnnotations = false
+	t.Cleanup(func() { db.SkipRelationAnnotations = previous })
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE TYPE app.span;
+		CREATE FUNCTION app.span_canonical(app.span) RETURNS app.span
+			LANGUAGE internal IMMUTABLE AS 'int4range_canonical';
+		CREATE FUNCTION app.span_diff(x integer, y integer) RETURNS double precision
+			LANGUAGE sql IMMUTABLE AS 'SELECT ($2 - $1)::float8';
+		CREATE TYPE app.span AS RANGE (
+			SUBTYPE = integer,
+			CANONICAL = app.span_canonical,
+			SUBTYPE_DIFF = app.span_diff,
+			MULTIRANGE_TYPE_NAME = app.span_set
+		);
+		CREATE TABLE app.events (id integer, during app.span, slots app.span_set);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var canSchema, canName, diffName, multiSchema, multi string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT can_ns.nspname, can.proname, diff.proname, mr_ns.nspname, mr.typname
+		FROM pg_range r
+		JOIN pg_type t ON t.oid = r.rngtypid
+		JOIN pg_namespace n ON n.oid = t.typnamespace
+		JOIN pg_proc can ON can.oid = r.rngcanonical
+		JOIN pg_namespace can_ns ON can_ns.oid = can.pronamespace
+		JOIN pg_proc diff ON diff.oid = r.rngsubdiff
+		JOIN pg_type mr ON mr.oid = r.rngmultitypid
+		JOIN pg_namespace mr_ns ON mr_ns.oid = mr.typnamespace
+		WHERE n.nspname = 'app' AND t.typname = 'span'
+	`).Scan(&canSchema, &canName, &diffName, &multiSchema, &multi); err != nil {
+		t.Fatal(err)
+	}
+	if canSchema != "app" || canName != "span_canonical" || diffName != "span_diff" || multiSchema != "app" || multi != "span_set" {
+		t.Fatalf("range helpers = %s.%s diff=%s multi=%s.%s", canSchema, canName, diffName, multiSchema, multi)
+	}
+	var during, slots string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		WHERE a.attrelid = 'app.events'::regclass AND a.attname = 'during'
+	`).Scan(&during); err != nil || !strings.Contains(during, "span") {
+		t.Fatalf("during = %q, err = %v", during, err)
+	}
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT format_type(a.atttypid, a.atttypmod)
+		FROM pg_attribute a
+		WHERE a.attrelid = 'app.events'::regclass AND a.attname = 'slots'
+	`).Scan(&slots); err != nil || !strings.Contains(slots, "span_set") {
+		t.Fatalf("slots = %q, err = %v", slots, err)
+	}
+}
