@@ -662,9 +662,67 @@ func commentTarget(kind, schema, object, column string) string {
 		return "TRIGGER " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
 	case "rule":
 		return "RULE " + quoteIdentifier(column) + " ON " + quoteQualifiedTable(schema, object)
+	case "operator":
+		target := "OPERATOR "
+		name, argList, ok := strings.Cut(object, "(")
+		if !ok || !strings.HasSuffix(argList, ")") {
+			return target + formatOperatorCommentRef(schema, object)
+		}
+		argList = strings.TrimSuffix(argList, ")")
+		return target + formatOperatorCommentRef(schema, name) + "(" + argList + ")"
+	case "cast":
+		return "CAST " + object
+	case "publication":
+		return "PUBLICATION " + quoteIdentifier(object)
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
+}
+
+// formatOperatorCommentRef builds schema.operator for COMMENT ON OPERATOR.
+// Operator symbols (!, =, +, …) must not be quoted; plain identifiers may be.
+func formatOperatorCommentRef(schema, name string) string {
+	return quoteIdentifier(schema) + "." + operatorCommentName(name)
+}
+
+func operatorCommentName(name string) string {
+	if isSimpleSQLIdentifier(name) {
+		return quoteIdentifier(name)
+	}
+	return name
+}
+
+func isSimpleSQLIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_' || r == '$':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// formatSecurityLabel emits SECURITY LABEL FOR provider ON TABLE/COLUMN.
+func formatSecurityLabel(provider, kind, schema, object, column, label string) string {
+	var target string
+	switch kind {
+	case "column":
+		target = "COLUMN " + quoteQualifiedTable(schema, object) + "." + quoteIdentifier(column)
+	default:
+		target = "TABLE " + quoteQualifiedTable(schema, object)
+	}
+	return fmt.Sprintf(
+		"SECURITY LABEL FOR %s ON %s IS %s",
+		quoteIdentifier(provider),
+		target,
+		quoteLiteral(label),
+	)
 }
 
 // formatGrantTable emits GRANT privileges ON TABLE.

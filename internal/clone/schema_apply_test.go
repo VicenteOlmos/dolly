@@ -102,6 +102,11 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 		sqlmock.NewRows([]string{"nspname", "relname", "attname"}))
 }
 
+func expectSecurityLabelsCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`FROM pg_seclabel`).WillReturnRows(
+		sqlmock.NewRows([]string{"provider", "kind", "schema", "object", "column", "label"}))
+}
+
 func expectPublicationCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_publication p`).WillReturnRows(
 		sqlmock.NewRows([]string{"pubname", "pubinsert", "pubupdate", "pubdelete", "pubtruncate", "puballtables", "pubviaroot"}))
@@ -145,6 +150,7 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`FROM pg_description`).WillReturnRows(
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
+	expectSecurityLabelsCatalog(srcMock)
 	srcMock.ExpectQuery(`relkind IN \('r', 'p', 'v', 'm', 'f'\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(n\.nspacl\)`).WillReturnRows(
@@ -542,6 +548,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`FROM pg_description`).WillReturnRows(
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
+	expectSecurityLabelsCatalog(srcMock)
 	srcMock.ExpectQuery(`relkind IN \('r', 'p', 'v', 'm', 'f'\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(n\.nspacl\)`).WillReturnRows(
@@ -634,6 +641,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 		AddRow("policy", "app", "items", "tenant", "tenant filter").
 		AddRow("trigger", "app", "items", "touch", "keeps updated_at").
 		AddRow("rule", "app", "items", "log_del", "audit"))
+	expectSecurityLabelsCatalog(mock)
 	mock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "force"}).AddRow("app", "items", false))
 	mock.ExpectQuery(`FROM pg_policy`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "command", "permissive", "using", "check", "roles"}).
 		AddRow("app", "items", "tenant", "SELECT", true, "true", "", ""))
