@@ -24,6 +24,21 @@ const (
 	fieldKindChoice
 )
 
+var restoreOnConflictChoices = []string{"error", "skip", "upsert"}
+
+func configRestoreOnConflictDisplay(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "error"
+	}
+	for _, c := range restoreOnConflictChoices {
+		if v == c {
+			return v
+		}
+	}
+	return "error"
+}
+
 type configField struct {
 	Section string
 	Label   string
@@ -72,10 +87,19 @@ func buildConfigFields() []configField {
 			Hint: "Scratch directory for schema-replay intermediate dump files.",
 			Get:  func(c *config.Config) string { return c.Clone.DumpDir },
 			Set:  func(c *config.Config, v string) error { c.Clone.DumpDir = v; return nil }},
-		{Section: "clone", Label: "restore_on_conflict", Kind: fieldKindString,
-			Hint: "Row conflict policy during clone restore: error, skip, or upsert.",
-			Get:  func(c *config.Config) string { return c.Clone.RestoreOnConflict },
-			Set:  func(c *config.Config, v string) error { c.Clone.RestoreOnConflict = v; return nil }},
+		{Section: "clone", Label: "restore_on_conflict", Kind: fieldKindChoice,
+			Hint:    "Row conflict policy during clone restore: error, skip, or upsert.",
+			Choices: restoreOnConflictChoices,
+			Get:     func(c *config.Config) string { return configRestoreOnConflictDisplay(c.Clone.RestoreOnConflict) },
+			Set: func(c *config.Config, v string) error {
+				for _, opt := range restoreOnConflictChoices {
+					if v == opt {
+						c.Clone.RestoreOnConflict = v
+						return nil
+					}
+				}
+				return fmt.Errorf("invalid restore_on_conflict %q", v)
+			}},
 		{Section: "clone", Label: "replace", Kind: fieldKindBool,
 			Hint: "Truncate target tables before insert (destructive).",
 			Get:  func(c *config.Config) string { return fmt.Sprintf("%v", c.Clone.Replace) },
@@ -235,10 +259,19 @@ func buildConfigFields() []configField {
 			Set:  func(c *config.Config, v string) error { c.Connections.Default = strings.TrimSpace(v); return nil }},
 
 		// restore section
-		{Section: "restore", Label: "restore_on_conflict", Kind: fieldKindString,
-			Hint: "Row conflict policy for TUI history restore: error, skip, or upsert.",
-			Get:  func(c *config.Config) string { return c.Restore.RestoreOnConflict },
-			Set:  func(c *config.Config, v string) error { c.Restore.RestoreOnConflict = v; return nil }},
+		{Section: "restore", Label: "restore_on_conflict", Kind: fieldKindChoice,
+			Hint:    "Row conflict policy for TUI history restore: error, skip, or upsert.",
+			Choices: restoreOnConflictChoices,
+			Get:     func(c *config.Config) string { return configRestoreOnConflictDisplay(c.Restore.RestoreOnConflict) },
+			Set: func(c *config.Config, v string) error {
+				for _, opt := range restoreOnConflictChoices {
+					if v == opt {
+						c.Restore.RestoreOnConflict = v
+						return nil
+					}
+				}
+				return fmt.Errorf("invalid restore_on_conflict %q", v)
+			}},
 		{Section: "restore", Label: "replace", Kind: fieldKindBool,
 			Hint: "Truncate target tables before history restore (destructive).",
 			Get:  func(c *config.Config) string { return fmt.Sprintf("%v", c.Restore.Replace) },
