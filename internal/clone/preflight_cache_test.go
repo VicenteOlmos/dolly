@@ -241,15 +241,13 @@ func TestPreflightSkipsPermissionQueriesOnCacheHit(t *testing.T) {
 	pgDumpVersion = func() (string, error) { return "pg_dump (PostgreSQL) 15.0", nil }
 	defer func() { pgDumpVersion = origDump }()
 
+	origSchemaLook := schemaToolLookPath
+	schemaToolLookPath = func(string) (string, error) { return "/usr/bin/pg_dump", nil }
+	defer func() { schemaToolLookPath = origSchemaLook }()
+
 	mock.ExpectPing()
 	mock.ExpectQuery(`SHOW server_version_num`).
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(150002))
-	mock.ExpectQuery(`pg_aggregate`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(`pg_opclass`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(`relkind = 'f'`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	if _, err := Preflight(context.Background(), opts, &SchemaReplayStrategy{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
