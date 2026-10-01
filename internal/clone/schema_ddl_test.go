@@ -1,8 +1,11 @@
 package clone
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestFormatCreateEnumType(t *testing.T) {
@@ -641,5 +644,116 @@ func TestFormatCreateCompositeType(t *testing.T) {
 	wantColl := `CREATE TYPE "app"."label" AS ("text" text COLLATE "app"."custom")`
 	if gotColl != wantColl {
 		t.Fatalf("collated composite: got %q, want %q", gotColl, wantColl)
+	}
+}
+
+func TestFormatCreateEventTrigger(t *testing.T) {
+	t.Parallel()
+	got := formatCreateEventTrigger(eventTriggerRow{
+		name:     "audit_ddl",
+		event:    "ddl_command_end",
+		tags:     []string{"CREATE TABLE", "CREATE INDEX"},
+		fnSchema: "app",
+		fnName:   "log_ddl",
+		fnArgs:   "",
+		prokind:  "f",
+	})
+	want := `CREATE EVENT TRIGGER "audit_ddl" ON ddl_command_end WHEN TAG IN ('CREATE TABLE', 'CREATE INDEX') EXECUTE FUNCTION "app"."log_ddl"()`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	proc := formatCreateEventTrigger(eventTriggerRow{
+		name:     "notify",
+		event:    "sql_drop",
+		fnSchema: "app",
+		fnName:   "notify_drop",
+		fnArgs:   "text",
+		prokind:  "p",
+	})
+	if !strings.Contains(proc, "EXECUTE PROCEDURE") || !strings.Contains(proc, `"notify_drop"(text)`) {
+		t.Fatalf("procedure trigger: %q", proc)
+	}
+	replica := formatAlterEventTriggerEnabled(eventTriggerRow{name: "repl_audit", evtenabled: "R"})
+	wantReplica := `ALTER EVENT TRIGGER "repl_audit" ENABLE REPLICA`
+	if replica != wantReplica {
+		t.Fatalf("enable replica: got %q, want %q", replica, wantReplica)
+	}
+	always := formatAlterEventTriggerEnabled(eventTriggerRow{name: "always_audit", evtenabled: "A"})
+	if always != `ALTER EVENT TRIGGER "always_audit" ENABLE ALWAYS` {
+		t.Fatalf("enable always: %q", always)
+	}
+}
+
+func TestLoadEventTriggersSkipsOutOfScopeFunctionSchema(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`FROM pg_event_trigger`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"evtname", "evtevent", "evtenabled", "evttags", "nspname", "proname", "pg_get_function_identity_arguments", "prokind",
+		}).
+			AddRow("public_audit", "ddl_command_end", "O", "[]", "public", "log_ddl", "", "f").
+			AddRow("audit_audit", "ddl_command_end", "O", "[]", "audit", "log_ddl", "", "f"),
+	)
+	rows, err := loadEventTriggers(context.Background(), src, []string{"public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].name != "public_audit" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFormatTextSearchObjects(t *testing.T) {
+	t.Parallel()
+	dict := formatCreateTextSearchDictionary(textSearchDictionary{
+		schema:     "app",
+		name:       "en_stem",
+		tmplSchema: "pg_catalog",
+		tmplName:   "snowball",
+		initOption: "Language = english, StopWords = english",
+	})
+	wantDict := `CREATE TEXT SEARCH DICTIONARY "app"."en_stem" (TEMPLATE = "snowball", Language = english, StopWords = english)`
+	if dict != wantDict {
+		t.Fatalf("dictionary: got %q, want %q", dict, wantDict)
+	}
+	cfg := formatCreateTextSearchConfiguration(textSearchConfiguration{
+		schema:       "app",
+		name:         "search",
+		parserSchema: "pg_catalog",
+		parserName:   "default",
+	})
+	wantCfg := `CREATE TEXT SEARCH CONFIGURATION "app"."search" (PARSER = "default")`
+	if cfg != wantCfg {
+		t.Fatalf("configuration: got %q, want %q", cfg, wantCfg)
+	}
+	mapStmt := formatAlterTextSearchConfigurationMapping(textSearchMapping{
+		schema: "app",
+		name:   "search",
+		token:  "asciiword",
+		dicts: []qualifiedName{
+			{schema: "app", name: "en_stem"},
+			{schema: "pg_catalog", name: "simple"},
+		},
+	})
+	wantMap := `ALTER TEXT SEARCH CONFIGURATION "app"."search" ADD MAPPING FOR asciiword WITH "app"."en_stem", "simple"`
+	if mapStmt != wantMap {
+		t.Fatalf("mapping: got %q, want %q", mapStmt, wantMap)
+	}
+	boolDict := formatCreateTextSearchDictionary(textSearchDictionary{
+		schema:     "app",
+		name:       "synonym",
+		tmplSchema: "pg_catalog",
+		tmplName:   "synonym",
+		initOption: "accept = 1",
+	})
+	wantBoolDict := `CREATE TEXT SEARCH DICTIONARY "app"."synonym" (TEMPLATE = "synonym", accept = 1)`
+	if boolDict != wantBoolDict {
+		t.Fatalf("boolean dictionary option: got %q, want %q", boolDict, wantBoolDict)
 	}
 }

@@ -178,6 +178,22 @@ func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
 			"src_schema", "src_name", "tgt_schema", "tgt_name",
 			"castmethod", "castcontext", "fn_schema", "fn_name", "fn_args",
 		}))
+	expectPreTableCatalog(srcMock)
+}
+
+func expectPreTableCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`FROM pg_event_trigger`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"evtname", "evtevent", "evtenabled", "evttags", "nspname", "proname", "pg_get_function_identity_arguments", "prokind",
+		}))
+	srcMock.ExpectQuery(`FROM pg_ts_dict`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "dictname", "nspname", "tmplname", "dictinitoption"}))
+	srcMock.ExpectQuery(`FROM pg_ts_config c`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "cfgname", "nspname", "prsname"}))
+	srcMock.ExpectQuery(`FROM pg_ts_config_map`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "cfgname", "alias", "nspname", "dictname", "mapseqno", "maptokentype",
+		}))
 }
 
 func TestColumnSQLType(t *testing.T) {
@@ -588,6 +604,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 		"src_schema", "src_name", "tgt_schema", "tgt_name",
 		"castmethod", "castcontext", "fn_schema", "fn_name", "fn_args",
 	}))
+	expectPreTableCatalog(mock)
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
 	expectClassicInheritCatalog(mock)
 	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}).AddRow("app", "items", "i", "items_code_idx"))
