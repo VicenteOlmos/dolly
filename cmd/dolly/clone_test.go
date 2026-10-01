@@ -151,6 +151,42 @@ func TestParseCloneFlags(t *testing.T) {
 			args:    []string{"-bogus"},
 			wantErr: "flag provided but not defined: -bogus",
 		},
+		{
+			name: "clone overrides",
+			args: []string{"-ff", "--replace", "--on-conflict", "skip", "--skip-create", "--dump-dir", "/tmp/dumps"},
+			want: cloneFlags{
+				FastForward:   true,
+				Replace:       true,
+				ReplaceSet:    true,
+				OnConflict:    "skip",
+				OnConflictSet: true,
+				SkipCreate:    true,
+				SkipCreateSet: true,
+				DumpDir:       "/tmp/dumps",
+				DumpDirSet:    true,
+			},
+		},
+		{
+			name: "replace false overrides config at run",
+			args: []string{"-ff", "--replace=false"},
+			want: cloneFlags{FastForward: true, Replace: false, ReplaceSet: true},
+		},
+		{
+			name:    "invalid on-conflict",
+			args:    []string{"-ff", "--on-conflict", "bogus"},
+			wantErr: "invalid --on-conflict",
+		},
+		{
+			name: "replace with skip conflict",
+			args: []string{"-ff", "--replace", "--on-conflict", "skip"},
+			want: cloneFlags{
+				FastForward:   true,
+				Replace:       true,
+				ReplaceSet:    true,
+				OnConflict:    "skip",
+				OnConflictSet: true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -172,7 +208,15 @@ func TestParseCloneFlags(t *testing.T) {
 			}
 			if got.FastForward != tt.want.FastForward ||
 				got.Strategy != tt.want.Strategy ||
-				got.Connection != tt.want.Connection {
+				got.Connection != tt.want.Connection ||
+				got.Replace != tt.want.Replace ||
+				got.ReplaceSet != tt.want.ReplaceSet ||
+				got.OnConflict != tt.want.OnConflict ||
+				got.OnConflictSet != tt.want.OnConflictSet ||
+				got.SkipCreate != tt.want.SkipCreate ||
+				got.SkipCreateSet != tt.want.SkipCreateSet ||
+				got.DumpDir != tt.want.DumpDir ||
+				got.DumpDirSet != tt.want.DumpDirSet {
 				t.Fatalf("got %+v, want %+v", got, tt.want)
 			}
 			if len(got.Schemas) != len(tt.want.Schemas) {
@@ -680,6 +724,90 @@ func TestRunCloneReplaceRequiresYesAllModes(t *testing.T) {
 	}
 	if len(capturedOpts.RestoreOpts) == 0 {
 		t.Fatal("expected restore opts with replace")
+	}
+}
+
+func TestRunCloneReplaceFalseOverridesConfigReplace(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Replace = true
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	flags := cloneFlags{FastForward: true, Replace: false, ReplaceSet: true}
+	if err := runCloneExecute(context.Background(), flags, cfg, "postgres://u:p@h/db", "clone_x", "", []string{"public"}, "schema-replay"); err != nil {
+		t.Fatalf("runCloneExecute: %v", err)
+	}
+	if len(capturedOpts.RestoreOpts) != 1 {
+		t.Fatalf("expected only schema restore opt without replace, got %d opts", len(capturedOpts.RestoreOpts))
+	}
+}
+
+func TestRunCloneCLIOverridesConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Replace = false
+	cfg.Clone.RestoreOnConflict = "error"
+	cfg.Clone.SkipCreate = false
+	cfg.Clone.DumpDir = "/cfg/dumps"
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	flags := cloneFlags{
+		Yes:           true,
+		Replace:       true,
+		ReplaceSet:    true,
+		OnConflict:    "skip",
+		OnConflictSet: true,
+		SkipCreate:    true,
+		SkipCreateSet: true,
+		DumpDir:       "/cli/dumps",
+		DumpDirSet:    true,
+	}
+	err := runCloneExecute(context.Background(), flags, cfg, "postgres://u:p@h/db", "clone_x", "", []string{"public"}, "schema-replay")
+	if err != nil {
+		t.Fatalf("runCloneExecute: %v", err)
+	}
+	if !capturedOpts.SkipCreate {
+		t.Fatal("expected skip_create from flag")
+	}
+	if capturedOpts.DumpDir != "/cli/dumps" {
+		t.Fatalf("DumpDir = %q, want /cli/dumps", capturedOpts.DumpDir)
+	}
+	if len(capturedOpts.RestoreOpts) != 3 {
+		t.Fatalf("expected schemas + replace + skip restore opts, got %d", len(capturedOpts.RestoreOpts))
+	}
+}
+
+func TestRunCloneOnConflictWithoutReplace(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Replace = false
+	cfg.Clone.RestoreOnConflict = "error"
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	flags := cloneFlags{OnConflict: "skip", OnConflictSet: true}
+	if err := runCloneExecute(context.Background(), flags, cfg, "postgres://u:p@h/db", "clone_x", "", []string{"public"}, "schema-replay"); err != nil {
+		t.Fatalf("runCloneExecute: %v", err)
+	}
+	if len(capturedOpts.RestoreOpts) != 2 {
+		t.Fatalf("expected schemas + skip restore opts, got %d", len(capturedOpts.RestoreOpts))
 	}
 }
 

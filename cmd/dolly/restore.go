@@ -31,6 +31,9 @@ type restoreFlags struct {
 	DSN                 string
 	Connection          string
 	Input               string
+	Schemas             []string
+	SchemasSet          bool
+	schemasFlag         dumpSchemasFlag
 	OnConflict          string
 	Replace             bool
 	NoTransaction       bool
@@ -50,6 +53,7 @@ func restoreFlagSet(flags *restoreFlags) *flag.FlagSet {
 	fs.StringVar(&flags.DSN, "dsn", "", "PostgreSQL connection string")
 	fs.StringVar(&flags.Connection, "connection", "", "saved connection profile name (requires save_connections in config.jsonc)")
 	fs.StringVar(&flags.Input, "input", "", "dump input directory")
+	fs.Var(&flags.schemasFlag, "schemas", "comma-separated target schema names (overrides saved connection profile schemas)")
 	fs.StringVar(&flags.OnConflict, "on-conflict", "error", "row conflict policy: error, skip, upsert")
 	fs.BoolVar(&flags.Replace, "replace", false, "truncate tables before insert (destructive)")
 	fs.BoolVar(&flags.NoTransaction, "no-transaction", false, "commit after each table")
@@ -75,6 +79,8 @@ func parseRestoreFlags(args []string) (restoreFlags, error) {
 	if err := fs.Parse(args); err != nil {
 		return flags, mapFlagHelp(err)
 	}
+	flags.Schemas = append([]string(nil), flags.schemasFlag.values...)
+	flags.SchemasSet = flags.schemasFlag.set
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "workers":
@@ -180,10 +186,11 @@ func runRestore(args []string) (err error) {
 		}
 	}
 
-	dsn, schemas, err := resolveDataSource(cfg, ".", flags.Connection, flags.DSN)
+	dsn, profileSchemas, err := resolveDataSource(cfg, ".", flags.Connection, flags.DSN)
 	if err != nil {
 		return err
 	}
+	schemas := resolveRestoreSchemas(flags.SchemasSet, flags.Schemas, profileSchemas)
 
 	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
 		var err error
@@ -257,4 +264,11 @@ func runRestore(args []string) (err error) {
 	}
 
 	return nil
+}
+
+func resolveRestoreSchemas(cliSet bool, cliSchemas []string, profileSchemas []string) []string {
+	if cliSet {
+		return append([]string(nil), cliSchemas...)
+	}
+	return append([]string(nil), profileSchemas...)
 }
