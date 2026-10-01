@@ -70,8 +70,20 @@ func CLICatalog() []CLICommand {
 				"dolly dump --dsn \"$DATABASE_URL\" --output ./out --include-table public.users --exclude-table public.audit_log",
 				"dolly dump --dsn \"$DATABASE_URL\" --output ./out --chunk-table public.orders",
 				"dolly dump --dsn \"$DATABASE_URL\" --output ./out --workers 4",
+			},
+		},
+		{
+			Name:        "dump list",
+			Short:       "list local dump history without a database connection",
+			ShellPolicy: ShellPolicyCLIOnly,
+			Flags: []CLIFlag{
+				{Name: "output", Description: "dump base directory (default: config dump.output_dir)"},
+				{Name: "json", Description: "emit JSON array of history records"},
+			},
+			Examples: []string{
 				"dolly dump list",
-				"dolly dump list --json --output ./dolly_dump",
+				"dolly dump list --output ./dolly_dump",
+				"dolly dump list --json",
 			},
 		},
 		{

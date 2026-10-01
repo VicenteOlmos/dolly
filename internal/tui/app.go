@@ -784,6 +784,15 @@ func (a *App) persistConfig(showSavedStatus bool) bool {
 		a.statusMsg = truncateStatus(StyleWarning.Render("No config loaded"), a.width)
 		return false
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		a.statusMsg = truncateStatus(StyleWarning.Render("Save failed: "+err.Error()), a.width)
+		return false
+	}
+	if err := connections.ValidateConnectionsConfig(a.cfg, cwd); err != nil {
+		a.statusMsg = truncateStatus(StyleWarning.Render("Save failed: "+err.Error()), a.width)
+		return false
+	}
 	if err := config.SaveConfig(a.cfg, a.cfgPath); err != nil {
 		a.statusMsg = truncateStatus(StyleWarning.Render("Save failed: "+err.Error()), a.width)
 		return false

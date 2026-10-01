@@ -101,7 +101,7 @@ func TestPrintRestoreUsage(t *testing.T) {
 
 func TestPrintCloneUsage(t *testing.T) {
 	out := captureStderr(printCloneUsage)
-	for _, sub := range []string{"--ff", "--strategy", "--connection", "--schemas", "clone.schemas", "sanitization.enabled", "config.jsonc"} {
+	for _, sub := range []string{"--ff", "--strategy", "--connection", "--schemas", "clone.schemas", "sanitization.enabled", "config.jsonc", "logical-stream is not affected"} {
 		if !strings.Contains(out, sub) {
 			t.Fatalf("clone usage missing %q:\n%s", sub, out)
 		}

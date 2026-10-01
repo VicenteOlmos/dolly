@@ -188,7 +188,7 @@ func printCloneUsage() {
 	fmt.Fprintln(os.Stderr, "physical-backup runs pg_basebackup to create a physical replica data directory.")
 	fmt.Fprintln(os.Stderr, "Use --target-dir (or clone.target_dir with -ff) for an empty or non-existent path.")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Note: sanitization applies to schema-replay dumps and logical-stream row copies.")
+	fmt.Fprintln(os.Stderr, "Note: sanitization applies to dump and schema-replay dump paths only; logical-stream is not affected.")
 	fmt.Fprintln(os.Stderr, "template and physical-backup refuse to run when sanitization is enabled.")
 	fmt.Fprintln(os.Stderr, "schema-replay uses pg_dump when it is on PATH, otherwise the catalog replay.")
 }
