@@ -339,6 +339,35 @@ func TestFormatAlterTableFillfactor(t *testing.T) {
 	}
 }
 
+func TestFormatAlterTableReloptions(t *testing.T) {
+	t.Parallel()
+	got, ok := formatAlterTableReloptions("app", "events", map[string]string{
+		"parallel_workers":                   "4",
+		"autovacuum_enabled":                 "false",
+		"autovacuum_vacuum_scale_factor":     "0.15",
+		"autovacuum_analyze_scale_factor":    "0.05",
+		"toast_tuple_target":                 "2048",
+		"fillfactor":                         "90",
+		"unknown_option":                     "nope",
+	})
+	want := `ALTER TABLE "app"."events" SET (autovacuum_analyze_scale_factor=0.05, autovacuum_enabled=false, autovacuum_vacuum_scale_factor=0.15, fillfactor=90, parallel_workers=4, toast_tuple_target=2048)`
+	if !ok || got != want {
+		t.Fatalf("got (%q, %v), want (%q, true)", got, ok, want)
+	}
+	if _, ok := formatAlterTableReloptions("app", "events", map[string]string{"fillfactor": "nope"}); ok {
+		t.Fatal("invalid fillfactor must be omitted")
+	}
+}
+
+func TestFormatAlterColumnStatistics(t *testing.T) {
+	t.Parallel()
+	got := formatAlterColumnStatistics("app", "events", "payload", 1000)
+	want := `ALTER TABLE ONLY "app"."events" ALTER COLUMN "payload" SET STATISTICS 1000`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatAlterColumnStorage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
