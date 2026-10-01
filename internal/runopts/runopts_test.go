@@ -189,3 +189,34 @@ func TestRestoreHistoryOptionsWorkersRequireAck(t *testing.T) {
 		t.Fatalf("err = %v, want ack requirement", err)
 	}
 }
+
+func TestResolveRestoreExcludeTablesCLIReplacesConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.ExcludeTables = []string{"public.config_only"}
+
+	got := ResolveRestoreExcludeTables(RestoreOverrides{ExcludeTables: []string{"public.cli_only"}}, cfg)
+	if len(got) != 1 || got[0] != "public.cli_only" {
+		t.Fatalf("got %v", got)
+	}
+
+	got = ResolveRestoreExcludeTables(RestoreOverrides{}, cfg)
+	if len(got) != 1 || got[0] != "public.config_only" {
+		t.Fatalf("config fallback = %v", got)
+	}
+}
+
+func TestAppendRestoreOptionsFromFlagsExcludeTables(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.ExcludeTables = []string{"public.from_config"}
+	opts, err := AppendRestoreOptionsFromFlags(
+		RestoreOverrides{ExcludeTables: []string{"public.from_cli"}},
+		cfg, t.TempDir(), restore.ConflictError, 1, nil, "postgres://localhost/db",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := restore.InspectExcludeTables(opts...)
+	if len(ex) != 1 || ex[0] != "public.from_cli" {
+		t.Fatalf("exclude = %v", ex)
+	}
+}
