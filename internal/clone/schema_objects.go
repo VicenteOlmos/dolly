@@ -995,10 +995,9 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 		       COALESCE(coll.collname, ''),
 		       COALESCE(can_ns.nspname, ''),
 		       COALESCE(can.proname, ''),
-		       COALESCE(pg_catalog.pg_get_function_identity_arguments(can.oid), ''),
 		       COALESCE(diff_ns.nspname, ''),
 		       COALESCE(diff.proname, ''),
-		       COALESCE(pg_catalog.pg_get_function_identity_arguments(diff.oid), '')
+		       COALESCE(mr.typname, '')
 		FROM pg_type t
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
 		INNER JOIN pg_range r ON r.rngtypid = t.oid
@@ -1010,6 +1009,7 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 		LEFT JOIN pg_namespace can_ns ON can_ns.oid = can.pronamespace
 		LEFT JOIN pg_proc diff ON diff.oid = r.rngsubdiff
 		LEFT JOIN pg_namespace diff_ns ON diff_ns.oid = diff.pronamespace
+		LEFT JOIN pg_type mr ON mr.oid = r.rngmultitypid
 		WHERE t.typtype = 'r'
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, t.typname`, inClause)
@@ -1022,25 +1022,47 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 	var out []rangeTypeDef
 	for rows.Next() {
 		var r rangeTypeDef
-		var canSchema, canName, canArgs, diffSchema, diffName, diffArgs string
+		var canSchema, canName, diffSchema, diffName string
 		if err := rows.Scan(
 			&r.schema, &r.name, &r.subtype,
 			&r.opclassSchema, &r.opclass,
 			&r.collSchema, &r.collName,
-			&canSchema, &canName, &canArgs,
-			&diffSchema, &diffName, &diffArgs,
+			&canSchema, &canName,
+			&diffSchema, &diffName,
+			&r.multirange,
 		); err != nil {
 			return nil, fmt.Errorf("scan range type: %w", err)
 		}
-		r.canonical = formatRangeFunc(canSchema, canName, canArgs)
-		r.subtypeDiff = formatRangeFunc(diffSchema, diffName, diffArgs)
+		r.canonicalSchema = canSchema
+		r.canonical = formatRangeFunc(canSchema, canName)
+		r.subtypeDiffSchema = diffSchema
+		r.subtypeDiff = formatRangeFunc(diffSchema, diffName)
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-func applyRangeTypes(ctx context.Context, tgtDB execer, types []rangeTypeDef) error {
+func applyRangeShells(ctx context.Context, tgtDB execer, types []rangeTypeDef) error {
 	for _, r := range types {
+		if !r.needsShell() {
+			continue
+		}
+		stmt := formatCreateRangeShell(r.schema, r.name)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("create range shell %s.%s: %w", r.schema, r.name, err)
+		}
+	}
+	return nil
+}
+
+// applyRangeTypes emits CREATE TYPE ... AS RANGE. userFunctions selects ranges
+// whose canonical or subtype-diff function lives outside pg_catalog; those are
+// completed only after routines exist. Other ranges are created immediately.
+func applyRangeTypes(ctx context.Context, tgtDB execer, types []rangeTypeDef, userFunctions bool) error {
+	for _, r := range types {
+		if r.needsShell() != userFunctions {
+			continue
+		}
 		stmt := formatCreateRangeType(r)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create range type %s.%s: %w", r.schema, r.name, err)

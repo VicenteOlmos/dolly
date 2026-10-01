@@ -2,6 +2,7 @@ package clone
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -110,12 +111,14 @@ func formatAlterSequenceOwnedBy(schema, seqName, tableSchema, tableName, column 
 }
 
 // formatCreateExtension emits CREATE EXTENSION IF NOT EXISTS.
-// A non-public schema and an explicit version are replayed so the target
-// does not install the extension into public at its default version.
+// The source schema is always named, including public, so the target
+// search_path cannot install the extension somewhere else. pg_catalog is
+// omitted. An explicit version is replayed so the target does not install
+// the extension at its default version.
 func formatCreateExtension(name, schema, version string) string {
 	stmt := fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %s", quoteIdentifier(name))
 	schema = strings.TrimSpace(schema)
-	if schema != "" && schema != "public" && !strings.EqualFold(schema, "pg_catalog") {
+	if schema != "" && !strings.EqualFold(schema, "pg_catalog") {
 		stmt += " SCHEMA " + quoteIdentifier(schema)
 	}
 	if version = strings.TrimSpace(version); version != "" {
@@ -301,10 +304,20 @@ func formatAlterViewOptions(schema, name string, materialized bool, reloptions s
 		key = strings.ToLower(strings.TrimSpace(key))
 		val = strings.Trim(strings.TrimSpace(val), `"`)
 		switch key {
-		case "security_barrier":
-			if val == "true" {
-				parts = append(parts, "security_barrier=true")
+		case "fillfactor":
+			if !materialized {
+				continue
 			}
+			n, err := strconv.Atoi(val)
+			if err != nil || n < 10 || n > 100 {
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("fillfactor=%d", n))
+		case "security_barrier":
+			if materialized || val != "true" {
+				continue
+			}
+			parts = append(parts, "security_barrier=true")
 		case "security_invoker", "check_option":
 			if materialized {
 				continue
@@ -328,15 +341,27 @@ func formatAlterViewOptions(schema, name string, materialized bool, reloptions s
 }
 
 type rangeTypeDef struct {
-	schema        string
-	name          string
-	subtype       string
-	opclassSchema string
-	opclass       string
-	collSchema    string
-	collName      string
-	canonical     string
-	subtypeDiff   string
+	schema            string
+	name              string
+	subtype           string
+	opclassSchema     string
+	opclass           string
+	collSchema        string
+	collName          string
+	canonicalSchema   string
+	canonical         string
+	subtypeDiffSchema string
+	subtypeDiff       string
+	multirange        string
+}
+
+func (r rangeTypeDef) needsShell() bool {
+	return userRangeFunc(r.canonicalSchema) || userRangeFunc(r.subtypeDiffSchema)
+}
+
+func userRangeFunc(schema string) bool {
+	schema = strings.TrimSpace(schema)
+	return schema != "" && !strings.EqualFold(schema, "pg_catalog")
 }
 
 // formatCreateRangeType emits CREATE TYPE ... AS RANGE. Operator classes outside
@@ -355,14 +380,35 @@ func formatCreateRangeType(r rangeTypeDef) string {
 	if r.subtypeDiff != "" {
 		parts = append(parts, "SUBTYPE_DIFF = "+r.subtypeDiff)
 	}
+	if multi := strings.TrimSpace(r.multirange); multi != "" && multi != defaultMultirangeName(r.name) {
+		parts = append(parts, "MULTIRANGE_TYPE_NAME = "+quoteIdentifier(multi))
+	}
 	return fmt.Sprintf("CREATE TYPE %s AS RANGE (%s)", quoteQualifiedType(r.schema, r.name), strings.Join(parts, ", "))
 }
 
-func formatRangeFunc(schema, name, args string) string {
-	if strings.TrimSpace(name) == "" {
+func formatCreateRangeShell(schema, name string) string {
+	return "CREATE TYPE " + quoteQualifiedType(schema, name)
+}
+
+// defaultMultirangeName matches PostgreSQL: replace the first "range"
+// substring, otherwise append _multirange.
+func defaultMultirangeName(rangeName string) string {
+	if i := strings.Index(rangeName, "range"); i >= 0 {
+		return rangeName[:i] + "multirange" + rangeName[i+len("range"):]
+	}
+	return rangeName + "_multirange"
+}
+
+func formatRangeFunc(schema, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		return ""
 	}
-	return quoteQualifiedType(schema, name) + "(" + args + ")"
+	schema = strings.TrimSpace(schema)
+	if schema == "" {
+		return quoteIdentifier(name)
+	}
+	return quoteQualifiedType(schema, name)
 }
 
 // formatCommentOn emits COMMENT ON statements.
