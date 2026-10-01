@@ -1193,6 +1193,41 @@ func TestRestoreHistoryWorkersOverrideText(t *testing.T) {
 	}
 }
 
+func TestAppDumpHistoryFilterEditDefersDumpShortcut(t *testing.T) {
+	conn, err := sql.Open("pgx", "postgres://u:p@h-x/db_stub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{blockCtx: true}, nil, nil, nil, nil, false)
+	app.db = conn
+	app.screen = ScreenDump
+	app.dump.OutputDir = t.TempDir()
+	app.width = 80
+	app.height = 24
+	seedDumpSchemas(app)
+
+	ds := app.screens[ScreenDump].(*dumpScreen)
+	enterDumpSection(ds, dumpSectionHistory)
+
+	app = drainUpdate(app, keyPress("/", '/', 0))
+	if !app.dump.History.FilterEditing {
+		t.Fatal("expected filter editing after /")
+	}
+
+	for _, r := range "billing" {
+		app = drainUpdate(app, keyPress(string(r), r, 0))
+	}
+
+	if app.dump.History.FilterDraft != "billing" {
+		t.Fatalf("FilterDraft = %q, want billing", app.dump.History.FilterDraft)
+	}
+	if app.dumpStatus != DumpStatusIdle {
+		t.Fatalf("dumpStatus = %v, want idle while editing filter", app.dumpStatus)
+	}
+}
+
 func TestAppHistoryWorkersDigitsReachField(t *testing.T) {
 	app := NewApp()
 	app.screen = ScreenDump

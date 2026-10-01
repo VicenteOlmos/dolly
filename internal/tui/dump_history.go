@@ -23,6 +23,7 @@ func refreshDumpHistory(draft *DumpDraft, store dumphistory.Store) {
 		draft.History = DumpHistoryState{}
 		return
 	}
+	prev := draft.History
 	entries := make([]DumpHistoryEntry, 0, len(recs))
 	for _, r := range recs {
 		entries = append(entries, DumpHistoryEntry{
@@ -34,7 +35,14 @@ func refreshDumpHistory(draft *DumpDraft, store dumphistory.Store) {
 			RowEstimate: r.RowEstimate,
 		})
 	}
-	draft.History = DumpHistoryState{Entries: entries}
+	draft.History = DumpHistoryState{
+		Entries:       entries,
+		Cursor:        prev.Cursor,
+		Filter:        prev.Filter,
+		FilterDraft:   prev.FilterDraft,
+		FilterEditing: prev.FilterEditing,
+	}
+	draft.History.clampCursorToVisible()
 }
 
 func formatDumpHistoryLabel(r dumphistory.Record) string {
@@ -60,27 +68,38 @@ func renderDumpHistoryLines(h *DumpHistoryState, maxLines int) []string {
 	if h == nil || len(h.Entries) == 0 {
 		return []string{StyleMuted.Render("  (no dumps yet — run a dump to build history)")}
 	}
+	visible := h.visibleIndices()
+	if len(visible) == 0 {
+		return []string{StyleMuted.Render("  no matching dumps")}
+	}
 	if maxLines < 1 {
 		maxLines = 1
 	}
+	cursorPos := 0
+	for i, idx := range visible {
+		if idx == h.Cursor {
+			cursorPos = i
+			break
+		}
+	}
 	start := 0
-	if len(h.Entries) > maxLines {
-		start = h.Cursor - maxLines/2
+	if len(visible) > maxLines {
+		start = cursorPos - maxLines/2
 		if start < 0 {
 			start = 0
 		}
-		if start+maxLines > len(h.Entries) {
-			start = len(h.Entries) - maxLines
+		if start+maxLines > len(visible) {
+			start = len(visible) - maxLines
 		}
 	}
 	end := start + maxLines
-	if end > len(h.Entries) {
-		end = len(h.Entries)
+	if end > len(visible) {
+		end = len(visible)
 	}
 	var lines []string
-	for i := start; i < end; i++ {
-		entry := h.Entries[i]
-		if i == h.Cursor {
+	for _, idx := range visible[start:end] {
+		entry := h.Entries[idx]
+		if idx == h.Cursor {
 			lines = append(lines, StyleAccent.Render("> "+entry.Label))
 		} else {
 			lines = append(lines, "  "+entry.Label)
