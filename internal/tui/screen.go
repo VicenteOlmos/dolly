@@ -187,29 +187,155 @@ type DumpHistoryEntry struct {
 }
 
 type DumpHistoryState struct {
-	Entries []DumpHistoryEntry
-	Cursor  int
+	Entries       []DumpHistoryEntry
+	Cursor        int
+	Filter        string
+	FilterDraft   string
+	FilterEditing bool
+}
+
+func (h *DumpHistoryState) activeFilter() string {
+	if h == nil {
+		return ""
+	}
+	if h.FilterEditing {
+		return h.FilterDraft
+	}
+	return h.Filter
+}
+
+func (h *DumpHistoryState) StartFilterEdit() {
+	if h == nil {
+		return
+	}
+	h.FilterEditing = true
+	h.FilterDraft = h.Filter
+}
+
+func (h *DumpHistoryState) ApplyFilterEdit() {
+	if h == nil {
+		return
+	}
+	h.Filter = h.FilterDraft
+	h.FilterEditing = false
+	h.clampCursorToVisible()
+}
+
+func (h *DumpHistoryState) CancelFilterEdit() {
+	if h == nil {
+		return
+	}
+	h.Filter = ""
+	h.FilterDraft = ""
+	h.FilterEditing = false
+	h.clampCursorToVisible()
+}
+
+func (h *DumpHistoryState) AppendFilterRune(text string) {
+	if h == nil || text == "" {
+		return
+	}
+	h.FilterDraft += text
+	h.clampCursorToVisible()
+}
+
+func (h *DumpHistoryState) BackspaceFilterDraft() {
+	if h == nil || h.FilterDraft == "" {
+		return
+	}
+	h.FilterDraft = h.FilterDraft[:len(h.FilterDraft)-1]
+	h.clampCursorToVisible()
+}
+
+func (h *DumpHistoryState) entryMatches(entry DumpHistoryEntry, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	q := strings.ToLower(filter)
+	return strings.Contains(strings.ToLower(entry.Label), q) ||
+		strings.Contains(strings.ToLower(entry.Path), q)
+}
+
+func (h *DumpHistoryState) visibleIndices() []int {
+	if h == nil || len(h.Entries) == 0 {
+		return nil
+	}
+	filter := h.activeFilter()
+	if filter == "" {
+		out := make([]int, len(h.Entries))
+		for i := range h.Entries {
+			out[i] = i
+		}
+		return out
+	}
+	var out []int
+	for i, entry := range h.Entries {
+		if h.entryMatches(entry, filter) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func (h *DumpHistoryState) clampCursorToVisible() {
+	if h == nil || len(h.Entries) == 0 {
+		if h != nil {
+			h.Cursor = 0
+		}
+		return
+	}
+	indices := h.visibleIndices()
+	if len(indices) == 0 {
+		return
+	}
+	for _, idx := range indices {
+		if idx == h.Cursor {
+			return
+		}
+	}
+	for _, idx := range indices {
+		if idx >= h.Cursor {
+			h.Cursor = idx
+			return
+		}
+	}
+	h.Cursor = indices[len(indices)-1]
 }
 
 func (h *DumpHistoryState) Selected() *DumpHistoryEntry {
 	if h == nil || h.Cursor < 0 || h.Cursor >= len(h.Entries) {
 		return nil
 	}
+	filter := h.activeFilter()
+	if filter != "" && !h.entryMatches(h.Entries[h.Cursor], filter) {
+		return nil
+	}
 	return &h.Entries[h.Cursor]
 }
 
 func (h *DumpHistoryState) MoveCursor(delta int) {
-	if len(h.Entries) == 0 {
-		h.Cursor = 0
+	if h == nil {
 		return
 	}
-	h.Cursor += delta
-	if h.Cursor < 0 {
-		h.Cursor = 0
+	indices := h.visibleIndices()
+	if len(indices) == 0 {
+		return
 	}
-	if h.Cursor >= len(h.Entries) {
-		h.Cursor = len(h.Entries) - 1
+	pos := 0
+	for i, idx := range indices {
+		if idx == h.Cursor {
+			pos = i
+			break
+		}
 	}
+	pos += delta
+	if pos < 0 {
+		pos = 0
+	}
+	if pos >= len(indices) {
+		pos = len(indices) - 1
+	}
+	h.Cursor = indices[pos]
 }
 
 type CloneStatus int

@@ -228,11 +228,39 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 			d.restoreWorkersFocus = false
 			return nil
 		}
+		if d.nav.Section == dumpSectionHistory && d.historyFocus == historyFocusList && d.draft.History.FilterEditing {
+			d.draft.History.CancelFilterEdit()
+			return nil
+		}
 		d.nav.Exit()
 		return nil
 	}
 
 	if d.nav.InInside() && d.nav.Section == dumpSectionHistory {
+		if d.historyFocus == historyFocusList && !d.restoreDirFocus && !d.restoreWorkersFocus {
+			if d.draft.History.FilterEditing {
+				switch k.Code {
+				case tea.KeyEnter:
+					d.draft.History.ApplyFilterEdit()
+					return nil
+				case tea.KeyEscape:
+					d.draft.History.CancelFilterEdit()
+					return nil
+				case tea.KeyBackspace:
+					d.draft.History.BackspaceFilterDraft()
+					return nil
+				}
+				if k.Text != "" {
+					d.draft.History.AppendFilterRune(k.Text)
+					return nil
+				}
+				return nil
+			}
+			if k.String() == "/" {
+				d.draft.History.StartFilterEdit()
+				return nil
+			}
+		}
 		if k.Code == tea.KeyTab {
 			d.restoreDirFocus = false
 			d.restoreWorkersFocus = false
@@ -285,7 +313,7 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 		}
-		if k.Code == tea.KeyEnter && !d.restoreDirFocus && !d.restoreWorkersFocus {
+		if k.Code == tea.KeyEnter && !d.restoreDirFocus && !d.restoreWorkersFocus && !d.draft.History.FilterEditing {
 			if d.historyFocus == historyFocusConflict {
 				d.draft.RestoreOnConflict = cycleRestoreOnConflict(d.draft.RestoreOnConflict)
 				return nil
@@ -293,13 +321,15 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 		}
 		switch k.String() {
 		case "r":
-			if !d.restoreDirFocus {
+			if !d.restoreDirFocus && !d.draft.History.FilterEditing {
 				return d.requestRestore()
 			}
 		}
 		switch k.Code {
 		case tea.KeyEnter:
-			return d.requestRestore()
+			if !d.draft.History.FilterEditing {
+				return d.requestRestore()
+			}
 		}
 	}
 
@@ -407,6 +437,9 @@ func (d *dumpScreen) requestRestore() tea.Cmd {
 }
 
 func (d *dumpScreen) onFieldCursorNavigation() bool {
+	if d.sectionActive(dumpSectionHistory) && d.historyFocus == historyFocusList && d.draft.History.FilterEditing {
+		return true
+	}
 	return d.sectionActive(dumpSectionPath) || d.modeTextFocused() ||
 		(d.sectionActive(dumpSectionHistory) && (d.restoreDirFocus || d.restoreWorkersFocus))
 }
@@ -883,7 +916,7 @@ func (d *dumpScreen) restoreWorkersLabel() string {
 func (d *dumpScreen) historySection(maxLines int) []string {
 	var lines []string
 	label := StyleAccent.Render("History:")
-	hint := "(Tab field · p path · ↑/↓ · Space edit · Enter restore · Esc back)"
+	hint := "(Tab field · p path · / filter · ↑/↓ · Space edit · Enter restore · Esc back)"
 	lines = append(lines, label+" "+StyleMuted.Render(hint))
 	pathLabel := "Restore directory:"
 	pathVal := renderEditableField(d.restoreDir, d.restoreDirCursor, false, d.restoreDirFocus)
@@ -910,6 +943,16 @@ func (d *dumpScreen) historySection(maxLines int) []string {
 		trusted = "[x]"
 	}
 	lines = append(lines, d.historyControlLine(historyFocusTrust, "", trusted+" Trust schema.sql for this restore"))
+	if h := &d.draft.History; h.FilterEditing || h.Filter != "" {
+		filterVal := h.Filter
+		if h.FilterEditing {
+			filterVal = renderEditableField(h.FilterDraft, len(h.FilterDraft), false, true)
+		}
+		if filterVal == "" {
+			filterVal = StyleMuted.Render("(empty)")
+		}
+		lines = append(lines, "  "+StyleAccent.Render("Filter:")+" "+filterVal)
+	}
 	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-7)...)
 	return lines
 }

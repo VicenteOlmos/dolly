@@ -76,12 +76,15 @@
                                                 │ (inside        │                  
                                                 │ history        │                  
                                                 │ section)       │                  
+                                                │ /  [dump]      │                  
+                                                │ filter dump    │                  
+                                                │ history list   │                  
+                                                │ (inside        │                  
+                                                │ history        │                  
+                                                │ section, list  │                  
+                                                │ focus)         │                  
                                                 │ g / F5  [dump] │                  
-                                                │ start dump     │                  
-                                                │ Ctrl+Enter     │                  
-                                                │ [dump]  start  │                  
-                                                │ dump           │                  
-                                                │ (termina……     │                  
+                                                │ start dump…    │                  
                                                 ╰────────────────╯                  
 U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     
 ↑↓ section · Enter open · g/F5 dump · ?/F1                                      

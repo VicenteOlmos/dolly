@@ -134,6 +134,65 @@ func TestRenderDumpHistoryLinesCursorHighlight(t *testing.T) {
 	}
 }
 
+func TestDumpHistoryFilterHidesNonMatching(t *testing.T) {
+	h := &DumpHistoryState{
+		Entries: []DumpHistoryEntry{
+			{Label: "#1 · public · 1 tables", Path: "/data/1"},
+			{Label: "#2 · billing · 2 tables", Path: "/data/2"},
+		},
+		Cursor: 1,
+		Filter: "billing",
+	}
+	lines := renderDumpHistoryLines(h, 10)
+	if len(lines) != 1 {
+		t.Fatalf("lines = %d, want 1 visible row", len(lines))
+	}
+	if !containsPlain(lines[0], "billing") {
+		t.Fatalf("line = %q, want billing entry", stripANSIForGolden(lines[0]))
+	}
+}
+
+func TestDumpHistoryFilterNoMatches(t *testing.T) {
+	h := &DumpHistoryState{
+		Entries: []DumpHistoryEntry{
+			{Label: "#1 · public · 1 tables", Path: "/data/1"},
+		},
+		Filter: "missing",
+	}
+	lines := renderDumpHistoryLines(h, 5)
+	if len(lines) != 1 || !containsPlain(lines[0], "no matching dumps") {
+		t.Fatalf("lines = %v, want muted no matching dumps", lines)
+	}
+}
+
+func TestDumpScreenHistoryFilterEscClears(t *testing.T) {
+	status := DumpStatusIdle
+	d := &dumpScreen{
+		draft: &DumpDraft{History: DumpHistoryState{
+			Entries: []DumpHistoryEntry{
+				{Label: "#1 · public · 1 tables", Path: "/data/1"},
+				{Label: "#2 · billing · 2 tables", Path: "/data/2"},
+			},
+			Filter:        "billing",
+			FilterEditing: true,
+			FilterDraft:   "billing",
+		}},
+		dumpStatus:   &status,
+		historyFocus: historyFocusList,
+		nav:          NewSectionNav(dumpSectionCount),
+	}
+	d.nav.EnterInside(dumpSectionHistory)
+
+	d.Update(keyPress("", tea.KeyEscape, 0))
+	if d.draft.History.Filter != "" || d.draft.History.FilterEditing {
+		t.Fatalf("filter = %q editing = %v, want cleared", d.draft.History.Filter, d.draft.History.FilterEditing)
+	}
+	lines := renderDumpHistoryLines(&d.draft.History, 10)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want all entries visible again", len(lines))
+	}
+}
+
 func TestDumpHistoryRestoreWorkersPassedToRestoreOptions(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Restore.Workers = 1
