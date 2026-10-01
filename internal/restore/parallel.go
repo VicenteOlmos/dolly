@@ -120,13 +120,13 @@ func initParallelRestoreManifest(path string, allLabels []string, target Partial
 	}
 	if !existing.Target.same(target) {
 		return PartialStateManifest{}, fmt.Errorf(
-			"partial state manifest %q target does not match this restore (manifest %+v, current %+v)",
+			"partial state manifest %s target does not match this restore (manifest %+v, current %+v)",
 			path, existing.Target, target,
 		)
 	}
 	if existing.TableSetFingerprint != "" && existing.TableSetFingerprint != fingerprint {
 		return PartialStateManifest{}, fmt.Errorf(
-			"partial state manifest %q table set does not match this restore",
+			"partial state manifest %s table set does not match this restore",
 			path,
 		)
 	}
