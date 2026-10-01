@@ -93,8 +93,11 @@ func postgresSchemaLoaderFromConfig(cfg *config.Config) postgresSchemaLoader {
 	}
 	return postgresSchemaLoader{
 		dbConnOptions: dbConnOptions{
-			statementTimeout: cfg.DB.StatementTimeout,
-			maxOpenConns:     cfg.DB.MaxOpenConns,
+			statementTimeout:                cfg.DB.StatementTimeout,
+			lockTimeout:                     cfg.DB.LockTimeout,
+			idleInTransactionSessionTimeout: cfg.DB.IdleInTransactionSessionTimeout,
+			applicationName:                 cfg.DB.ApplicationName,
+			maxOpenConns:                    cfg.DB.MaxOpenConns,
 		},
 	}
 }

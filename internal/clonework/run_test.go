@@ -331,11 +331,15 @@ func TestRunPropagatesStatementTimeoutAndMaxOpenConns(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got.SourceDSN, "statement_timeout=5min") {
-		t.Fatalf("SourceDSN = %q, want statement_timeout", got.SourceDSN)
+	for _, part := range []string{"statement_timeout=5min", "application_name=dolly"} {
+		if !strings.Contains(got.SourceDSN, part) {
+			t.Fatalf("SourceDSN = %q, want %s", got.SourceDSN, part)
+		}
 	}
-	if !strings.Contains(got.TargetDSN, "statement_timeout=5min") {
-		t.Fatalf("TargetDSN = %q, want statement_timeout", got.TargetDSN)
+	for _, part := range []string{"statement_timeout=5min", "application_name=dolly"} {
+		if !strings.Contains(got.TargetDSN, part) {
+			t.Fatalf("TargetDSN = %q, want %s", got.TargetDSN, part)
+		}
 	}
 	if got.MaxOpenConns != 7 {
 		t.Fatalf("MaxOpenConns = %d, want 7", got.MaxOpenConns)
