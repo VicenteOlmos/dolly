@@ -35,6 +35,22 @@ func TestCLICatalogParityDump(t *testing.T) {
 	}
 }
 
+func TestCLICatalogParityDumpList(t *testing.T) {
+	fs := dumpListFlagSet(&dumpListFlags{})
+
+	got := flagSetNames(t, fs)
+	want := tui.FlagNames("dump list")
+	sort.Strings(want)
+	if len(got) != len(want) {
+		t.Fatalf("dump list flags: parser %v catalog %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("dump list flag[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestCLICatalogParityRestore(t *testing.T) {
 	fs := restoreFlagSet(&restoreFlags{})
 
