@@ -1246,47 +1246,59 @@ type grantRow struct {
 	object     string
 	grantee    string
 	privileges []string
+	grantable  bool
 	isSchema   bool
 }
 
 func loadGrants(ctx context.Context, q *sql.DB, schemas []string) ([]grantRow, error) {
+	tableGrants, err := loadTableGrants(ctx, q, schemas)
+	if err != nil {
+		return nil, err
+	}
+	schemaGrants, err := loadSchemaGrants(ctx, q, schemas)
+	if err != nil {
+		return nil, err
+	}
+	return append(tableGrants, schemaGrants...), nil
+}
+
+func loadTableGrants(ctx context.Context, q *sql.DB, schemas []string) ([]grantRow, error) {
 	inClause, args := schemaINClause(schemas)
 	query := fmt.Sprintf(`
-		SELECT table_schema, table_name, grantee, privilege_type
-		FROM information_schema.table_privileges
-		WHERE table_schema IN (%s)
-		  AND grantee <> 'PUBLIC'
-		UNION ALL
-		SELECT object_schema, '', grantee, privilege_type
-		FROM information_schema.usage_privileges
-		WHERE object_type = 'SCHEMA' AND object_schema IN (%s)
-		ORDER BY 1, 2, 3`, inClause, inClause)
+		SELECT n.nspname, c.relname, COALESCE(r.rolname, 'PUBLIC'), priv.privilege_type, priv.is_grantable
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL aclexplode(c.relacl) priv
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, 3`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list grants: %w", err)
+		return nil, fmt.Errorf("list table grants: %w", err)
 	}
 	defer rows.Close()
 
 	type key struct {
 		schema, object, grantee string
-		isSchema                bool
+		grantable               bool
 	}
 	byKey := make(map[key][]string)
 	var order []key
 	for rows.Next() {
 		var schema, object, grantee, priv string
-		if err := rows.Scan(&schema, &object, &grantee, &priv); err != nil {
-			return nil, fmt.Errorf("scan grant: %w", err)
+		var grantable bool
+		if err := rows.Scan(&schema, &object, &grantee, &priv, &grantable); err != nil {
+			return nil, fmt.Errorf("scan table grant: %w", err)
 		}
-		isSchema := object == ""
-		k := key{schema: schema, object: object, grantee: grantee, isSchema: isSchema}
+		k := key{schema: schema, object: object, grantee: grantee, grantable: grantable}
 		if _, ok := byKey[k]; !ok {
 			order = append(order, k)
 		}
 		byKey[k] = append(byKey[k], strings.ToUpper(priv))
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list grants: %w", err)
+		return nil, fmt.Errorf("list table grants: %w", err)
 	}
 	var out []grantRow
 	for _, k := range order {
@@ -1295,7 +1307,57 @@ func loadGrants(ctx context.Context, q *sql.DB, schemas []string) ([]grantRow, e
 			object:     k.object,
 			grantee:    k.grantee,
 			privileges: byKey[k],
-			isSchema:   k.isSchema,
+			grantable:  k.grantable,
+		})
+	}
+	return out, nil
+}
+
+func loadSchemaGrants(ctx context.Context, q *sql.DB, schemas []string) ([]grantRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, COALESCE(r.rolname, 'PUBLIC'), priv.privilege_type, priv.is_grantable
+		FROM pg_namespace n
+		CROSS JOIN LATERAL aclexplode(n.nspacl) priv
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE n.nspname IN (%s)
+		  AND n.nspacl IS NOT NULL
+		ORDER BY n.nspname, 2`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list schema grants: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct {
+		schema, grantee string
+		grantable       bool
+	}
+	byKey := make(map[key][]string)
+	var order []key
+	for rows.Next() {
+		var schema, grantee, priv string
+		var grantable bool
+		if err := rows.Scan(&schema, &grantee, &priv, &grantable); err != nil {
+			return nil, fmt.Errorf("scan schema grant: %w", err)
+		}
+		k := key{schema: schema, grantee: grantee, grantable: grantable}
+		if _, ok := byKey[k]; !ok {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], strings.ToUpper(priv))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list schema grants: %w", err)
+	}
+	var out []grantRow
+	for _, k := range order {
+		out = append(out, grantRow{
+			schema:     k.schema,
+			grantee:    k.grantee,
+			privileges: byKey[k],
+			grantable:  k.grantable,
+			isSchema:   true,
 		})
 	}
 	return out, nil
@@ -1309,6 +1371,9 @@ func applyGrants(ctx context.Context, tgtDB execer, grants []grantRow) error {
 			stmt = formatGrantSchema(privs, g.schema, g.grantee)
 		} else {
 			stmt = formatGrantTable(privs, g.schema, g.object, g.grantee)
+		}
+		if g.grantable {
+			stmt += " WITH GRANT OPTION"
 		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			target := g.schema
@@ -1602,6 +1667,163 @@ func applyTypeGrants(ctx context.Context, tgtDB execer, grants []typeGrantRow) e
 		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("grant on type %s.%s: %w", g.schema, g.typeName, err)
+		}
+	}
+	return nil
+}
+
+type defaultPrivilegeRow struct {
+	schema    string
+	ownerRole string
+	objKind   string
+	privilege string
+	grantee   string
+	grantable bool
+}
+
+func loadDefaultPrivileges(ctx context.Context, q *sql.DB, schemas []string) ([]defaultPrivilegeRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, owner.rolname, d.defaclobjtype,
+		       COALESCE(grantee_role.rolname, 'PUBLIC'),
+		       priv.privilege_type, priv.is_grantable
+		FROM pg_default_acl d
+		JOIN pg_namespace n ON n.oid = d.defaclnamespace
+		JOIN pg_roles owner ON owner.oid = d.defaclrole
+		CROSS JOIN LATERAL aclexplode(d.defaclacl) priv
+		LEFT JOIN pg_roles grantee_role ON grantee_role.oid = priv.grantee
+		WHERE d.defaclacl IS NOT NULL
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, owner.rolname, d.defaclobjtype, 4`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list default privileges: %w", err)
+	}
+	defer rows.Close()
+
+	var out []defaultPrivilegeRow
+	for rows.Next() {
+		var schema, ownerRole, objCode, grantee, priv string
+		var grantable bool
+		if err := rows.Scan(&schema, &ownerRole, &objCode, &grantee, &priv, &grantable); err != nil {
+			return nil, fmt.Errorf("scan default privilege: %w", err)
+		}
+		priv = strings.TrimSpace(priv)
+		if priv == "" {
+			continue
+		}
+		objKind, ok := defaultPrivilegeObjectKind(objCode)
+		if !ok {
+			continue
+		}
+		out = append(out, defaultPrivilegeRow{
+			schema:    schema,
+			ownerRole: ownerRole,
+			objKind:   objKind,
+			privilege: strings.ToUpper(priv),
+			grantee:   grantee,
+			grantable: grantable,
+		})
+	}
+	return out, rows.Err()
+}
+
+func defaultPrivilegeObjectKind(code string) (string, bool) {
+	switch code {
+	case "r":
+		return "TABLES", true
+	case "S":
+		return "SEQUENCES", true
+	case "f":
+		return "FUNCTIONS", true
+	case "T":
+		return "TYPES", true
+	default:
+		return "", false
+	}
+}
+
+func applyDefaultPrivileges(ctx context.Context, tgtDB execer, rows []defaultPrivilegeRow) error {
+	for _, g := range rows {
+		stmt := formatAlterDefaultPrivilege(g.ownerRole, g.schema, g.objKind, g.privilege, g.grantee)
+		if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("default privilege in schema %s: %w", g.schema, err)
+		}
+	}
+	return nil
+}
+
+type indexGrantRow struct {
+	schema     string
+	index      string
+	grantee    string
+	privileges []string
+	grantable  bool
+}
+
+func loadIndexGrants(ctx context.Context, q *sql.DB, schemas []string) ([]indexGrantRow, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, COALESCE(r.rolname, 'PUBLIC'), priv.privilege_type, priv.is_grantable
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		CROSS JOIN LATERAL aclexplode(c.relacl) priv
+		LEFT JOIN pg_roles r ON r.oid = priv.grantee
+		WHERE c.relkind = 'i'
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, 3`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list index grants: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct {
+		schema, index, grantee string
+		grantable              bool
+	}
+	byKey := make(map[key][]string)
+	var order []key
+	for rows.Next() {
+		var schema, index, grantee, priv string
+		var grantable bool
+		if err := rows.Scan(&schema, &index, &grantee, &priv, &grantable); err != nil {
+			return nil, fmt.Errorf("scan index grant: %w", err)
+		}
+		k := key{schema: schema, index: index, grantee: grantee, grantable: grantable}
+		if _, ok := byKey[k]; !ok {
+			order = append(order, k)
+		}
+		byKey[k] = append(byKey[k], strings.ToUpper(priv))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list index grants: %w", err)
+	}
+	var out []indexGrantRow
+	for _, k := range order {
+		out = append(out, indexGrantRow{
+			schema:     k.schema,
+			index:      k.index,
+			grantee:    k.grantee,
+			privileges: byKey[k],
+			grantable:  k.grantable,
+		})
+	}
+	return out, nil
+}
+
+func applyIndexGrants(ctx context.Context, tgtDB execer, grants []indexGrantRow) error {
+	for _, g := range grants {
+		privs := strings.Join(g.privileges, ", ")
+		stmt := formatGrantIndex(privs, g.schema, g.index, g.grantee)
+		if g.grantable {
+			stmt += " WITH GRANT OPTION"
+		}
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("grant on index %s.%s: %w", g.schema, g.index, err)
 		}
 	}
 	return nil

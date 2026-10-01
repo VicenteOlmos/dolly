@@ -547,6 +547,28 @@ func formatGrantSchema(privileges, schema, grantee string) string {
 	)
 }
 
+// formatGrantIndex emits GRANT privileges ON INDEX.
+func formatGrantIndex(privileges, schema, index, grantee string) string {
+	return fmt.Sprintf(
+		"GRANT %s ON INDEX %s TO %s",
+		privileges,
+		quoteQualifiedTable(schema, index),
+		quoteGrantee(grantee),
+	)
+}
+
+// formatAlterDefaultPrivilege emits ALTER DEFAULT PRIVILEGES ... GRANT ... ON objKind.
+func formatAlterDefaultPrivilege(ownerRole, schema, objKind, privilege, grantee string) string {
+	return fmt.Sprintf(
+		"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT %s ON %s TO %s",
+		quoteIdentifier(ownerRole),
+		quoteIdentifier(schema),
+		privilege,
+		objKind,
+		quoteGrantee(grantee),
+	)
+}
+
 func quoteGrantee(name string) string {
 	if strings.EqualFold(name, "PUBLIC") {
 		return "PUBLIC"

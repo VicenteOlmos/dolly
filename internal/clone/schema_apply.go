@@ -376,6 +376,20 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		if err := applyTypeGrants(ctx, tgtDB, typeGrants); err != nil {
 			return err
 		}
+		defaultPrivs, err := loadDefaultPrivileges(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyDefaultPrivileges(ctx, tgtDB, defaultPrivs); err != nil {
+			return err
+		}
+		indexGrants, err := loadIndexGrants(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := applyIndexGrants(ctx, tgtDB, indexGrants); err != nil {
+			return err
+		}
 	}
 
 	rlsTables, err := loadRLSTables(ctx, srcDB, schemas)

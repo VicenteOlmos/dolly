@@ -8,6 +8,121 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func TestReplayTableAndSchemaGrants(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	ctx := context.Background()
+	schemas := []string{"app"}
+
+	mock.ExpectQuery(`relkind IN \('r', 'p', 'v', 'm', 'f'\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "table", "grantee", "privilege", "grantable"}).
+			AddRow("app", "users", "PUBLIC", "SELECT", false).
+			AddRow("app", "users", "reader", "SELECT", false).
+			AddRow("app", "users", "editor", "INSERT", true))
+	mock.ExpectQuery(`aclexplode\(n\.nspacl\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "grantee", "privilege", "grantable"}).
+			AddRow("app", "PUBLIC", "USAGE", false).
+			AddRow("app", "writer", "CREATE", true))
+	grants, err := loadGrants(ctx, src, schemas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyGrants(ctx, rec, grants); err != nil {
+		t.Fatal(err)
+	}
+	script := rec.String()
+	for _, stmt := range []string{
+		`GRANT SELECT ON TABLE "app"."users" TO PUBLIC;`,
+		`GRANT SELECT ON TABLE "app"."users" TO "reader";`,
+		`GRANT INSERT ON TABLE "app"."users" TO "editor" WITH GRANT OPTION;`,
+		`GRANT USAGE ON SCHEMA "app" TO PUBLIC;`,
+		`GRANT CREATE ON SCHEMA "app" TO "writer" WITH GRANT OPTION;`,
+	} {
+		if !strings.Contains(script, stmt) {
+			t.Errorf("missing %s in:\n%s", stmt, script)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplayDefaultPrivileges(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "owner", "objkind", "grantee", "privilege", "grantable"}).
+			AddRow("app", "owner", "r", "PUBLIC", "SELECT", false).
+			AddRow("app", "owner", "S", "reader", "USAGE", true).
+			AddRow("app", "owner", "f", "reader", "EXECUTE", false).
+			AddRow("app", "owner", "T", "PUBLIC", "USAGE", false).
+			AddRow("app", "owner", "r", "reader", "", false))
+	rows, err := loadDefaultPrivileges(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyDefaultPrivileges(context.Background(), rec, rows); err != nil {
+		t.Fatal(err)
+	}
+	script := rec.String()
+	for _, stmt := range []string{
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT SELECT ON TABLES TO PUBLIC;`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT USAGE ON SEQUENCES TO "reader" WITH GRANT OPTION;`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT EXECUTE ON FUNCTIONS TO "reader";`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "owner" IN SCHEMA "app" GRANT USAGE ON TYPES TO PUBLIC;`,
+	} {
+		if !strings.Contains(script, stmt) {
+			t.Errorf("missing %s in:\n%s", stmt, script)
+		}
+	}
+	if strings.Count(script, "ALTER DEFAULT PRIVILEGES") != 4 {
+		t.Errorf("expected four default privilege statements, got:\n%s", script)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReplayIndexGrants(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`c\.relkind = 'i'`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "index", "grantee", "privilege", "grantable"}).
+			AddRow("app", "users_pkey", "PUBLIC", "SELECT", false).
+			AddRow("app", "users_email_idx", "reader", "SELECT", true))
+	grants, err := loadIndexGrants(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyIndexGrants(context.Background(), rec, grants); err != nil {
+		t.Fatal(err)
+	}
+	script := rec.String()
+	for _, stmt := range []string{
+		`GRANT SELECT ON INDEX "app"."users_pkey" TO PUBLIC;`,
+		`GRANT SELECT ON INDEX "app"."users_email_idx" TO "reader" WITH GRANT OPTION;`,
+	} {
+		if !strings.Contains(script, stmt) {
+			t.Errorf("missing %s in:\n%s", stmt, script)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReplayExtraGrants(t *testing.T) {
 	src, mock, err := sqlmock.New()
 	if err != nil {
@@ -27,7 +142,7 @@ func TestReplayExtraGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`aclexplode\(c\.relacl\)`).WillReturnRows(
+	mock.ExpectQuery(`c\.relkind = 'S'`).WillReturnRows(
 		sqlmock.NewRows([]string{"schema", "sequence", "grantee", "privilege", "grantable"}).
 			AddRow("app", "seq", "PUBLIC", "USAGE", false).
 			AddRow("app", "seq", "reader", "SELECT", false).

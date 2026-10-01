@@ -113,16 +113,22 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`FROM pg_description`).WillReturnRows(
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
-	srcMock.ExpectQuery(`FROM information_schema.table_privileges`).WillReturnRows(
-		sqlmock.NewRows([]string{"table_schema", "table_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`relkind IN \('r', 'p', 'v', 'm', 'f'\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
+	srcMock.ExpectQuery(`aclexplode\(n\.nspacl\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(a\.attacl\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "grantee", "privilege_type", "grantable"}))
-	srcMock.ExpectQuery(`aclexplode\(c\.relacl\)`).WillReturnRows(
+	srcMock.ExpectQuery(`c\.relkind = 'S'`).WillReturnRows(
 		sqlmock.NewRows([]string{"schema", "sequence", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(p\.proacl\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "proname", "pg_get_function_identity_arguments", "kind", "rolname", "privilege_type", "grantable", "missing_public"}))
 	srcMock.ExpectQuery(`acldefault\('T', t\.typowner\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "grantee", "grantable"}))
+	srcMock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "owner", "defaclobjtype", "grantee", "privilege_type", "grantable"}))
+	srcMock.ExpectQuery(`c\.relkind = 'i'`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
@@ -473,16 +479,22 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		sqlmock.NewRows([]string{"schema", "table", "name", "mode", "definition"}))
 	srcMock.ExpectQuery(`FROM pg_description`).WillReturnRows(
 		sqlmock.NewRows([]string{"kind", "nspname", "relname", "attname", "description"}))
-	srcMock.ExpectQuery(`FROM information_schema.table_privileges`).WillReturnRows(
-		sqlmock.NewRows([]string{"table_schema", "table_name", "grantee", "privilege_type"}))
+	srcMock.ExpectQuery(`relkind IN \('r', 'p', 'v', 'm', 'f'\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
+	srcMock.ExpectQuery(`aclexplode\(n\.nspacl\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(a\.attacl\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "grantee", "privilege_type", "grantable"}))
-	srcMock.ExpectQuery(`aclexplode\(c\.relacl\)`).WillReturnRows(
+	srcMock.ExpectQuery(`c\.relkind = 'S'`).WillReturnRows(
 		sqlmock.NewRows([]string{"schema", "sequence", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`aclexplode\(p\.proacl\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "proname", "pg_get_function_identity_arguments", "kind", "rolname", "privilege_type", "grantable", "missing_public"}))
 	srcMock.ExpectQuery(`acldefault\('T', t\.typowner\)`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "grantee", "grantable"}))
+	srcMock.ExpectQuery(`FROM pg_default_acl`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "owner", "defaclobjtype", "grantee", "privilege_type", "grantable"}))
+	srcMock.ExpectQuery(`c\.relkind = 'i'`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "grantee", "privilege_type", "grantable"}))
 	srcMock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relforcerowsecurity"}))
 	srcMock.ExpectQuery(`FROM pg_policy`).WillReturnRows(
