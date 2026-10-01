@@ -140,7 +140,7 @@ func NewAppWithOptions(loader SchemaLoader, runner DumpRunner, restoreRunner Res
 	app.screens[ScreenConnection] = newConnectionScreen(
 		&app.conn, &app.connStatus, &app.connectError, store, saveConnections,
 		app.defaultConnectionName, app.setDefaultConnectionProfile, &app.spinnerFrame, app.sectionEntry,
-		func() []string { return append([]string(nil), app.sourceSchemaNames...) },
+		func() []string { return app.dump.SchemaPicker.SelectedNames() },
 	)
 	app.screens[ScreenSchema] = newSchemaScreen(&app.schema, app.hasSession)
 	app.screens[ScreenDump] = newDumpScreen(&app.dump, app.hasSession, &app.dumpStatus, &app.dumpLog, &app.dumpError, &app.dumpResult, &app.spinnerFrame, &app.dumpProgress, &app.restoreProgress, &app.restoreRunning, func() bool {

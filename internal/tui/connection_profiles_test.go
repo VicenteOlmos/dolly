@@ -331,7 +331,8 @@ func TestConnectionSaveAsUsesSessionSchemas(t *testing.T) {
 		Schemas: []string{"public"},
 	})
 	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, nil, nil, nil, store, true)
-	app.sourceSchemaNames = []string{"app", "other"}
+	app.sourceSchemaNames = []string{"app", "private"}
+	SeedSchemaPicker(&app.dump.SchemaPicker, []string{"app", "private"}, []string{"app"})
 	app.conn = ConnectionDraft{Host: "stale.host", Port: "5432", Database: "wrong", User: "x", Password: "y"}
 	cs := app.screens[ScreenConnection].(*connectionScreen)
 	enterConnectionList(cs)
@@ -346,8 +347,8 @@ func TestConnectionSaveAsUsesSessionSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(got.Schemas) != 2 || got.Schemas[0] != "app" || got.Schemas[1] != "other" {
-		t.Fatalf("Schemas = %v, want [app other] from session", got.Schemas)
+	if len(got.Schemas) != 1 || got.Schemas[0] != "app" {
+		t.Fatalf("Schemas = %v, want [app] from session selection (not full catalog)", got.Schemas)
 	}
 }
 
