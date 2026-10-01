@@ -119,10 +119,91 @@ func TestFormatAlterSequenceOwnedBy(t *testing.T) {
 
 func TestFormatCreateExtension(t *testing.T) {
 	t.Parallel()
-	got := formatCreateExtension("uuid-ossp")
-	want := `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`
+	got := formatCreateExtension("uuid-ossp", "public", "")
+	want := `CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA "public"`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCreateExtension("postgis", "gis", "3.4.0")
+	want = `CREATE EXTENSION IF NOT EXISTS "postgis" SCHEMA "gis" VERSION '3.4.0'`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCreateExtension("plpgsql", "pg_catalog", "")
+	if strings.Contains(got, "SCHEMA") {
+		t.Fatalf("pg_catalog schema must stay omitted: %q", got)
+	}
+}
+
+func TestFormatCommentOnTriggerAndRule(t *testing.T) {
+	t.Parallel()
+	got := formatCommentOn("trigger", "app", "items", "touch", "keeps updated_at")
+	want := `COMMENT ON TRIGGER "touch" ON "app"."items" IS 'keeps updated_at'`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCommentOn("rule", "app", "items", "log_del", "audit")
+	want = `COMMENT ON RULE "log_del" ON "app"."items" IS 'audit'`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatAlterViewOptions(t *testing.T) {
+	t.Parallel()
+	got, ok := formatAlterViewOptions("app", "active", false, "security_barrier=true,security_invoker=true,check_option=cascaded,fillfactor=70")
+	if !ok {
+		t.Fatal("expected options")
+	}
+	want := `ALTER VIEW "app"."active" SET (security_barrier=true, security_invoker=true, check_option=cascaded)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if _, ok := formatAlterViewOptions("app", "mv", true, "security_invoker=true"); ok {
+		t.Fatal("materialized views do not take security_invoker")
+	}
+	if _, ok := formatAlterViewOptions("app", "mv", true, "security_barrier=true"); ok {
+		t.Fatal("materialized views do not take security_barrier")
+	}
+	got, ok = formatAlterViewOptions("app", "mv", true, "fillfactor=70")
+	if !ok || got != `ALTER MATERIALIZED VIEW "app"."mv" SET (fillfactor=70)` {
+		t.Fatalf("matview = %q ok=%v", got, ok)
+	}
+	if _, ok := formatAlterViewOptions("app", "mv", true, "fillfactor=nope"); ok {
+		t.Fatal("non-integer fillfactor must be omitted")
+	}
+}
+
+func TestFormatCreateRangeType(t *testing.T) {
+	t.Parallel()
+	got := formatCreateRangeType(rangeTypeDef{
+		schema: "app", name: "span", subtype: "integer",
+		opclassSchema: "pg_catalog", opclass: "int4_ops",
+		canonical:        `"app"."span_canonical"`,
+		subtypeDiff:      `"app"."span_diff"`,
+		multirangeSchema: "app",
+		multirange:       "span_set",
+	})
+	want := `CREATE TYPE "app"."span" AS RANGE (SUBTYPE = integer, SUBTYPE_OPCLASS = "int4_ops", CANONICAL = "app"."span_canonical", SUBTYPE_DIFF = "app"."span_diff", MULTIRANGE_TYPE_NAME = "app"."span_set")`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = formatCreateRangeType(rangeTypeDef{
+		schema: "app", name: "span", subtype: "integer",
+		opclassSchema: "app", opclass: "custom_ops",
+		multirange: "span_multirange",
+	})
+	if strings.Contains(got, "custom_ops") || strings.Contains(got, "MULTIRANGE") {
+		t.Fatalf("custom opclass and default multirange must stay omitted: %s", got)
+	}
+	if formatCreateRangeShell("app", "span") != `CREATE TYPE "app"."span"` {
+		t.Fatal("shell type")
+	}
+	if !(rangeTypeDef{canonicalSchema: "app"}).needsShell() || (rangeTypeDef{canonicalSchema: "pg_catalog"}).needsShell() {
+		t.Fatal("shell is required only for functions outside pg_catalog")
+	}
+	if defaultMultirangeName("int4range") != "int4multirange" || defaultMultirangeName("span") != "span_multirange" {
+		t.Fatal("default multirange name")
 	}
 }
 

@@ -25,6 +25,10 @@ func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRo
 		return nil, nil, err
 	}
 	inClause, args := schemaINClause(schemas)
+	// Extension members (deptype e) and objects owned internally by another
+	// catalog object (deptype i) are not replayed. Range and multirange
+	// constructors are internal: CREATE TYPE AS RANGE creates them, and their
+	// definitions mention the range array type, which does not exist on a shell.
 	query := fmt.Sprintf(`
 		SELECT p.oid, n.nspname || '.' || p.proname, pg_get_functiondef(p.oid)
 		FROM pg_proc p
@@ -33,7 +37,9 @@ func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRo
 		  AND p.prokind IN ('f', 'p', 'w')
 		  AND NOT EXISTS (
 		    SELECT 1 FROM pg_depend d
-		    WHERE d.objid = p.oid AND d.deptype = 'e'
+		    WHERE d.classid = 'pg_proc'::regclass
+		      AND d.objid = p.oid
+		      AND d.deptype IN ('e', 'i')
 		  )
 		ORDER BY n.nspname, p.proname, p.oid`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
