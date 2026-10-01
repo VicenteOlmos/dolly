@@ -51,6 +51,17 @@ func TestPartialStateTargetFromService(t *testing.T) {
 	}
 }
 
+func TestPartialStateTableSetFingerprintStable(t *testing.T) {
+	a := partialStateTableSetFingerprint([]string{"public.b", "public.a"})
+	b := partialStateTableSetFingerprint([]string{"public.a", "public.b"})
+	if a == "" || a != b {
+		t.Fatalf("fingerprints = %q %q", a, b)
+	}
+	if partialStateTableSetFingerprint([]string{"public.a"}) == a {
+		t.Fatal("different table sets must not share fingerprint")
+	}
+}
+
 func TestMergePartialStateManifestForRetry(t *testing.T) {
 	existing := PartialStateManifest{
 		Committed: []string{"public.users"},
@@ -70,6 +81,9 @@ func TestMergePartialStateManifestForRetry(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Pending, []string{"public.comments", "public.posts"}) {
 		t.Fatalf("pending = %v", got.Pending)
+	}
+	if got.TableSetFingerprint != partialStateTableSetFingerprint([]string{"public.posts", "public.users", "public.comments"}) {
+		t.Fatalf("fingerprint = %q", got.TableSetFingerprint)
 	}
 }
 

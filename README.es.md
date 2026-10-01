@@ -200,7 +200,7 @@ dolly restore --dsn "$DB" --input ./dolly_dump/1 --no-transaction --yes
 
 Este modo puede dejar avances parciales si falla durante el proceso. Prefiera el modo predeterminado cuando necesite una reversión atómica.
 
-La restauración paralela (`--workers` mayor que 1) exige `--ack-partial-state` y escribe `.dolly-restore-partial-state.json` hasta el éxito completo. El manifiesto registra host, puerto y base de datos. Restaurar el mismo volcado en otra base vuelve a cargar todas las tablas. La TUI pide confirmación cuando `restore.workers` es mayor que 1.
+La restauración paralela (`--workers` mayor que 1) exige `--ack-partial-state` y escribe `.dolly-restore-partial-state.json` hasta el éxito completo. El manifiesto registra host, puerto, base de datos y una huella del conjunto de tablas del volcado; la restauración falla de forma segura si el destino o el conjunto de tablas no coincide con el manifiesto. La TUI pide confirmación cuando `restore.workers` es mayor que 1.
 
 ### Estrategias de clonación
 

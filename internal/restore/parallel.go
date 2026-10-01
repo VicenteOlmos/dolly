@@ -102,9 +102,11 @@ func buildParallelTableMaps(tables []db.Table, dataPaths []string) (map[string]d
 }
 
 func initParallelRestoreManifest(path string, allLabels []string, target PartialStateTarget) (PartialStateManifest, error) {
+	fingerprint := partialStateTableSetFingerprint(allLabels)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		m := NewPartialStateManifest(allLabels)
 		m.Target = target
+		m.TableSetFingerprint = fingerprint
 		if err := parallelWriteManifest(path, m); err != nil {
 			return PartialStateManifest{}, fmt.Errorf("write initial partial state: %w", err)
 		}
@@ -117,13 +119,16 @@ func initParallelRestoreManifest(path string, allLabels []string, target Partial
 		return PartialStateManifest{}, fmt.Errorf("load partial state manifest: %w", err)
 	}
 	if !existing.Target.same(target) {
-		fmt.Fprintf(os.Stderr, "warning: partial-state manifest target does not match this restore; loading every table\n")
-		m := NewPartialStateManifest(allLabels)
-		m.Target = target
-		if err := parallelWriteManifest(path, m); err != nil {
-			return PartialStateManifest{}, fmt.Errorf("rewrite partial state for new target: %w", err)
-		}
-		return m, nil
+		return PartialStateManifest{}, fmt.Errorf(
+			"partial state manifest %q target does not match this restore (manifest %+v, current %+v)",
+			path, existing.Target, target,
+		)
+	}
+	if existing.TableSetFingerprint != "" && existing.TableSetFingerprint != fingerprint {
+		return PartialStateManifest{}, fmt.Errorf(
+			"partial state manifest %q table set does not match this restore",
+			path,
+		)
 	}
 	return mergePartialStateManifestForRetry(existing, allLabels, target), nil
 }
