@@ -207,6 +207,27 @@ func TestFormatCreateRangeType(t *testing.T) {
 	}
 }
 
+func TestFormatTableExcludeConstraint(t *testing.T) {
+	t.Parallel()
+	def := "EXCLUDE USING gist (room WITH =, during WITH &&)"
+	got := formatTableExcludeConstraint("bookings_room_during_excl", def)
+	want := `CONSTRAINT "bookings_room_during_excl" EXCLUDE USING gist (room WITH =, during WITH &&)`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestFormatTablePrimaryKeyConstraint(t *testing.T) {
+	t.Parallel()
+	got := formatTablePrimaryKeyConstraint(primaryConstraint{
+		name: "items_pkey", columns: []string{"id"}, deferrable: true, deferred: true,
+	})
+	want := `CONSTRAINT "items_pkey" PRIMARY KEY ("id") DEFERRABLE INITIALLY DEFERRED`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestFormatTableCheckConstraint(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
