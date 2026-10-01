@@ -35,6 +35,7 @@ type DumpOverrides struct {
 	Workers           int
 	WorkersSet        bool
 	RequireSafeKey    bool
+	RequireSafeKeySet bool
 }
 
 func (o DumpOverrides) HasChunkSelectors() bool {
@@ -152,7 +153,11 @@ func BuildDumpOptions(o DumpOverrides, cfg *config.Config) ([]dump.Option, error
 	if err := validateDumpWorkers(o, cfg, workers); err != nil {
 		return nil, err
 	}
-	if o.RequireSafeKey {
+	requireSafeKey := cfg.Dump.RequireSafeKey
+	if o.RequireSafeKeySet {
+		requireSafeKey = o.RequireSafeKey
+	}
+	if requireSafeKey {
 		opts = append(opts, dump.WithRequireSafeKey())
 	}
 	if EffectiveResilientDumpMode(o, cfg) {

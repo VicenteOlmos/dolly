@@ -66,6 +66,7 @@ type dumpFlags struct {
 	Workers           int
 	WorkersSet        bool
 	RequireSafeKey    bool
+	RequireSafeKeySet bool
 	Schemas           []string
 	SchemasSet        bool
 	schemasFlag       dumpSchemasFlag
@@ -138,6 +139,9 @@ func parseDumpFlags(args []string) (dumpFlags, error) {
 		if f.Name == "workers" {
 			flags.WorkersSet = true
 		}
+		if f.Name == "require-safe-key" {
+			flags.RequireSafeKeySet = true
+		}
 	})
 
 	if err := validateDSNOrConnection(flags.Connection, flags.DSN); err != nil {
@@ -173,6 +177,7 @@ func dumpFlagsToOverrides(flags dumpFlags) runopts.DumpOverrides {
 		Workers:           flags.Workers,
 		WorkersSet:        flags.WorkersSet,
 		RequireSafeKey:    flags.RequireSafeKey,
+		RequireSafeKeySet: flags.RequireSafeKeySet,
 	}
 }
 

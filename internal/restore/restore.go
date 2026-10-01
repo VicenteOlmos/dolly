@@ -194,6 +194,9 @@ func Restore(ctx context.Context, dbConn *sql.DB, inputDir string, opts ...Optio
 	if err != nil {
 		return err
 	}
+	if err := dump.ValidateMetadataSchemaVersion(meta); err != nil {
+		return err
+	}
 	meta.Tables = dump.SortTables(meta.Tables)
 	if len(meta.Tables) == 0 {
 		return &EmptyDumpError{InputDir: inputDir}

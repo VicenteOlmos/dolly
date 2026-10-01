@@ -68,6 +68,7 @@ type Config struct {
 		ChunkTables       []string `json:"chunk_tables"`
 		ChunkTableFiles   []string `json:"chunk_table_files"`
 		Schemas           []string `json:"schemas"`
+		RequireSafeKey    bool     `json:"require_safe_key"`
 	} `json:"dump"`
 	SaveConnections bool `json:"save_connections"`
 	DB              struct {

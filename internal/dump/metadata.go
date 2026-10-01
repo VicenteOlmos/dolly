@@ -51,15 +51,22 @@ type SequenceState struct {
 	DataType    string `json:"data_type,omitempty"`
 }
 
+// MetadataSchemaVersion is the current metadata.json schema version written by dump.
+const MetadataSchemaVersion = 1
+
 // Metadata describes a dump's generation time, schema, and tables.
 type Metadata struct {
-	GeneratedAt string          `json:"generated_at"`
-	Schema      string          `json:"schema"`
-	Tables      []db.Table      `json:"tables"`
-	Subset      *SubsetManifest `json:"subset,omitempty"`
-	Provenance  *Provenance     `json:"provenance,omitempty"`
-	Sequences   []SequenceState `json:"sequences,omitempty"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	GeneratedAt   string          `json:"generated_at"`
+	Schema        string          `json:"schema"`
+	Tables        []db.Table      `json:"tables"`
+	Subset        *SubsetManifest `json:"subset,omitempty"`
+	Provenance    *Provenance     `json:"provenance,omitempty"`
+	Sequences     []SequenceState `json:"sequences,omitempty"`
 }
+
+// KeyFallbackNoSafeKey marks ctid chunking used because no PK or eligible unique key exists.
+const KeyFallbackNoSafeKey = "no_safe_key"
 
 // TableStrategyRecord captures the persisted streaming plan for one table.
 type TableStrategyRecord struct {
@@ -68,6 +75,7 @@ type TableStrategyRecord struct {
 	Resumable   bool        `json:"resumable"`
 	KeyColumns  []string    `json:"key_columns,omitempty"`
 	Fingerprint string      `json:"fingerprint,omitempty"`
+	KeyFallback string      `json:"key_fallback,omitempty"`
 }
 
 // Provenance records dump identity and source context for history/restore tracking.
@@ -115,6 +123,9 @@ func tableStrategyRecord(plan KeyDescriptor) TableStrategyRecord {
 		rec.KeyColumns = plan.ColumnNames()
 		rec.Fingerprint = plan.Fingerprint
 	}
+	if plan.Strategy == KeyStrategyCTID {
+		rec.KeyFallback = KeyFallbackNoSafeKey
+	}
 	return rec
 }
 
@@ -154,12 +165,13 @@ func countNDJSONRows(path string) (int64, error) {
 func writeMetadata(dir string, tables []db.Table, subset *SubsetManifest, filterSchemas []string, sequences []SequenceState, prov *Provenance) (string, error) {
 	persistUniqueKeys(tables)
 	m := Metadata{
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Schema:      metadataSchemaLabel(filterSchemas, tables),
-		Tables:      tables,
-		Subset:      subset,
-		Provenance:  prov,
-		Sequences:   sequences,
+		SchemaVersion: MetadataSchemaVersion,
+		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Schema:        metadataSchemaLabel(filterSchemas, tables),
+		Tables:        tables,
+		Subset:        subset,
+		Provenance:    prov,
+		Sequences:     sequences,
 	}
 
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -191,6 +203,23 @@ func ReadMetadata(dir string) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("metadata: missing schema")
 	}
 	return m, nil
+}
+
+// EffectiveSchemaVersion returns the metadata schema version, defaulting legacy dumps to 1.
+func EffectiveSchemaVersion(m Metadata) int {
+	if m.SchemaVersion <= 0 {
+		return 1
+	}
+	return m.SchemaVersion
+}
+
+// ValidateMetadataSchemaVersion rejects dumps written by a newer metadata schema.
+func ValidateMetadataSchemaVersion(m Metadata) error {
+	v := EffectiveSchemaVersion(m)
+	if v > MetadataSchemaVersion {
+		return fmt.Errorf("metadata schema_version %d is newer than this restore supports (max %d)", v, MetadataSchemaVersion)
+	}
+	return nil
 }
 
 func metadataSchemaLabel(filterSchemas []string, tables []db.Table) string {

@@ -100,6 +100,65 @@ func containsString(xs []string, want string) bool {
 	return false
 }
 
+func TestRestoreRejectsNewerMetadataSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	meta, err := dump.ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.SchemaVersion = dump.MetadataSchemaVersion + 1
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	err = Restore(context.Background(), sqlDB, dir)
+	if err == nil || !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("error = %v, want schema_version rejection", err)
+	}
+}
+
+func TestRestoreAcceptsLegacyMetadataWithoutSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureDump(t, dir)
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	tablesRows := sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}).
+		AddRow("public", "users", int64(0))
+	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(tablesRows)
+	colsRows := sqlmock.NewRows([]string{"table_schema", "table_name", "column_name", "data_type", "is_nullable", "ordinal_position", "is_primary_key"}).
+		AddRow("public", "users", "id", "integer", "NO", 1, true)
+	mock.ExpectQuery(`SELECT c\.table_schema`).WithArgs("public").WillReturnRows(colsRows)
+	fksRows := sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ccu.table_schema", "ccu.table_name", "ccu.column_name"})
+	mock.ExpectQuery(`SELECT tc\.table_schema`).WithArgs("public").WillReturnRows(fksRows)
+	emptyUniqueIndexMock(mock)
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "public"."users"`).WithArgs(int64(1)).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(`SELECT table_schema, table_name, column_name`).
+		WithArgs("public", "users").
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "column_name"}).
+			AddRow("public", "users", "id"))
+	mock.ExpectExec(`SELECT CASE WHEN m\.max_value IS NULL THEN NULL ELSE setval\(pg_get_serial_sequence\('"public"\."users"', 'id'\), m\.max_value, true\) END`).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	if err := Restore(context.Background(), sqlDB, dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRestoreFullFlow(t *testing.T) {
 	dir := t.TempDir()
 	writeFixtureDump(t, dir)

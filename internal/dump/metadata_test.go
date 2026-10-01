@@ -64,6 +64,22 @@ func TestWriteMetadata(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, meta.GeneratedAt); err != nil {
 		t.Fatalf("generated_at not RFC3339: %v", err)
 	}
+	if meta.SchemaVersion != MetadataSchemaVersion {
+		t.Fatalf("schema_version = %d, want %d", meta.SchemaVersion, MetadataSchemaVersion)
+	}
+}
+
+func TestValidateMetadataSchemaVersion(t *testing.T) {
+	if err := ValidateMetadataSchemaVersion(Metadata{}); err != nil {
+		t.Fatalf("legacy missing version: %v", err)
+	}
+	if err := ValidateMetadataSchemaVersion(Metadata{SchemaVersion: 1}); err != nil {
+		t.Fatalf("version 1: %v", err)
+	}
+	err := ValidateMetadataSchemaVersion(Metadata{SchemaVersion: MetadataSchemaVersion + 1})
+	if err == nil || !strings.Contains(err.Error(), "newer than this restore") {
+		t.Fatalf("error = %v, want newer-than-supported", err)
+	}
 }
 
 func TestCountNDJSONRows(t *testing.T) {
@@ -372,6 +388,27 @@ func TestMetadataStrategyProvenanceRoundtrip(t *testing.T) {
 			t.Fatalf("strategies = %+v, want %+v", meta.Provenance.Strategies, wantStrategies)
 		}
 	})
+}
+
+func TestCTIDStrategyRecordMarksNoSafeKeyFallback(t *testing.T) {
+	rec := tableStrategyRecord(ctidKeyDescriptor("public", "heap_only"))
+	if rec.Strategy != KeyStrategyCTID {
+		t.Fatalf("strategy = %q", rec.Strategy)
+	}
+	if len(rec.KeyColumns) != 1 || rec.KeyColumns[0] != "ctid" {
+		t.Fatalf("key_columns = %v", rec.KeyColumns)
+	}
+	if rec.KeyFallback != KeyFallbackNoSafeKey {
+		t.Fatalf("key_fallback = %q, want %q", rec.KeyFallback, KeyFallbackNoSafeKey)
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(data)
+	if !strings.Contains(raw, `"key_fallback":"no_safe_key"`) {
+		t.Fatalf("missing key_fallback marker: %s", raw)
+	}
 }
 
 func TestFallbackStrategyRecordJSONShape(t *testing.T) {
