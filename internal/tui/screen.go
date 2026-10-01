@@ -171,6 +171,7 @@ type DumpDraft struct {
 	RestoreReplace      bool
 	RestoreReplaceSet   bool
 	RestoreWorkersText  string
+	RestoreAckPartial   bool
 }
 
 // DumpHistoryEntry is one row in the dump history list.

@@ -112,11 +112,12 @@ func validateParallelRestoreConfigEffective(cfg *config.Config, workers int, tru
 // RestoreHistoryUserOverrides carries optional per-run overrides for TUI history restore.
 // Zero value uses restore.* config for all fields.
 type RestoreHistoryUserOverrides struct {
-	OnConflict string
-	Replace    bool
-	ReplaceSet bool
-	Workers    int
-	WorkersSet bool
+	OnConflict      string
+	Replace         bool
+	ReplaceSet      bool
+	Workers         int
+	WorkersSet      bool
+	AckPartialState bool
 }
 
 // RestoreHistoryOptions builds restore options for TUI history restore from restore.* config keys.
@@ -154,6 +155,9 @@ func RestoreHistoryOptionsWithOverrides(cfg *config.Config, inputDir string, sch
 	}
 	if err := validateParallelRestoreConfigEffective(cfg, workers, trustedSchemaSQL, replace, onConflict); err != nil {
 		return nil, err
+	}
+	if workers > 1 && !o.AckPartialState {
+		return nil, errors.New("parallel restore requires --ack-partial-state")
 	}
 	partialStatePath := ResolveRestorePartialStatePath(RestoreOverrides{}, cfg, inputDir)
 	if workers > 1 {
