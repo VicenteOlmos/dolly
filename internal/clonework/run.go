@@ -75,17 +75,14 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	}
 
 	sourceDSN := p.SourceDSN
-	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
-		var err error
-		sourceDSN, err = connections.SetDSNParam(sourceDSN, "statement_timeout", cfg.DB.StatementTimeout)
+	sourceDSN, err = cfg.ApplySessionGUCs(sourceDSN, connections.SetDSNParam)
+	if err != nil {
+		return fmt.Errorf("configure source connection: %w", err)
+	}
+	if targetURL != "" {
+		targetURL, err = cfg.ApplySessionGUCs(targetURL, connections.SetDSNParam)
 		if err != nil {
-			return fmt.Errorf("configure source connection: %w", err)
-		}
-		if targetURL != "" {
-			targetURL, err = connections.SetDSNParam(targetURL, "statement_timeout", cfg.DB.StatementTimeout)
-			if err != nil {
-				return fmt.Errorf("configure target connection: %w", err)
-			}
+			return fmt.Errorf("configure target connection: %w", err)
 		}
 	}
 
