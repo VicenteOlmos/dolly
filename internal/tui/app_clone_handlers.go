@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
@@ -65,10 +66,21 @@ func (a *App) handleCloneRequested() (tea.Model, tea.Cmd) {
 }
 
 func (a *App) cloneNeedsConfirm() (bool, string) {
-	if a.cfg == nil || !a.cfg.Clone.Replace {
+	if !effectiveCloneReplace(a.clone, a.cfg) {
 		return false, ""
 	}
 	return true, "truncate existing tables before clone"
+}
+
+func effectiveCloneReplace(draft CloneDraft, cfg *config.Config) bool {
+	replace := false
+	if cfg != nil {
+		replace = cfg.Clone.Replace
+	}
+	if draft.ReplaceSet {
+		replace = draft.Replace
+	}
+	return replace
 }
 
 func (a *App) handleCloneProceed() (tea.Model, tea.Cmd) {
