@@ -83,6 +83,8 @@ type diskProvenance struct {
 	Schemas          []string `json:"schemas"`
 	TableCount       int      `json:"table_count"`
 	TotalRowEstimate int64    `json:"total_row_estimate"`
+	ServerVersion    string   `json:"server_version"`
+	DollyVersion     string   `json:"dolly_version"`
 }
 
 func recordFromDisk(baseDir string, seq int, path string) (Record, bool) {
@@ -120,7 +122,7 @@ func recordFromDisk(baseDir string, seq int, path string) (Record, bool) {
 		}
 	}
 
-	return Record{
+	rec := Record{
 		Seq:            seq,
 		BaseDir:        baseDir,
 		Path:           path,
@@ -130,5 +132,10 @@ func recordFromDisk(baseDir string, seq int, path string) (Record, bool) {
 		SchemaLabel:    meta.Schema,
 		TableCount:     tableCount,
 		RowEstimate:    rowEst,
-	}, true
+	}
+	if meta.Provenance != nil {
+		rec.ServerVersion = meta.Provenance.ServerVersion
+		rec.DollyVersion = meta.Provenance.DollyVersion
+	}
+	return rec, true
 }
