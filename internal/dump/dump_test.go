@@ -1081,8 +1081,8 @@ func TestDumpCapturesSequences(t *testing.T) {
 
 	emptyUniqueIndexMock(mock)
 
-	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
-		AddRow("public", "users_id_seq", 42, 1)
+	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value", "increment_by", "min_value", "max_value", "cache_size", "cycle", "data_type"}).
+		AddRow("public", "users_id_seq", 42, 1, int64(1), int64(1), int64(100), int64(1), false, "bigint")
 	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
 		WithArgs("public", "users").
 		WillReturnRows(seqsRows)
@@ -1127,12 +1127,12 @@ func TestCaptureSequencesBatchesTableLookups(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT seq_ns\.nspname`).
 		WithArgs("public", "a").
-		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
-			AddRow("public", "z_seq", 2, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value", "increment_by", "min_value", "max_value", "cache_size", "cycle", "data_type"}).
+			AddRow("public", "z_seq", 2, 1, int64(1), int64(1), int64(100), int64(1), false, "bigint"))
 	mock.ExpectQuery(`SELECT seq_ns\.nspname`).
 		WithArgs("public", "b").
-		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
-			AddRow("public", "a_seq", 3, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value", "increment_by", "min_value", "max_value", "cache_size", "cycle", "data_type"}).
+			AddRow("public", "a_seq", 3, 1, int64(1), int64(1), int64(100), int64(1), false, "bigint"))
 
 	got, err := captureSequences(context.Background(), sqlDB, []db.Table{
 		{Schema: "public", Name: "a"},
@@ -1176,8 +1176,8 @@ func TestDumpCaptureSequencesScopesToSelectedTables(t *testing.T) {
 
 	emptyUniqueIndexMock(mock)
 
-	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
-		AddRow("public", "users_id_seq", 10, 1)
+	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value", "increment_by", "min_value", "max_value", "cache_size", "cycle", "data_type"}).
+		AddRow("public", "users_id_seq", 10, 1, int64(1), int64(1), int64(100), int64(1), false, "bigint")
 	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
 		WithArgs("public", "users").
 		WillReturnRows(seqsRows)
@@ -1762,8 +1762,8 @@ func TestDumpCaptureSequencesScopeErrorFailsClosed(t *testing.T) {
 	emptyUniqueIndexMock(mock)
 
 	// pg_sequences returns a sequence from a schema outside cfg.schemas (public)
-	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value"}).
-		AddRow("secret", "token_seq", 42, 1)
+	seqsRows := sqlmock.NewRows([]string{"schemaname", "sequencename", "last_value", "start_value", "increment_by", "min_value", "max_value", "cache_size", "cycle", "data_type"}).
+		AddRow("secret", "token_seq", 42, 1, int64(1), int64(1), int64(100), int64(1), false, "bigint")
 	mock.ExpectQuery(`SELECT seq_ns\.nspname, seq\.relname, ps\.last_value, ps\.start_value`).
 		WithArgs("public", "users").
 		WillReturnRows(seqsRows)

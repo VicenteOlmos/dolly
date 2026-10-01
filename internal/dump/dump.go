@@ -685,7 +685,8 @@ func captureSequences(ctx context.Context, q querier, tables []db.Table) ([]Sequ
 func captureSequenceBatch(ctx context.Context, q querier, tables []db.Table) ([]SequenceState, error) {
 	predicates, args := tableTuplePredicates(tables)
 	query := fmt.Sprintf(`
-		SELECT seq_ns.nspname, seq.relname, ps.last_value, ps.start_value
+		SELECT seq_ns.nspname, seq.relname, ps.last_value, ps.start_value,
+		       ps.increment_by, ps.min_value, ps.max_value, ps.cache_size, ps.cycle, ps.data_type
 		FROM pg_class seq
 		JOIN pg_namespace seq_ns ON seq_ns.oid = seq.relnamespace
 		JOIN pg_sequences ps ON ps.schemaname = seq_ns.nspname AND ps.sequencename = seq.relname
@@ -705,17 +706,27 @@ func captureSequenceBatch(ctx context.Context, q querier, tables []db.Table) ([]
 
 	var seqs []SequenceState
 	for rows.Next() {
-		var schema, seqName string
+		var schema, seqName, dataType string
 		var lastValue sql.NullInt64
-		var startValue int64
-		if err := rows.Scan(&schema, &seqName, &lastValue, &startValue); err != nil {
+		var startValue, increment, minValue, maxValue, cache int64
+		var cycle bool
+		if err := rows.Scan(
+			&schema, &seqName, &lastValue, &startValue,
+			&increment, &minValue, &maxValue, &cache, &cycle, &dataType,
+		); err != nil {
 			return nil, fmt.Errorf("scan sequence: %w", err)
 		}
 		s := SequenceState{
-			Schema:     schema,
-			Name:       seqName,
-			StartValue: startValue,
-			IsCalled:   lastValue.Valid,
+			Schema:      schema,
+			Name:        seqName,
+			StartValue:  startValue,
+			IsCalled:    lastValue.Valid,
+			IncrementBy: &increment,
+			MinValue:    &minValue,
+			MaxValue:    &maxValue,
+			CacheSize:   &cache,
+			Cycle:       &cycle,
+			DataType:    dataType,
 		}
 		if lastValue.Valid {
 			v := lastValue.Int64
