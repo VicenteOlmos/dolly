@@ -111,7 +111,7 @@ func (d *dumpScreen) contextHelp(width int) string {
 	case dumpSectionPicker:
 		return wrapText("Schemas included in the dump. Space toggles a schema; a selects or clears all. At least one schema is required to start.", width)
 	case dumpSectionHistory:
-		return wrapText("Previously completed dumps under the output base, or a typed restore directory (p). Space cycles on-conflict, replace, partial-state acknowledgement (required when workers > 1), and trusted schema.sql. Enter or r restores using the same seam as dolly restore.", width)
+		return wrapText("Previously completed dumps under the output base, or a typed restore directory (p). Press / while the list is focused to filter by label or path (case-insensitive). Enter applies the filter; Esc clears it. Space cycles on-conflict, replace, partial-state acknowledgement (required when workers > 1), and trusted schema.sql. Enter or r restores using the same seam as dolly restore.", width)
 	case dumpSectionLog:
 		return wrapText("Progress and table-level messages from the current or last dump run.", width)
 	default:
