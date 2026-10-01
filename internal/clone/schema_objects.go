@@ -1899,7 +1899,7 @@ func loadRLSTables(ctx context.Context, q *sql.DB, schemas []string) ([]rlsTable
 		FROM pg_class c
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relrowsecurity
-		  AND c.relkind IN ('r', 'p')
+		  AND c.relkind IN ('r', 'p', 'v')
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -1939,7 +1939,9 @@ func loadPolicies(ctx context.Context, q *sql.DB, schemas []string) ([]struct {
 		       COALESCE(pg_get_expr(pol.polqual, pol.polrelid), ''),
 		       COALESCE(pg_get_expr(pol.polwithcheck, pol.polrelid), ''),
 		       COALESCE(array_to_string(ARRAY(
-		         SELECT rolname FROM pg_roles r WHERE r.oid = ANY (pol.polroles)
+		         SELECT CASE WHEN role_oid = 0 THEN 'PUBLIC' ELSE r.rolname END
+		         FROM unnest(pol.polroles) AS role_oid
+		         LEFT JOIN pg_roles r ON r.oid = role_oid AND role_oid <> 0
 		       ), ','), '')
 		FROM pg_policy pol
 		INNER JOIN pg_class c ON c.oid = pol.polrelid
