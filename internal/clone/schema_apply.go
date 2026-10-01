@@ -189,11 +189,23 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	casts, err := loadCasts(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyCasts(ctx, tgtDB, casts); err != nil {
+		return err
+	}
+
 	tables, err := db.LoadPostgresSchemasBatched(ctx, srcDB, schemas)
 	if err != nil {
 		return fmt.Errorf("load source schema: %w", err)
 	}
-	sorted := orderPartitionParentsFirst(dump.SortTables(tables))
+	classicInherits, err := loadClassicInherits(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	sorted := orderPartitionParentsFirst(dump.SortTables(tables), classicInherits)
 
 	// Batch all per-table queries (4 queries total, not 4N).
 	// Only run when there are tables to avoid unnecessary queries.
@@ -235,11 +247,16 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		if err != nil {
 			return err
 		}
+		inheritedCols, err := loadInheritedColumnNames(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		filterInheritedTableColumns(schemaCols, classicInherits, inheritedCols)
 
 		for _, table := range sorted {
 			key := table.Schema + "." + table.Name
 			cols := schemaCols[key]
-			if err := createTable(ctx, tgtDB, table, cols, uniqueMap[key], checkMap[key]); err != nil {
+			if err := createTable(ctx, tgtDB, table, cols, uniqueMap[key], checkMap[key], classicInherits[key]); err != nil {
 				return err
 			}
 		}
@@ -726,8 +743,8 @@ func loadUniqueConstraints(ctx context.Context, q *sql.DB, schema, table string)
 	return out, nil
 }
 
-func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) error {
-	stmt, err := formatCreateTable(table, cols, uniques, checks)
+func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint, inherits []inheritParent) error {
+	stmt, err := formatCreateTable(table, cols, uniques, checks, inherits)
 	if err != nil {
 		return err
 	}
@@ -737,7 +754,7 @@ func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schem
 	return nil
 }
 
-func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) (string, error) {
+func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint, inherits []inheritParent) (string, error) {
 	qual := quoteQualifiedTable(table.Schema, table.Name)
 	if table.PartitionOf != "" {
 		parentSchema, parentName, ok := splitQualified(table.PartitionOf)
@@ -839,6 +856,13 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 		createKind = "CREATE UNLOGGED TABLE"
 	}
 	stmt := fmt.Sprintf("%s %s (%s)", createKind, qual, strings.Join(parts, ", "))
+	if len(inherits) > 0 {
+		parents := make([]string, len(inherits))
+		for i, parent := range inherits {
+			parents[i] = quoteQualifiedTable(parent.schema, parent.name)
+		}
+		stmt += " INHERITS (" + strings.Join(parents, ", ") + ")"
+	}
 	if table.RelKind == "p" {
 		partBy := strings.TrimSpace(table.PartitionBy)
 		if partBy == "" {
@@ -967,7 +991,7 @@ func mergeColumnCatalog(ctx context.Context, q *sql.DB, schemas []string, cols m
 	return nil
 }
 
-func orderPartitionParentsFirst(tables []db.Table) []db.Table {
+func orderPartitionParentsFirst(tables []db.Table, classicInherit map[string][]inheritParent) []db.Table {
 	if len(tables) < 2 {
 		return tables
 	}
@@ -985,15 +1009,36 @@ func orderPartitionParentsFirst(tables []db.Table) []db.Table {
 			return d
 		}
 		table, ok := byName[key]
-		if !ok || table.PartitionOf == "" || stack[key] {
+		if !ok || stack[key] {
+			depth[key] = 0
+			return 0
+		}
+		if table.PartitionOf != "" {
+			stack[key] = true
+			d := walk(table.PartitionOf, stack) + 1
+			delete(stack, key)
+			depth[key] = d
+			return d
+		}
+		var parents []inheritParent
+		if classicInherit != nil {
+			parents = classicInherit[key]
+		}
+		if len(parents) == 0 {
 			depth[key] = 0
 			return 0
 		}
 		stack[key] = true
-		d := walk(table.PartitionOf, stack) + 1
+		maxDepth := 0
+		for _, parent := range parents {
+			d := walk(parent.schema+"."+parent.name, stack) + 1
+			if d > maxDepth {
+				maxDepth = d
+			}
+		}
 		delete(stack, key)
-		depth[key] = d
-		return d
+		depth[key] = maxDepth
+		return maxDepth
 	}
 	order := append([]db.Table(nil), tables...)
 	for _, table := range order {
@@ -1025,7 +1070,7 @@ func indexesForReplay(indexes []indexRow, tables []db.Table) []indexRow {
 		}
 		out = append(out, idx)
 	}
-	order := orderPartitionParentsFirst(tables)
+	order := orderPartitionParentsFirst(tables, nil)
 	rank := make(map[string]int, len(order))
 	for i, table := range order {
 		rank[table.Schema+"."+table.Name] = i

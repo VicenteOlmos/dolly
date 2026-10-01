@@ -70,6 +70,7 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 		"is_expression", "indnkeyatts", "attname", "is_nullable", "pos",
 		"attnum", "opclass_oid", "collation_oid", "optval",
 	}))
+	expectClassicInheritCatalog(srcMock)
 	// loadAllSchemaColumns (1 query).
 	srcMock.ExpectQuery(`FROM information_schema.columns[\s\S]*table_schema IN \(\$1[\s\S]*ORDER BY table_schema, table_name, ordinal_position`).
 		WillReturnRows(allDDLCols)
@@ -88,6 +89,8 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 	// loadAllForeignKeyConstraints (1 query).
 	srcMock.ExpectQuery(`con\.contype = 'f'[\s\S]*nspname IN \(\$1`).
 		WillReturnRows(allFKDefs)
+	srcMock.ExpectQuery(`a\.attinhcount`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname"}))
 }
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
@@ -131,6 +134,11 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 		}))
 }
 
+func expectClassicInheritCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`FROM pg_inherits`).WillReturnRows(
+		sqlmock.NewRows([]string{"child_schema", "child_name", "parent_schema", "parent_name"}))
+}
+
 func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`a\.aggkind <> 'n'`).WillReturnRows(sqlmock.NewRows([]string{"name", "aggkind"}))
 	srcMock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
@@ -138,6 +146,11 @@ func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
 		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
 	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "oid"}))
+	srcMock.ExpectQuery(`FROM pg_cast`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"src_schema", "src_name", "tgt_schema", "tgt_name",
+			"castmethod", "castcontext", "fn_schema", "fn_name", "fn_args",
+		}))
 }
 
 func TestColumnSQLType(t *testing.T) {
@@ -449,6 +462,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	expectRoutineCatalog(srcMock)
 	srcMock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(
 		sqlmock.NewRows([]string{"table_schema", "table_name", "n_live_tup"}))
+	expectClassicInheritCatalog(srcMock)
 
 	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
@@ -534,7 +548,12 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`a\.aggkind = 'n'`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	mock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(sqlmock.NewRows([]string{"oid", "name", "def"}).AddRow(1, "app.valid_value(integer)", "CREATE FUNCTION app.valid_value(integer) RETURNS boolean LANGUAGE sql AS 'SELECT true'"))
 	mock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(sqlmock.NewRows([]string{"oid", "ref"}))
+	mock.ExpectQuery(`FROM pg_cast`).WillReturnRows(sqlmock.NewRows([]string{
+		"src_schema", "src_name", "tgt_schema", "tgt_name",
+		"castmethod", "castcontext", "fn_schema", "fn_name", "fn_args",
+	}))
 	mock.ExpectQuery(`SELECT t\.table_schema`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "count"}))
+	expectClassicInheritCatalog(mock)
 	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}).AddRow("app", "items", "i", "items_code_idx"))
 	mock.ExpectQuery(`attstorage`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "storage"}).AddRow("app", "items", "code", "e"))
 	mock.ExpectQuery(`attcompression`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "compression"}))
@@ -614,7 +633,7 @@ func TestFormatCreateTableDeferrableUnique(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		got, err := formatCreateTable(table, cols, []uniqueConstraint{tt.unique}, nil)
+		got, err := formatCreateTable(table, cols, []uniqueConstraint{tt.unique}, nil, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tt.name, err)
 		}
@@ -636,7 +655,7 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 		{name: "id", sqlType: "integer"},
 		{name: "total", sqlType: "integer", generatedExpr: "id * 2"},
 	}
-	got, err := formatCreateTable(parent, cols, nil, nil)
+	got, err := formatCreateTable(parent, cols, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +670,7 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 		PartitionOf:    "public.events",
 		PartitionBound: "FOR VALUES FROM (1) TO (2)",
 	}
-	got, err = formatCreateTable(child, cols, nil, nil)
+	got, err = formatCreateTable(child, cols, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +681,7 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 	child.RelKind = "p"
 	child.PartitionBy = "LIST (total)"
 	cols[0].defaultExpr = sql.NullString{String: "42", Valid: true}
-	got, err = formatCreateTable(child, cols, nil, []checkConstraint{{name: "positive", def: "CHECK (id > 0)"}})
+	got, err = formatCreateTable(child, cols, nil, []checkConstraint{{name: "positive", def: "CHECK (id > 0)"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,7 +698,7 @@ func TestFormatCreateTableIdentityCollateUnlogged(t *testing.T) {
 		{name: "label", sqlType: "text", collationSchema: "public", collationName: "und", nullable: true},
 	}
 	unloggedParent := db.Table{Schema: "public", Name: "cache", Unlogged: true}
-	got, err := formatCreateTable(unloggedParent, cols, nil, nil)
+	got, err := formatCreateTable(unloggedParent, cols, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +722,7 @@ func TestFormatCreateTableIdentityCollateUnlogged(t *testing.T) {
 		PartitionBound: "FOR VALUES IN ('a')",
 		Unlogged:       true,
 	}
-	got, err = formatCreateTable(child, cols[:1], nil, nil)
+	got, err = formatCreateTable(child, cols[:1], nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,12 +731,36 @@ func TestFormatCreateTableIdentityCollateUnlogged(t *testing.T) {
 	}
 }
 
+func TestFormatCreateTableClassicInherits(t *testing.T) {
+	parent := db.Table{Schema: "app", Name: "base"}
+	child := db.Table{Schema: "app", Name: "derived"}
+	cols := []schemaColumn{
+		{name: "id", sqlType: "integer", nullable: false},
+		{name: "extra", sqlType: "text", nullable: true},
+	}
+	got, err := formatCreateTable(child, []schemaColumn{cols[1]}, nil, nil, []inheritParent{{schema: "app", name: "base"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `CREATE TABLE "app"."derived" ("extra" text) INHERITS ("app"."base")`
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	gotParent, err := formatCreateTable(parent, cols[:1], nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotParent, "INHERITS") {
+		t.Fatalf("parent should not inherit: %s", gotParent)
+	}
+}
+
 func TestOrderPartitionParentsFirst(t *testing.T) {
 	tables := []db.Table{
 		{Schema: "public", Name: "events_2024", PartitionOf: "public.events"},
 		{Schema: "public", Name: "events", RelKind: "p", PartitionBy: "RANGE (id)"},
 	}
-	got := orderPartitionParentsFirst(tables)
+	got := orderPartitionParentsFirst(tables, nil)
 	if got[0].Name != "events" || got[1].Name != "events_2024" {
 		t.Fatalf("order = %s, %s", got[0].Name, got[1].Name)
 	}
@@ -779,7 +822,7 @@ func TestIdentitySequenceDDL(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	stmt, err := formatCreateTable(db.Table{Schema: "app", Name: "items"}, []schemaColumn{{name: "id", sqlType: "bigint", identityGen: "ALWAYS", identitySeq: &seq}}, nil, nil)
+	stmt, err := formatCreateTable(db.Table{Schema: "app", Name: "items"}, []schemaColumn{{name: "id", sqlType: "bigint", identityGen: "ALWAYS", identitySeq: &seq}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
