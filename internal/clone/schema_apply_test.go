@@ -119,7 +119,9 @@ func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`attcompression`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attcompression"}))
 	srcMock.ExpectQuery(`pg_options_to_table`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
+		sqlmock.NewRows([]string{"nspname", "relname", "option_name", "option_value"}))
+	srcMock.ExpectQuery(`a\.attstattarget >= 0`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attstattarget"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	expectPublicationCatalog(srcMock)
@@ -496,7 +498,9 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	srcMock.ExpectQuery(`attcompression`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attcompression"}))
 	srcMock.ExpectQuery(`pg_options_to_table`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "option_value"}))
+		sqlmock.NewRows([]string{"nspname", "relname", "option_name", "option_value"}))
+	srcMock.ExpectQuery(`a\.attstattarget >= 0`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "attname", "attstattarget"}))
 	srcMock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(
 		sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
 	expectPublicationCatalog(srcMock)
@@ -589,7 +593,8 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`relreplident`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "ident", "index"}).AddRow("app", "items", "i", "items_code_idx"))
 	mock.ExpectQuery(`attstorage`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "storage"}).AddRow("app", "items", "code", "e"))
 	mock.ExpectQuery(`attcompression`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "compression"}))
-	mock.ExpectQuery(`pg_options_to_table`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "option_value"}))
+	mock.ExpectQuery(`pg_options_to_table`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "option_name", "option_value"}))
+	mock.ExpectQuery(`a\.attstattarget >= 0`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "column", "target"}))
 	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}).AddRow("app", "items", "items_code_idx", `CREATE UNIQUE INDEX "items_code_idx" ON "app"."items" (code)`, false))
 	expectPublicationCatalog(mock)
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
