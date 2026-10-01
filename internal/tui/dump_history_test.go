@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/dumphistory"
+	"github.com/VicenteOlmos/dolly/internal/restore"
+	"github.com/VicenteOlmos/dolly/internal/runopts"
 )
 
 func TestFormatDumpHistoryLabel(t *testing.T) {
@@ -127,6 +131,26 @@ func TestRenderDumpHistoryLinesCursorHighlight(t *testing.T) {
 		if plain != "  "+h.Entries[i].Label {
 			t.Fatalf("line %d = %q, want two-space prefix", i, plain)
 		}
+	}
+}
+
+func TestDumpHistoryRestoreWorkersPassedToRestoreOptions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Restore.Workers = 1
+	inputDir := filepath.Join(t.TempDir(), "1")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	user, err := restoreHistoryUserOverrides(restoreHistoryOverrides{WorkersText: "4", AckPartial: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, err := runopts.RestoreHistoryOptionsWithOverrides(cfg, inputDir, []string{"public"}, false, "postgres://u:p@h/db", user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restore.InspectWorkers(opts...); got != 4 {
+		t.Fatalf("workers = %d, want 4 from history field", got)
 	}
 }
 

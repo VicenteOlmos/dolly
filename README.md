@@ -178,7 +178,9 @@ Run `dolly <command> --help` for command-specific flags.
 
 **TUI and CLI restore:** the TUI history section restores the selected dump, or a directory you type there (`p` to edit the path). `dolly restore --input <dir>` remains the scripted path.
 
-**TUI dump mode:** the dump screen Mode section sets slow connection, `--require-safe-key`, workers, percent, seed file, chunk tables, subset limits (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`), and include/exclude tables for the next run. `--max-in-list-size` stays on the CLI. The same flags stay on `dolly dump`.
+**TUI dump mode:** the dump screen Mode section sets slow connection, `--require-safe-key`, workers, percent, seed file, chunk tables, subset limits (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`, `--max-in-list-size`), and include/exclude tables for the next run. The same flags stay on `dolly dump`.
+
+Set `dump.history_path` in `config.jsonc` to relocate `.dolly/dump-history.json` (TUI and CLI share the same path).
 
 Partitioned parents are not exported: a `SELECT` of the parent returns every child, so Dolly dumps and clones only the leaf partitions. Name the partitions in `--include-table`. Full dumps record omitted partitioned parents in `metadata.json` provenance and record `no_transaction` when `--no-transaction` is set. Identity sequences owned by partitioned parents are still captured. `GENERATED ALWAYS` columns are stored in the dump metadata and omitted from restore and logical-stream writes so the destination computes them. Identity columns are still copied.
 

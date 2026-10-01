@@ -323,8 +323,32 @@ func TestConnectionSaveAsFromListUsesHighlightedProfile(t *testing.T) {
 	if got.Host != "db.example.com" {
 		t.Fatalf("Host = %q, want db.example.com from highlighted profile", got.Host)
 	}
-	if len(got.Schemas) != 2 || got.Schemas[0] != "app" {
-		t.Fatalf("Schemas = %v, want [app billing]", got.Schemas)
+}
+
+func TestConnectionSaveAsUsesSessionSchemas(t *testing.T) {
+	store := newMockConnectionStore(connections.Connection{
+		Name: "staging", Host: "db.example.com", Port: "5432", Database: "app", User: "u", Password: "p",
+		Schemas: []string{"public"},
+	})
+	app := NewAppWithOptions(mockSchemaLoader{}, mockDumpRunner{}, nil, nil, nil, store, true)
+	app.sourceSchemaNames = []string{"app", "private"}
+	SeedSchemaPicker(&app.dump.SchemaPicker, []string{"app", "private"}, []string{"app"})
+	app.conn = ConnectionDraft{Host: "stale.host", Port: "5432", Database: "wrong", User: "x", Password: "y"}
+	cs := app.screens[ScreenConnection].(*connectionScreen)
+	enterConnectionList(cs)
+	cs.refreshProfiles()
+	cs.listCursor = 0
+
+	_ = cs.Update(keyPress("s", 's', 0))
+	cs.nameInput = "copy"
+	_ = cs.Update(keyPress("", tea.KeyEnter, 0))
+
+	got, err := store.Get("copy")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.Schemas) != 1 || got.Schemas[0] != "app" {
+		t.Fatalf("Schemas = %v, want [app] from session selection (not full catalog)", got.Schemas)
 	}
 }
 

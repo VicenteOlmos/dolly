@@ -48,6 +48,7 @@ type Config struct {
 		Percent         int    `json:"percent"`
 		SeedFile        string `json:"seed_file"`
 		MaxRowsPerTable int    `json:"max_rows_per_table"`
+		MaxInListSize   int    `json:"max_in_list_size"`
 	} `json:"subset"`
 	Restore struct {
 		Workers           int    `json:"workers"`
@@ -57,6 +58,7 @@ type Config struct {
 	} `json:"restore"`
 	Dump struct {
 		OutputDir         string   `json:"output_dir"`
+		HistoryPath       string   `json:"history_path"`
 		Workers           int      `json:"workers"`
 		SlowChunkSize     int      `json:"slow_chunk_size"`
 		SlowRetryMax      int      `json:"slow_retry_max"`

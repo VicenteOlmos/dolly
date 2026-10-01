@@ -166,7 +166,9 @@ Ejecute `dolly <command> --help` para consultar los flags específicos de cada c
 
 **Restauración mediante TUI y CLI:** la sección de historial de la TUI restaura el volcado seleccionado, o un directorio que escribas ahí (`p` para editar la ruta). `dolly restore --input <dir>` sigue siendo la vía para scripts.
 
-**Modo de volcado en la TUI:** la sección Mode fija conexión lenta, `--require-safe-key`, workers, porcentaje, archivo de semillas, tablas en fragmentos, límites de subconjunto (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`) e include/exclude para la siguiente ejecución. `--max-in-list-size` sigue solo en la CLI. Los mismos flags siguen en `dolly dump`.
+**Modo de volcado en la TUI:** la sección Mode fija conexión lenta, `--require-safe-key`, workers, porcentaje, archivo de semillas, tablas en fragmentos, límites de subconjunto (`--max-depth`, `--max-tables`, `--max-rows`, `--max-rows-per-table`, `--max-in-list-size`) e include/exclude para la siguiente ejecución. Los mismos flags siguen en `dolly dump`.
+
+Configure `dump.history_path` en `config.jsonc` para cambiar la ubicación de `.dolly/dump-history.json` (TUI y CLI usan la misma ruta).
 
 Las tablas padre particionadas no se exportan: un `SELECT` del padre devuelve todas las hijas, así que Dolly vuelca y clona solo las particiones hoja. Nombra esas particiones en `--include-table`; incluir el padre falla con sus hojas directas o indica que no hay hojas en el alcance cuando el padre no tiene ninguna, y excluir el padre también excluye cada hoja anidada. Los volcados completos registran los padres omitidos en la procedencia de `metadata.json` y registran `no_transaction` cuando se usa `--no-transaction`. Las secuencias identity de padres particionados también se capturan. Las columnas `GENERATED ALWAYS` quedan en los metadatos y se omiten al restaurar y en `logical-stream` para que el destino las calcule. Las columnas identity sí se copian.
 

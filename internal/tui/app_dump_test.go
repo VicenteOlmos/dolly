@@ -436,7 +436,7 @@ func TestDumpScreenLogScroll(t *testing.T) {
 	status := DumpStatusIdle
 	var dumpErr string
 	var dumpResult *DumpResultSummary
-	ds := newDumpScreen(&DumpDraft{}, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil, nil).(*dumpScreen)
+	ds := newDumpScreen(&DumpDraft{}, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil, nil, nil).(*dumpScreen)
 	enterDumpSection(ds, dumpSectionLog)
 
 	ds.Update(keyPress("", tea.KeyUp, 0))
@@ -475,7 +475,7 @@ func TestDumpScreenPathEdit(t *testing.T) {
 	var log []string
 	var dumpErr string
 	var dumpResult *DumpResultSummary
-	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil, nil)
+	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil, nil, nil)
 	ds := screen.(*dumpScreen)
 	enterDumpSection(ds, dumpSectionPath)
 
@@ -512,7 +512,7 @@ func TestDumpScreenModeNoTransactionSpaceToggles(t *testing.T) {
 	var log []string
 	var dumpErr string
 	var dumpResult *DumpResultSummary
-	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil, nil)
+	screen := newDumpScreen(&draft, func() bool { return true }, &status, &log, &dumpErr, &dumpResult, nil, nil, nil, nil, nil, nil, nil)
 	ds := screen.(*dumpScreen)
 	enterDumpSection(ds, dumpSectionMode)
 	ds.modeField = modeFieldNoTransaction
