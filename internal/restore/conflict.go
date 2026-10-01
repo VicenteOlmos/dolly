@@ -64,8 +64,7 @@ func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames 
 
 	tableIdent := pgx.Identifier{table.Schema, table.Name}.Sanitize()
 	valuesClause := strings.Join(placeholders, ", ")
-	pkCols := primaryKeyColumns(table.Columns)
-	conflictCols := conflictKeyColumns(table, pkCols)
+	conflictCols := conflictKey(table)
 	if hasAlwaysIdentity(table.Columns) {
 		base := fmt.Sprintf(
 			"INSERT INTO %s (%s) OVERRIDING SYSTEM VALUE VALUES (%s)",
@@ -84,7 +83,8 @@ func buildInsert(table db.Table, policy ConflictPolicy) (query string, colNames 
 	return finishInsert(base, table, policy, conflictCols, colNames)
 }
 
-func conflictKeyColumns(table db.Table, pkCols []string) []string {
+func conflictKey(table db.Table) []string {
+	pkCols := primaryKeyColumns(table.Columns)
 	if len(pkCols) > 0 {
 		return pkCols
 	}
@@ -182,7 +182,10 @@ func truncateTables(ctx context.Context, q execQuerier, tables []db.Table) error
 	}
 	if len(idents) > 0 {
 		if _, err := q.ExecContext(ctx, "TRUNCATE TABLE "+strings.Join(idents, ", ")); err != nil {
-			return fmt.Errorf("truncate tables: %w", err)
+			return fmt.Errorf(
+				"truncate tables: %w (inbound foreign keys from tables outside the dump can block TRUNCATE; CASCADE is not used)",
+				err,
+			)
 		}
 	}
 	return nil
