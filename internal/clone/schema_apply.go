@@ -216,11 +216,8 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
-	eventTriggers, err := loadEventTriggers(ctx, srcDB)
+	eventTriggers, err := loadEventTriggers(ctx, srcDB, schemas)
 	if err != nil {
-		return err
-	}
-	if err := applyEventTriggers(ctx, tgtDB, eventTriggers); err != nil {
 		return err
 	}
 
@@ -482,6 +479,10 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyComments(ctx, tgtDB, policyComments); err != nil {
+		return err
+	}
+
+	if err := applyEventTriggers(ctx, tgtDB, eventTriggers); err != nil {
 		return err
 	}
 

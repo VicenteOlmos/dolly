@@ -182,7 +182,7 @@ func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
 func expectPreTableCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_event_trigger`).WillReturnRows(
 		sqlmock.NewRows([]string{
-			"evtname", "evtevent", "evttags", "nspname", "proname", "pg_get_function_identity_arguments", "prokind",
+			"evtname", "evtevent", "evtenabled", "evttags", "nspname", "proname", "pg_get_function_identity_arguments", "prokind",
 		}))
 	srcMock.ExpectQuery(`FROM pg_ts_dict`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "dictname", "nspname", "tmplname", "dictinitoption"}))

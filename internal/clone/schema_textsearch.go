@@ -291,7 +291,50 @@ func formatDictionaryOptionValue(value string) string {
 	if isDictionaryIdentifier(value) {
 		return value
 	}
+	if isDictionaryLiteralToken(value) {
+		return value
+	}
 	return quoteLiteral(value)
+}
+
+func isDictionaryLiteralToken(value string) bool {
+	if isDictionaryNumericLiteral(value) {
+		return true
+	}
+	switch strings.ToLower(value) {
+	case "true", "false", "on", "off", "yes", "no":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDictionaryNumericLiteral(value string) bool {
+	if value == "" {
+		return false
+	}
+	i := 0
+	if value[0] == '-' || value[0] == '+' {
+		i++
+	}
+	if i >= len(value) {
+		return false
+	}
+	sawDigit := false
+	sawDot := false
+	for ; i < len(value); i++ {
+		c := value[i]
+		if c >= '0' && c <= '9' {
+			sawDigit = true
+			continue
+		}
+		if c == '.' && !sawDot {
+			sawDot = true
+			continue
+		}
+		return false
+	}
+	return sawDigit
 }
 
 func isDictionaryIdentifier(value string) bool {
