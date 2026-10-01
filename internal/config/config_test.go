@@ -299,7 +299,8 @@ func TestSaveConfig(t *testing.T) {
 		orig := DefaultConfig()
 		orig.DB.StatementTimeout = "5min" // template default — match what gets round-tripped
 		orig.Clone.Schemas = []string{}   // match JSON "schemas": [] after template-based save
-		orig.Dump.Schemas = []string{}    // match JSON "dump.schemas": [] after template-based save
+		orig.Dump.Schemas = []string{}         // match JSON "dump.schemas": [] after template-based save
+		orig.Dump.ExcludeSchemas = []string{} // match JSON "dump.exclude_schemas": [] after template-based save
 		orig.Clone.Strategy = "template"
 		orig.Env.Path = ".env.custom"
 		orig.Subset.Percent = 42
@@ -506,6 +507,26 @@ func TestLoadConfigDumpRoundTrip(t *testing.T) {
 	}
 	if got.Dump.OutputDir != "custom_dump_dir" {
 		t.Fatalf("Dump.OutputDir = %q, want %q", got.Dump.OutputDir, "custom_dump_dir")
+	}
+}
+
+func TestLoadConfigDumpExcludeSchemasRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.jsonc")
+
+	orig := DefaultConfig()
+	orig.Dump.ExcludeSchemas = []string{"staging", "archive"}
+
+	if err := SaveConfig(orig, path); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	got, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !reflect.DeepEqual(orig.Dump.ExcludeSchemas, got.Dump.ExcludeSchemas) {
+		t.Fatalf("ExcludeSchemas = %v, want %v", got.Dump.ExcludeSchemas, orig.Dump.ExcludeSchemas)
 	}
 }
 
