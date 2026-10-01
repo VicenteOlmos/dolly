@@ -30,6 +30,12 @@ func expectSequenceCurrentValueLess(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(1, true))
 }
 
+func expectSequenceDefinition(mock sqlmock.Sqlmock, dataType string, increment, min, max, cache int64, cycle bool) {
+	mock.ExpectQuery(`FROM pg_catalog\.pg_sequences`).
+		WillReturnRows(sqlmock.NewRows([]string{"data_type", "increment_by", "min_value", "max_value", "cache_size", "cycle"}).
+			AddRow(dataType, increment, min, max, cache, cycle))
+}
+
 func TestRestoreSequencesFromMetadataRestoresOwnedSequence(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -276,27 +282,32 @@ func ptrBool(v bool) *bool { return &v }
 func TestFormatAlterSequenceOptions(t *testing.T) {
 	t.Parallel()
 	inc, min, max, cache := int64(5), int64(1), int64(1000), int64(3)
-	got, ok := formatAlterSequenceOptions(dump.SequenceState{
+	got, ok, err := formatAlterSequenceOptions(dump.SequenceState{
 		Schema: "app", Name: "items_id_seq",
 		IncrementBy: &inc, MinValue: &min, MaxValue: &max, CacheSize: &cache,
 		Cycle: ptrBool(true), DataType: "integer",
 	})
-	if !ok {
-		t.Fatal("expected options")
+	if err != nil || !ok {
+		t.Fatalf("expected options, err=%v", err)
 	}
 	want := `ALTER SEQUENCE "app"."items_id_seq" AS integer INCREMENT BY 5 MINVALUE 1 MAXVALUE 1000 CACHE 3 CYCLE`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	got, ok = formatAlterSequenceOptions(dump.SequenceState{
+	got, ok, err = formatAlterSequenceOptions(dump.SequenceState{
 		Schema: "app", Name: "items_id_seq", DataType: "bigint",
 		IncrementBy: &inc, Cycle: ptrBool(false),
 	})
-	if !ok || strings.Contains(got, " AS ") {
-		t.Fatalf("bigint must omit AS: %q", got)
+	if err != nil || !ok || !strings.Contains(got, "AS bigint") {
+		t.Fatalf("bigint must emit AS bigint: %q err=%v", got, err)
 	}
-	if _, ok := formatAlterSequenceOptions(dump.SequenceState{Schema: "app", Name: "old"}); ok {
+	if _, ok, err := formatAlterSequenceOptions(dump.SequenceState{Schema: "app", Name: "old"}); err != nil || ok {
 		t.Fatal("legacy metadata must not alter")
+	}
+	for _, bad := range []string{"integer; SELECT pg_sleep(10); --", "bigint; DROP TABLE t; --", "text"} {
+		if _, _, err := formatAlterSequenceOptions(dump.SequenceState{DataType: bad}); err == nil {
+			t.Fatalf("data_type %q must be rejected", bad)
+		}
 	}
 }
 
@@ -312,9 +323,10 @@ func TestRestoreSequencesAppliesOptionsBeforeSetval(t *testing.T) {
 	meta.Sequences[0].DataType = "integer"
 	meta.Sequences[0].Cycle = ptrBool(false)
 	expectSequenceOwner(mock, "public", "users", "id")
+	expectSequenceCurrentValueLess(mock)
+	expectSequenceDefinition(mock, "bigint", 1, 1, 100, 1, true)
 	mock.ExpectExec(`ALTER SEQUENCE "public"\."users_id_seq" AS integer INCREMENT BY 2 NO CYCLE`).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	expectSequenceCurrentValueLess(mock)
 	mock.ExpectExec(`SELECT setval`).WillReturnResult(sqlmock.NewResult(1, 1))
 	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
 		t.Fatal(err)
@@ -335,10 +347,81 @@ func TestRestoreSequencesAppliesOptionsWhenSetvalSkipped(t *testing.T) {
 	meta.Sequences[0].LastValue = ptrInt64(5)
 	meta.Sequences[0].IncrementBy = &inc
 	expectSequenceOwner(mock, "public", "users", "id")
-	mock.ExpectExec(`ALTER SEQUENCE "public"\."users_id_seq" INCREMENT BY 4`).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT last_value, is_called`).
 		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(100, true))
+	expectSequenceDefinition(mock, "bigint", 1, 1, 1000, 1, false)
+	mock.ExpectExec(`^ALTER SEQUENCE "public"\."users_id_seq" INCREMENT BY 4$`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreSequencesSkipsAlterWhenDefinitionMatches(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	inc := int64(2)
+	meta := sequenceMetadata("public", "users", "id", "users_id_seq")
+	meta.Sequences[0].IncrementBy = &inc
+	meta.Sequences[0].DataType = "integer"
+	meta.Sequences[0].Cycle = ptrBool(false)
+	expectSequenceOwner(mock, "public", "users", "id")
+	expectSequenceCurrentValueLess(mock)
+	expectSequenceDefinition(mock, "integer", 2, 1, 1000, 1, false)
+	mock.ExpectExec(`SELECT setval`).WillReturnResult(sqlmock.NewResult(1, 1))
+	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreSequencesRejectsUnsafeDataType(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	for _, bad := range []string{"integer; SELECT pg_sleep(10); --", "bigint; DROP TABLE t; --", "text"} {
+		meta := sequenceMetadata("public", "users", "id", "users_id_seq")
+		meta.Sequences[0].DataType = bad
+		err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil)
+		if err == nil || !strings.Contains(err.Error(), "data_type") {
+			t.Fatalf("data_type %q: err = %v", bad, err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoreSequencesOmitsBoundsThatExcludeAdvancedValue(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	inc := int64(4)
+	max := int64(100)
+	meta := sequenceMetadata("public", "users", "id", "users_id_seq")
+	meta.Sequences[0].LastValue = ptrInt64(5)
+	meta.Sequences[0].IncrementBy = &inc
+	meta.Sequences[0].MaxValue = &max
+	meta.Sequences[0].Cycle = ptrBool(true)
+	meta.Sequences[0].DataType = "bigint"
+	expectSequenceOwner(mock, "public", "users", "id")
+	mock.ExpectQuery(`SELECT last_value, is_called`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(1000, true))
+	expectSequenceDefinition(mock, "integer", 1, 1, 1000000, 1, false)
+	mock.ExpectExec(`^ALTER SEQUENCE "public"\."users_id_seq" AS bigint INCREMENT BY 4$`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	if err := RestoreSequencesFromMetadata(context.Background(), sqlDB, meta, nil); err != nil {
 		t.Fatal(err)
 	}

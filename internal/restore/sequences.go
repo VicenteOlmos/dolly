@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 
@@ -60,15 +61,15 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 		if schemaFilter != nil && !schemaFilter[seq.Schema] {
 			continue
 		}
+		if err := validateSequenceDataType(seq.DataType); err != nil {
+			return fmt.Errorf("sequence %s.%s: %w", seq.Schema, seq.Name, err)
+		}
 		owned, err := validateSequenceOwnership(ctx, q, seq, restoredColumns, omittedParents)
 		if err != nil {
 			return err
 		}
 		if !owned {
 			continue
-		}
-		if err := applySequenceOptions(ctx, q, seq); err != nil {
-			return err
 		}
 
 		value := seq.StartValue
@@ -78,26 +79,16 @@ func RestoreSequencesFromMetadata(ctx context.Context, q execQuerier, meta dump.
 			isCalled = seq.IsCalled
 		}
 
-		// Read current target value to prevent regression: never lower a
-		// sequence value that was advanced after the dump was taken.
-		checkSQL := fmt.Sprintf(
-			"SELECT last_value, is_called FROM %s",
-			quoteQualifiedTable(seq.Schema, seq.Name),
-		)
-		checkRows, err := q.QueryContext(ctx, checkSQL)
+		// Read the destination value before changing the definition. An
+		// advanced sequence must stay usable when the dump bounds exclude it.
+		curLast, _, err := readSequenceValue(ctx, q, seq)
 		if err != nil {
-			return fmt.Errorf("read current value for %s.%s: %w", seq.Schema, seq.Name, err)
+			return err
 		}
-		var curLast sql.NullInt64
-		var curCalled bool
-		if checkRows.Next() {
-			if err := checkRows.Scan(&curLast, &curCalled); err != nil {
-				checkRows.Close()
-				return fmt.Errorf("scan current value for %s.%s: %w", seq.Schema, seq.Name, err)
+		if sequenceHasDefinitionOptions(seq) {
+			if err := applySequenceOptions(ctx, q, reconcileSequenceBounds(seq, curLast)); err != nil {
+				return err
 			}
-		}
-		if err := checkRows.Close(); err != nil {
-			return fmt.Errorf("close current value rows for %s.%s: %w", seq.Schema, seq.Name, err)
 		}
 
 		if curLast.Valid && curLast.Int64 >= value {
@@ -258,9 +249,155 @@ func listSerialColumns(ctx context.Context, q execQuerier, tables []db.Table) ([
 	return cols, nil
 }
 
+func readSequenceValue(ctx context.Context, q execQuerier, seq dump.SequenceState) (sql.NullInt64, bool, error) {
+	checkSQL := fmt.Sprintf(
+		"SELECT last_value, is_called FROM %s",
+		quoteQualifiedTable(seq.Schema, seq.Name),
+	)
+	checkRows, err := q.QueryContext(ctx, checkSQL)
+	if err != nil {
+		return sql.NullInt64{}, false, fmt.Errorf("read current value for %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	var curLast sql.NullInt64
+	var curCalled bool
+	if checkRows.Next() {
+		if err := checkRows.Scan(&curLast, &curCalled); err != nil {
+			checkRows.Close()
+			return sql.NullInt64{}, false, fmt.Errorf("scan current value for %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+	}
+	if err := checkRows.Close(); err != nil {
+		return sql.NullInt64{}, false, fmt.Errorf("close current value rows for %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	return curLast, curCalled, nil
+}
+
+func sequenceHasDefinitionOptions(seq dump.SequenceState) bool {
+	return seq.IncrementBy != nil || seq.MinValue != nil || seq.MaxValue != nil || seq.CacheSize != nil || seq.Cycle != nil || strings.TrimSpace(seq.DataType) != ""
+}
+
+func validateSequenceDataType(raw string) error {
+	_, err := normalizeSequenceDataType(raw)
+	return err
+}
+
+func normalizeSequenceDataType(raw string) (string, error) {
+	dt := strings.ToLower(strings.TrimSpace(raw))
+	switch dt {
+	case "", "smallint", "integer", "bigint":
+		return dt, nil
+	default:
+		return "", fmt.Errorf("data_type %q must be smallint, integer, or bigint", raw)
+	}
+}
+
+func sequenceTypeFits(dataType string, value int64) bool {
+	switch dataType {
+	case "smallint":
+		return value >= math.MinInt16 && value <= math.MaxInt16
+	case "integer":
+		return value >= math.MinInt32 && value <= math.MaxInt32
+	default:
+		return true
+	}
+}
+
+// reconcileSequenceBounds drops clauses that would make an already-advanced
+// destination unusable: a min/max that excludes the current value, CYCLE that
+// would wrap at those bounds, and a narrower type that cannot store it.
+func reconcileSequenceBounds(seq dump.SequenceState, curLast sql.NullInt64) dump.SequenceState {
+	if !curLast.Valid {
+		return seq
+	}
+	value := curLast.Int64
+	outOfRange := (seq.MinValue != nil && value < *seq.MinValue) || (seq.MaxValue != nil && value > *seq.MaxValue)
+	if outOfRange {
+		seq.MinValue = nil
+		seq.MaxValue = nil
+		if seq.Cycle != nil && *seq.Cycle {
+			seq.Cycle = nil
+		}
+	}
+	if dt, err := normalizeSequenceDataType(seq.DataType); err == nil && dt != "" && !sequenceTypeFits(dt, value) {
+		seq.DataType = ""
+	}
+	return seq
+}
+
+type sequenceDefinition struct {
+	dataType  string
+	increment int64
+	minValue  int64
+	maxValue  int64
+	cacheSize int64
+	cycle     bool
+	found     bool
+}
+
+func readTargetSequenceDefinition(ctx context.Context, q execQuerier, seq dump.SequenceState) (sequenceDefinition, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT data_type, increment_by, min_value, max_value, cache_size, cycle
+		FROM pg_catalog.pg_sequences
+		WHERE schemaname = $1 AND sequencename = $2`, seq.Schema, seq.Name)
+	if err != nil {
+		return sequenceDefinition{}, fmt.Errorf("read definition for %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return sequenceDefinition{}, fmt.Errorf("read definition for %s.%s: %w", seq.Schema, seq.Name, err)
+		}
+		return sequenceDefinition{}, nil
+	}
+	var def sequenceDefinition
+	if err := rows.Scan(&def.dataType, &def.increment, &def.minValue, &def.maxValue, &def.cacheSize, &def.cycle); err != nil {
+		return sequenceDefinition{}, fmt.Errorf("scan definition for %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	def.found = true
+	if err := rows.Err(); err != nil {
+		return sequenceDefinition{}, fmt.Errorf("read definition for %s.%s: %w", seq.Schema, seq.Name, err)
+	}
+	return def, nil
+}
+
+func sequenceOptionsMatch(target sequenceDefinition, seq dump.SequenceState) bool {
+	if !target.found {
+		return false
+	}
+	if dt, err := normalizeSequenceDataType(seq.DataType); err == nil && dt != "" && !strings.EqualFold(target.dataType, dt) {
+		return false
+	}
+	if seq.IncrementBy != nil && *seq.IncrementBy != target.increment {
+		return false
+	}
+	if seq.MinValue != nil && *seq.MinValue != target.minValue {
+		return false
+	}
+	if seq.MaxValue != nil && *seq.MaxValue != target.maxValue {
+		return false
+	}
+	if seq.CacheSize != nil && *seq.CacheSize != target.cacheSize {
+		return false
+	}
+	if seq.Cycle != nil && *seq.Cycle != target.cycle {
+		return false
+	}
+	return true
+}
+
 func applySequenceOptions(ctx context.Context, q execQuerier, seq dump.SequenceState) error {
-	stmt, ok := formatAlterSequenceOptions(seq)
+	stmt, ok, err := formatAlterSequenceOptions(seq)
+	if err != nil {
+		return fmt.Errorf("sequence %s.%s: %w", seq.Schema, seq.Name, err)
+	}
 	if !ok {
+		return nil
+	}
+	current, err := readTargetSequenceDefinition(ctx, q, seq)
+	if err != nil {
+		return err
+	}
+	if sequenceOptionsMatch(current, seq) {
 		return nil
 	}
 	if _, err := q.ExecContext(ctx, stmt); err != nil {
@@ -269,12 +406,16 @@ func applySequenceOptions(ctx context.Context, q execQuerier, seq dump.SequenceS
 	return nil
 }
 
-func formatAlterSequenceOptions(seq dump.SequenceState) (string, bool) {
-	if seq.IncrementBy == nil && seq.MinValue == nil && seq.MaxValue == nil && seq.CacheSize == nil && seq.Cycle == nil && strings.TrimSpace(seq.DataType) == "" {
-		return "", false
+func formatAlterSequenceOptions(seq dump.SequenceState) (string, bool, error) {
+	dt, err := normalizeSequenceDataType(seq.DataType)
+	if err != nil {
+		return "", false, err
+	}
+	if seq.IncrementBy == nil && seq.MinValue == nil && seq.MaxValue == nil && seq.CacheSize == nil && seq.Cycle == nil && dt == "" {
+		return "", false, nil
 	}
 	var parts []string
-	if dt := strings.TrimSpace(seq.DataType); dt != "" && !strings.EqualFold(dt, "bigint") {
+	if dt != "" {
 		parts = append(parts, "AS "+dt)
 	}
 	if seq.IncrementBy != nil {
@@ -297,7 +438,7 @@ func formatAlterSequenceOptions(seq dump.SequenceState) (string, bool) {
 		}
 	}
 	if len(parts) == 0 {
-		return "", false
+		return "", false, nil
 	}
-	return "ALTER SEQUENCE " + quoteQualifiedTable(seq.Schema, seq.Name) + " " + strings.Join(parts, " "), true
+	return "ALTER SEQUENCE " + quoteQualifiedTable(seq.Schema, seq.Name) + " " + strings.Join(parts, " "), true, nil
 }
