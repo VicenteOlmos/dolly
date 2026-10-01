@@ -8,14 +8,14 @@
 │                            ││ User: app                                 │
 │            dolly           ││ Password: ********                        │
 │                            ││ SSLMODE:                                  │
-│ > 1 connect                ││                                           │
-│   2 schema                 ││ Saved profiles                            │
-│   3 dump                   ││ >   prod  pr***l / a*** / a***            │
-│   4 clone                  ││     staging  db***m / de***y / a***       │
-│   5 config                 ││ * set default · Enter connect             │
-│                            ││                                           │
-│                            ││                                           │
-│                            ││                                           │
+│ > 1 connect                ││ SSL root cert:                            │
+│   2 schema                 ││ SSL cert:                                 │
+│   3 dump                   ││ SSL key:                                  │
+│   4 clone                  ││                                           │
+│   5 config                 ││ Saved profiles                            │
+│                            ││ >   prod  pr***l / a*** / a***            │
+│                            ││     staging  db***m / de***y / a***       │
+│                            ││ * set default · Enter connect             │
 │                            ││                                           │
 ╰────────────────────────────╯╰───────────────────────────────────────────╯
 U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     

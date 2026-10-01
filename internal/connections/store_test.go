@@ -96,6 +96,30 @@ func TestFileStoreUpsertPreservesSchemas(t *testing.T) {
 	}
 }
 
+func TestFileStoreUpsertReplacesTLSFiles(t *testing.T) {
+	store := newTestStore(t)
+	initial := sampleConnection("staging")
+	initial.SSLRootCert = "/certs/old-root.crt"
+	initial.SSLCert = "/certs/old.crt"
+	initial.SSLKey = "/certs/old.key"
+	if err := store.Save(initial); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.UpsertBySignature(Connection{
+		Host: "db.example.com", Port: "5432", Database: "app", User: "app", Password: "new-secret",
+		SSLRootCert: "/certs/new-root.crt", SSLCert: "/certs/new.crt", SSLKey: "/certs/new.key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.SSLRootCert != "/certs/new-root.crt" || updated.SSLCert != "/certs/new.crt" || updated.SSLKey != "/certs/new.key" {
+		t.Fatalf("tls files = %+v", updated)
+	}
+	if updated.Name != "staging" || len(updated.Schemas) != 2 || updated.Schemas[0] != "app" {
+		t.Fatalf("profile identity changed: %+v", updated)
+	}
+}
+
 func TestFileStoreUpsertAssignsConnN(t *testing.T) {
 	store := newTestStore(t)
 	first, err := store.UpsertBySignature(Connection{

@@ -8,14 +8,14 @@
 │                            ││ User:                                     │
 │            dolly           ││ Password:                                 │
 │                            ││ SSLMODE:                                  │
-│ > 1 connect                ││                                           │
-│   2 schema                 ││ Saved profiles                            │
-│   3 dump                   ││ No saved profiles yet — enter credentials │
-│   4 clone                  ││ in Connection fields and connect with     │
-│   5 config                 ││ Enter to auto-save                        │
-│                            ││                                           │
-│                            ││                                           │
-│                            ││                                           │
+│ > 1 connect                ││ SSL root cert:                            │
+│   2 schema                 ││ SSL cert:                                 │
+│   3 dump                   ││ SSL key:                                  │
+│   4 clone                  ││                                           │
+│   5 config                 ││ Saved profiles                            │
+│                            ││ No saved profiles yet — enter credentials │
+│                            ││ in Connection fields and connect with     │
+│                            ││ Enter to auto-save                        │
 │                            ││                                           │
 ╰────────────────────────────╯╰───────────────────────────────────────────╯
 U@U dump · restore · clone · tui — export · load · clone workflow · cockpit     

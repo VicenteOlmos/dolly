@@ -31,6 +31,9 @@ type Connection struct {
 	Password       string   `yaml:"password"`
 	SSLMODE        string   `yaml:"sslmode,omitempty"`
 	ChannelBinding string   `yaml:"channel_binding,omitempty"`
+	SSLRootCert    string   `yaml:"sslrootcert,omitempty"`
+	SSLCert        string   `yaml:"sslcert,omitempty"`
+	SSLKey         string   `yaml:"sslkey,omitempty"`
 	Schemas        []string `yaml:"schemas,omitempty"`
 }
 
@@ -239,6 +242,9 @@ func mergeConnection(existing, incoming Connection) Connection {
 	if len(incoming.Schemas) > 0 {
 		updated.Schemas = append([]string(nil), incoming.Schemas...)
 	}
+	updated.SSLRootCert = incoming.SSLRootCert
+	updated.SSLCert = incoming.SSLCert
+	updated.SSLKey = incoming.SSLKey
 	return updated
 }
 
