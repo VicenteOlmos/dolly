@@ -1443,13 +1443,14 @@ func TestRunCloneJSONOutput(t *testing.T) {
 	})
 
 	var result struct {
-		OK             bool     `json:"ok"`
-		Command        string   `json:"command"`
-		SourceDatabase string   `json:"source_database"`
-		CloneName      string   `json:"clone_name"`
-		Strategy       string   `json:"strategy"`
-		TargetDir      string   `json:"target_dir"`
-		Schemas        []string `json:"schemas"`
+		OK                bool     `json:"ok"`
+		Command           string   `json:"command"`
+		SourceDatabase    string   `json:"source_database"`
+		CloneName         string   `json:"clone_name"`
+		Strategy          string   `json:"strategy"`
+		TargetDir         string   `json:"target_dir"`
+		Schemas           []string `json:"schemas"`
+		PreflightWarnings []string `json:"preflight_warnings"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
@@ -1469,7 +1470,48 @@ func TestRunCloneJSONOutput(t *testing.T) {
 	if result.Strategy != "template" {
 		t.Fatalf("strategy = %q, want template", result.Strategy)
 	}
+	if result.PreflightWarnings == nil {
+		t.Fatal("expected preflight_warnings key in JSON")
+	}
+	if len(result.PreflightWarnings) != 0 {
+		t.Fatalf("expected empty preflight_warnings, got %v", result.PreflightWarnings)
+	}
 	_ = capturedOpts // keep capture alive
+}
+
+func TestRunClonePreflightWarningsJSONAndStderr(t *testing.T) {
+	const warn = "schema-replay will not copy 1 foreign table(s); pg_dump is required for those objects"
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		if opts.PreflightWarnings != nil {
+			*opts.PreflightWarnings = []string{warn}
+		}
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	cfg := config.DefaultConfig()
+	stderr := captureStderr(func() {
+		stdout := captureStdout(func() {
+			if err := runCloneExecute(context.Background(), cloneFlags{JSON: true}, cfg,
+				"postgres://u:p@h/db", "clone_x", "", []string{"public"}, "schema-replay"); err != nil {
+				t.Fatalf("runCloneExecute: %v", err)
+			}
+		})
+		var result struct {
+			OK                bool     `json:"ok"`
+			PreflightWarnings []string `json:"preflight_warnings"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+			t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+		}
+		if len(result.PreflightWarnings) != 1 || result.PreflightWarnings[0] != warn {
+			t.Fatalf("preflight_warnings = %v", result.PreflightWarnings)
+		}
+	})
+	if !strings.Contains(stderr, warn) {
+		t.Fatalf("stderr missing warning:\n%s", stderr)
+	}
 }
 
 func TestRunCloneJSONRequiresFF(t *testing.T) {
