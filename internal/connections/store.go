@@ -242,6 +242,9 @@ func mergeConnection(existing, incoming Connection) Connection {
 	if len(incoming.Schemas) > 0 {
 		updated.Schemas = append([]string(nil), incoming.Schemas...)
 	}
+	updated.SSLRootCert = incoming.SSLRootCert
+	updated.SSLCert = incoming.SSLCert
+	updated.SSLKey = incoming.SSLKey
 	return updated
 }
 

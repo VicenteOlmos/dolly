@@ -592,7 +592,18 @@ func (c *connectionScreen) connectFromDraft() tea.Cmd {
 		if ok {
 			p := prof
 			c.pickedProfile = &p
+			edited := *c.draft
 			*c.draft = draftFromConnection(prof)
+			if tlsFilesDiffer(edited, prof) {
+				c.draft.SSLRootCert = edited.SSLRootCert
+				c.draft.SSLCert = edited.SSLCert
+				c.draft.SSLKey = edited.SSLKey
+				conn := prof
+				conn.SSLRootCert = edited.SSLRootCert
+				conn.SSLCert = edited.SSLCert
+				conn.SSLKey = edited.SSLKey
+				return c.connectFromProfile(conn)
+			}
 			return c.connectFromProfile(prof)
 		}
 	}
@@ -600,6 +611,12 @@ func (c *connectionScreen) connectFromDraft() tea.Cmd {
 	return func() tea.Msg {
 		return connectRequestedMsg{dsn: c.draft.DSN()}
 	}
+}
+
+func tlsFilesDiffer(draft ConnectionDraft, prof connections.Connection) bool {
+	return strings.TrimSpace(draft.SSLRootCert) != strings.TrimSpace(prof.SSLRootCert) ||
+		strings.TrimSpace(draft.SSLCert) != strings.TrimSpace(prof.SSLCert) ||
+		strings.TrimSpace(draft.SSLKey) != strings.TrimSpace(prof.SSLKey)
 }
 
 func (c *connectionScreen) connectFromProfile(prof connections.Connection) tea.Cmd {

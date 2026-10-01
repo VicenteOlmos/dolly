@@ -105,3 +105,53 @@ func TestTLSFilesRoundTripThroughSavedProfile(t *testing.T) {
 		t.Fatalf("draft DSN = %q, want TLS files omitted", got)
 	}
 }
+
+func TestConnectFromDraftUsesEditedTLSFiles(t *testing.T) {
+	saved := connections.Connection{
+		Name: "local", Host: "h", Port: "5432", Database: "db", User: "u", Password: "p",
+		SSLMODE: "verify-full", Schemas: []string{"app"},
+		SSLRootCert: "/certs/old-root.crt", SSLCert: "/certs/client.crt", SSLKey: "/certs/client.key",
+	}
+	store := newMockConnectionStore(saved)
+	draft := ConnectionDraft{
+		Host: "h", Port: "5432", Database: "db", User: "u", Password: "p",
+		SSLMODE:     "verify-full",
+		SSLRootCert: "/certs/old-root.crt", SSLCert: "/certs/client.crt", SSLKey: "/certs/client.key",
+	}
+	status := ConnStatusIdle
+	var errMsg string
+	screen := newConnectionScreen(&draft, &status, &errMsg, store, false, nil, nil, nil, SectionEntryInside)
+	cs := screen.(*connectionScreen)
+	enterConnectionFields(cs)
+
+	msg := cs.connectFromDraft()().(connectRequestedMsg)
+	if got := mustParseDSNQuery(msg.dsn).Get("sslrootcert"); got != "/certs/old-root.crt" {
+		t.Fatalf("unchanged sslrootcert = %q", got)
+	}
+	if len(msg.schemas) != 1 || msg.schemas[0] != "app" {
+		t.Fatalf("schemas = %v, want [app]", msg.schemas)
+	}
+
+	draft.SSLRootCert = "/certs/new-root.crt"
+	msg = cs.connectFromDraft()().(connectRequestedMsg)
+	if got := mustParseDSNQuery(msg.dsn).Get("sslrootcert"); got != "/certs/new-root.crt" {
+		t.Fatalf("edited sslrootcert = %q", got)
+	}
+	if draft.SSLRootCert != "/certs/new-root.crt" {
+		t.Fatalf("draft lost edited cert: %q", draft.SSLRootCert)
+	}
+	if len(msg.schemas) != 1 || msg.schemas[0] != "app" {
+		t.Fatalf("edited connect schemas = %v", msg.schemas)
+	}
+
+	enterConnectionList(cs)
+	cs.listCursor = 0
+	cmd := cs.Update(keyPress("", tea.KeyEnter, 0))
+	if cmd == nil {
+		t.Fatal("expected connect from saved list")
+	}
+	msg = cmd().(connectRequestedMsg)
+	if got := mustParseDSNQuery(msg.dsn).Get("sslrootcert"); got != "/certs/old-root.crt" {
+		t.Fatalf("saved list sslrootcert = %q", got)
+	}
+}
