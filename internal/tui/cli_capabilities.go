@@ -94,6 +94,7 @@ func CLICatalog() []CLICommand {
 				{Name: "dsn", Description: "PostgreSQL connection string (or use --connection when save_connections is enabled)"},
 				{Name: "connection", Description: "saved connection profile name (requires save_connections in config.jsonc)"},
 				{Name: "input", Required: true, Description: "dump input directory (refuses zero-table dumps before DB mutation)"},
+				{Name: "schemas", Description: "comma-separated target schema names (overrides saved connection profile schemas)"},
 				{Name: "on-conflict", Default: "error", Description: "row conflict policy: error, skip, upsert"},
 				{Name: "replace", Description: "truncate tables before insert (destructive)"},
 				{Name: "no-transaction", Description: "advanced: commit after each table (no global rollback; requires --yes; default is atomic)"},
@@ -126,6 +127,10 @@ func CLICatalog() []CLICommand {
 				{Name: "target-dir", Description: "target data directory for physical-backup clone (pg_basebackup -D)"},
 				{Name: "connection", Description: "saved connection profile as source (requires save_connections; use with -ff)"},
 				{Name: "schemas", Description: "comma-separated source schema names (overrides clone.schemas config)"},
+				{Name: "replace", Description: "truncate target tables before restore (overrides clone.replace config)"},
+				{Name: "on-conflict", Description: "restore row conflict policy: error, skip, upsert (overrides clone.restore_on_conflict config)"},
+				{Name: "skip-create", Description: "skip creating the target database (overrides clone.skip_create config)"},
+				{Name: "dump-dir", Description: "intermediate dump directory for schema-replay clone (overrides clone.dump_dir config)"},
 				{Name: "yes", Description: "confirm destructive operations (required with -ff when clone.replace=true)"},
 				{Name: "with-privileges", Description: "schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
@@ -200,6 +205,13 @@ func RenderCLIHelp(cmd CLICommand, width int) string {
 	}
 	lines = append(lines, StyleHeader.Render(title))
 	lines = append(lines, StyleBase.Render(cmd.Short))
+	if len(cmd.Examples) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, StyleHeader.Render("shell: examples"))
+		for _, ex := range cmd.Examples {
+			lines = append(lines, StyleAccent.Render(ex))
+		}
+	}
 	if len(cmd.Flags) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, StyleHeader.Render("Flags"))
@@ -211,13 +223,6 @@ func RenderCLIHelp(cmd CLICommand, width int) string {
 		lines = append(lines, "")
 		lines = append(lines, StyleHeader.Render("Config"))
 		lines = append(lines, StyleBase.Render(wrapText(cmd.ConfigNote, width)))
-	}
-	if len(cmd.Examples) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, StyleHeader.Render("shell: examples"))
-		for _, ex := range cmd.Examples {
-			lines = append(lines, StyleAccent.Render(ex))
-		}
 	}
 	return strings.Join(lines, "\n")
 }
