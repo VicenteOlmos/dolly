@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/VicenteOlmos/dolly/internal/config"
 )
 
 const dumpLogMaxLines = 50
@@ -42,6 +44,7 @@ const (
 	modeFieldMaxTables
 	modeFieldMaxRows
 	modeFieldMaxRowsPerTable
+	modeFieldMaxInList
 	modeFieldInclude
 	modeFieldExclude
 	modeFieldChunkSize
@@ -65,6 +68,7 @@ type dumpScreen struct {
 	restoreRunning         *bool
 	hasSession             func() bool
 	sanitizeDefault        func() bool
+	dumpConfig             func() *config.Config
 	nav                    SectionNav
 	pathCursor             int
 	modeField              int
@@ -75,6 +79,7 @@ type dumpScreen struct {
 	tablesCursor           int
 	rowsCursor             int
 	rowsPerCursor          int
+	inListCursor           int
 	includeCursor          int
 	excludeCursor          int
 	chunkSizeCursor        int
@@ -95,11 +100,12 @@ type dumpScreen struct {
 	trustedSchemaSQL       bool
 }
 
-func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool, sanitizeDefault func() bool) ScreenModel {
+func newDumpScreen(draft *DumpDraft, hasSession func() bool, dumpStatus *DumpStatus, dumpLog *[]string, dumpError *string, dumpResult **DumpResultSummary, spinnerFrame *int, dumpProgress **DumpProgressEvent, restoreProgress **RestoreProgressEvent, restoreRunning *bool, sanitizeDefault func() bool, dumpConfig func() *config.Config) ScreenModel {
 	return &dumpScreen{
 		draft:           draft,
 		hasSession:      hasSession,
 		sanitizeDefault: sanitizeDefault,
+		dumpConfig:      dumpConfig,
 		dumpStatus:      dumpStatus,
 		dumpLog:         dumpLog,
 		dumpError:       dumpError,
@@ -409,7 +415,7 @@ func (d *dumpScreen) modeTextFocused() bool {
 	}
 	switch d.modeField {
 	case modeFieldPercent, modeFieldSeed, modeFieldChunk,
-		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable,
+		modeFieldMaxDepth, modeFieldMaxTables, modeFieldMaxRows, modeFieldMaxRowsPerTable, modeFieldMaxInList,
 		modeFieldInclude, modeFieldExclude, modeFieldChunkSize, modeFieldRetryMax, modeFieldRetryBase,
 		modeFieldIncludeTableFile, modeFieldExcludeTableFile, modeFieldChunkTableFile:
 		return true
@@ -426,6 +432,7 @@ func (d *dumpScreen) syncModeCursors() {
 	d.tablesCursor = len(d.draft.MaxTablesText)
 	d.rowsCursor = len(d.draft.MaxRowsText)
 	d.rowsPerCursor = len(d.draft.MaxRowsPerTableText)
+	d.inListCursor = len(d.draft.MaxInListText)
 	d.includeCursor = len(d.draft.IncludeTables)
 	d.excludeCursor = len(d.draft.ExcludeTables)
 	d.chunkSizeCursor = len(d.draft.ChunkSizeText)
@@ -464,6 +471,8 @@ func (d *dumpScreen) handleModeKey(k tea.Key) bool {
 			return handleFieldCursorKey(k, &d.draft.MaxRowsText, &d.rowsCursor)
 		case modeFieldMaxRowsPerTable:
 			return handleFieldCursorKey(k, &d.draft.MaxRowsPerTableText, &d.rowsPerCursor)
+		case modeFieldMaxInList:
+			return handleFieldCursorKey(k, &d.draft.MaxInListText, &d.inListCursor)
 		case modeFieldInclude:
 			return handleFieldCursorKey(k, &d.draft.IncludeTables, &d.includeCursor)
 		case modeFieldExclude:
@@ -549,8 +558,10 @@ func (d *dumpScreen) modeSummary() string {
 	if d.sanitizeEnabled() {
 		parts = append(parts, "sanitize")
 	}
-	if strings.TrimSpace(d.draft.PercentText) != "" {
-		parts = append(parts, strings.TrimSpace(d.draft.PercentText)+"%")
+	if pt := strings.TrimSpace(d.draft.PercentText); pt != "" {
+		parts = append(parts, pt+"%")
+	} else if cfg := d.dumpConfig(); cfg != nil && cfg.Subset.Percent > 0 {
+		parts = append(parts, fmt.Sprintf("%d%%", cfg.Subset.Percent))
 	}
 	if strings.TrimSpace(d.draft.SeedFile) != "" {
 		parts = append(parts, "seed")
@@ -575,6 +586,12 @@ func (d *dumpScreen) modeSummary() string {
 	}
 	if d.draft.WorkersSet {
 		parts = append(parts, fmt.Sprintf("workers %d", d.draft.Workers))
+	} else if cfg := d.dumpConfig(); cfg != nil {
+		workers := cfg.Dump.Workers
+		if workers <= 0 {
+			workers = 1
+		}
+		parts = append(parts, fmt.Sprintf("workers %d", workers))
 	}
 	if d.draft.NoTransaction {
 		parts = append(parts, "no-tx")
@@ -748,6 +765,7 @@ func (d *dumpScreen) modeSectionLines() []string {
 		{modeFieldMaxTables, "Max tables", d.modeFieldValue(d.draft.MaxTablesText, d.tablesCursor, modeFieldMaxTables)},
 		{modeFieldMaxRows, "Max rows", d.modeFieldValue(d.draft.MaxRowsText, d.rowsCursor, modeFieldMaxRows)},
 		{modeFieldMaxRowsPerTable, "Max rows/table", d.modeFieldValue(d.draft.MaxRowsPerTableText, d.rowsPerCursor, modeFieldMaxRowsPerTable)},
+		{modeFieldMaxInList, "Max in-list size", d.modeFieldValue(d.draft.MaxInListText, d.inListCursor, modeFieldMaxInList)},
 		{modeFieldInclude, "Include tables", d.modeFieldValue(d.draft.IncludeTables, d.includeCursor, modeFieldInclude)},
 		{modeFieldExclude, "Exclude tables", d.modeFieldValue(d.draft.ExcludeTables, d.excludeCursor, modeFieldExclude)},
 		{modeFieldChunkSize, "Chunk size", d.modeFieldValue(d.draft.ChunkSizeText, d.chunkSizeCursor, modeFieldChunkSize)},

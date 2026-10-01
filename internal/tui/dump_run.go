@@ -125,6 +125,10 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 	if err != nil {
 		return runopts.DumpOverrides{}, err
 	}
+	maxInList, err := parseOptionalPositiveInt(draft.MaxInListText, "max in-list size")
+	if err != nil {
+		return runopts.DumpOverrides{}, err
+	}
 	chunkSize, err := parseOptionalPositiveInt(draft.ChunkSizeText, "chunk size")
 	if err != nil {
 		return runopts.DumpOverrides{}, err
@@ -160,6 +164,7 @@ func dumpOverridesFromDraft(draft DumpDraft) (runopts.DumpOverrides, error) {
 		MaxTables:         maxTables,
 		MaxRows:           maxRows,
 		MaxRowsPerTable:   maxRowsPer,
+		MaxInListSize:     maxInList,
 		IncludeTables:     splitChunkTables(draft.IncludeTables),
 		ExcludeTables:     splitChunkTables(draft.ExcludeTables),
 		IncludeTableFiles: includeTableFiles,

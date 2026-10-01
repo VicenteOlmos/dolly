@@ -141,11 +141,12 @@ func NewAppWithOptions(loader SchemaLoader, runner DumpRunner, restoreRunner Res
 	app.screens[ScreenConnection] = newConnectionScreen(
 		&app.conn, &app.connStatus, &app.connectError, store, saveConnections,
 		app.defaultConnectionName, app.setDefaultConnectionProfile, &app.spinnerFrame, app.sectionEntry,
+		func() []string { return app.dump.SchemaPicker.SelectedNames() },
 	)
 	app.screens[ScreenSchema] = newSchemaScreen(&app.schema, app.hasSession)
 	app.screens[ScreenDump] = newDumpScreen(&app.dump, app.hasSession, &app.dumpStatus, &app.dumpLog, &app.dumpError, &app.dumpResult, &app.spinnerFrame, &app.dumpProgress, &app.restoreProgress, &app.restoreRunning, func() bool {
 		return app.cfg != nil && app.cfg.Sanitization.Enabled
-	})
+	}, func() *config.Config { return app.cfg })
 	app.screens[ScreenClone] = newCloneScreen(&app.clone, app.hasSession, &app.cloneStatus, &app.cloneLog, &app.cloneError, &app.spinnerFrame, store, saveConnections, func() *config.Config { return app.cfg }, func() string { return app.conn.DSN() }, &app.cloneProgress)
 	app.screens[ScreenConfig] = newConfigScreen(func() *config.Config { return app.cfg }, func() string { return app.cfgPath })
 	return app

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
 )
@@ -15,7 +16,12 @@ func ResolveStorePath(cfg *config.Config, cwd string) (string, error) {
 	if cfg == nil {
 		return "", fmt.Errorf("config is nil")
 	}
-	_ = cfg // reserved for future dump.history_path config
+	if p := strings.TrimSpace(cfg.Dump.HistoryPath); p != "" {
+		if filepath.IsAbs(p) {
+			return p, nil
+		}
+		return filepath.Join(cwd, p), nil
+	}
 	return filepath.Join(cwd, defaultHistoryFile), nil
 }
 

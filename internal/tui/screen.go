@@ -155,6 +155,7 @@ type DumpDraft struct {
 	MaxTablesText       string
 	MaxRowsText         string
 	MaxRowsPerTableText string
+	MaxInListText       string
 	IncludeTables       string
 	ExcludeTables       string
 	ChunkSizeText       string
