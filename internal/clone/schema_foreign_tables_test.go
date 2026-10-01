@@ -122,12 +122,25 @@ func TestLoadForeignTablesForeignPartition(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := formatCreateForeignTable(tables[0])
-	want := `CREATE FOREIGN TABLE "app"."f_part" ("id" integer) SERVER "srv" PARTITION OF "app"."parent" FOR VALUES FROM (0) TO (10)`
+	want := `CREATE FOREIGN TABLE "app"."f_part" PARTITION OF "app"."parent" FOR VALUES FROM (0) TO (10) SERVER "srv"`
 	if got != want {
 		t.Fatalf("ddl = %q, want %q", got, want)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFormatCreateForeignPartitionColumnOptions(t *testing.T) {
+	t.Parallel()
+	cols := []foreignTableColumn{
+		{name: "id", sqlType: "integer", nullable: false, options: map[string]string{"column_name": "remote_id"}},
+		{name: "note", sqlType: "text", nullable: true},
+	}
+	got := formatCreateForeignTableParts("app", "f_part", "srv", cols, map[string]string{"schema_name": "public"}, "app", "parent", "FOR VALUES FROM (0) TO (10)")
+	want := `CREATE FOREIGN TABLE "app"."f_part" PARTITION OF "app"."parent" ("id" WITH OPTIONS (column_name 'remote_id') NOT NULL) FOR VALUES FROM (0) TO (10) SERVER "srv" OPTIONS (schema_name 'public')`
+	if got != want {
+		t.Fatalf("ddl = %q, want %q", got, want)
 	}
 }
 

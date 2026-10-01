@@ -201,6 +201,9 @@ func formatCreateForeignTable(ft foreignTableDef) string {
 }
 
 func formatCreateForeignTableParts(schema, name, server string, cols []foreignTableColumn, options map[string]string, partitionParentSchema, partitionParentName, partitionBound string) string {
+	if partitionParentSchema != "" && partitionParentName != "" {
+		return formatCreateForeignPartition(schema, name, server, cols, options, partitionParentSchema, partitionParentName, partitionBound)
+	}
 	var colParts []string
 	for _, c := range cols {
 		part := fmt.Sprintf("%s %s", quoteIdentifier(c.name), c.sqlType)
@@ -221,8 +224,42 @@ func formatCreateForeignTableParts(schema, name, server string, cols []foreignTa
 	if opt := formatFDWOptionsClause(options); opt != "" {
 		stmt += opt
 	}
-	if partitionParentSchema != "" && partitionParentName != "" {
-		stmt += " PARTITION OF " + quoteQualifiedTable(partitionParentSchema, partitionParentName) + " " + strings.TrimSpace(partitionBound)
+	return stmt
+}
+
+// formatCreateForeignPartition emits PostgreSQL 16 partition syntax:
+// CREATE FOREIGN TABLE name PARTITION OF parent [ (col [WITH OPTIONS] [NOT NULL]) ]
+// FOR VALUES ... SERVER server [OPTIONS (...)].
+// Column types come from the parent and must not be repeated.
+func formatCreateForeignPartition(schema, name, server string, cols []foreignTableColumn, options map[string]string, partitionParentSchema, partitionParentName, partitionBound string) string {
+	stmt := fmt.Sprintf(
+		"CREATE FOREIGN TABLE %s PARTITION OF %s",
+		quoteQualifiedTable(schema, name),
+		quoteQualifiedTable(partitionParentSchema, partitionParentName),
+	)
+	var colParts []string
+	for _, c := range cols {
+		var extras []string
+		if opt := formatFDWOptionsClause(c.options); opt != "" {
+			extras = append(extras, "WITH"+opt)
+		}
+		if !c.nullable {
+			extras = append(extras, "NOT NULL")
+		}
+		if len(extras) == 0 {
+			continue
+		}
+		colParts = append(colParts, quoteIdentifier(c.name)+" "+strings.Join(extras, " "))
+	}
+	if len(colParts) > 0 {
+		stmt += " (" + strings.Join(colParts, ", ") + ")"
+	}
+	if bound := strings.TrimSpace(partitionBound); bound != "" {
+		stmt += " " + bound
+	}
+	stmt += " SERVER " + quoteIdentifier(server)
+	if opt := formatFDWOptionsClause(options); opt != "" {
+		stmt += opt
 	}
 	return stmt
 }
