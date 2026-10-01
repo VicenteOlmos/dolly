@@ -345,13 +345,13 @@ func TestFormatAlterTableFillfactor(t *testing.T) {
 func TestFormatAlterTableReloptions(t *testing.T) {
 	t.Parallel()
 	got, ok := formatAlterTableReloptions("app", "events", map[string]string{
-		"parallel_workers":                   "4",
-		"autovacuum_enabled":                 "false",
-		"autovacuum_vacuum_scale_factor":     "0.15",
-		"autovacuum_analyze_scale_factor":    "0.05",
-		"toast_tuple_target":                 "2048",
-		"fillfactor":                         "90",
-		"unknown_option":                     "nope",
+		"parallel_workers":                "4",
+		"autovacuum_enabled":              "false",
+		"autovacuum_vacuum_scale_factor":  "0.15",
+		"autovacuum_analyze_scale_factor": "0.05",
+		"toast_tuple_target":              "2048",
+		"fillfactor":                      "90",
+		"unknown_option":                  "nope",
 	})
 	want := `ALTER TABLE "app"."events" SET (autovacuum_analyze_scale_factor=0.05, autovacuum_enabled=off, autovacuum_vacuum_scale_factor=0.15, fillfactor=90, parallel_workers=4, toast_tuple_target=2048)`
 	if !ok || got != want {
@@ -606,10 +606,10 @@ func TestFormatEnableRLSAndPolicy(t *testing.T) {
 		t.Fatalf("permissive policy = %q, want %q", permissive, wantPermissive)
 	}
 	restrictive := formatCreatePolicy("app", "users", policyDef{
-		name:        "block_all",
-		command:     "ALL",
-		permissive:  false,
-		using:       "false",
+		name:       "block_all",
+		command:    "ALL",
+		permissive: false,
+		using:      "false",
 	})
 	wantRestrictive := `CREATE POLICY "block_all" ON "app"."users" AS RESTRICTIVE FOR ALL USING (false)`
 	if restrictive != wantRestrictive {
@@ -644,6 +644,27 @@ func TestFormatCreateCompositeType(t *testing.T) {
 	wantColl := `CREATE TYPE "app"."label" AS ("text" text COLLATE "app"."custom")`
 	if gotColl != wantColl {
 		t.Fatalf("collated composite: got %q, want %q", gotColl, wantColl)
+	}
+}
+
+func TestFormatCreateForeignTable(t *testing.T) {
+	t.Parallel()
+	cols := []foreignTableColumn{
+		{name: "id", sqlType: "integer", nullable: false},
+		{name: "name", sqlType: "text", nullable: true},
+	}
+	got := formatCreateForeignTableParts("app", "remote_items", "pg_server", cols, map[string]string{
+		"schema_name": "public",
+		"table_name":  "items",
+	}, "", "", "")
+	want := `CREATE FOREIGN TABLE "app"."remote_items" ("id" integer NOT NULL, "name" text) SERVER "pg_server" OPTIONS (schema_name 'public', table_name 'items')`
+	if got != want {
+		t.Fatalf("formatCreateForeignTable() = %q, want %q", got, want)
+	}
+	gotNoOpts := formatCreateForeignTableParts("app", "plain", "srv", cols, nil, "", "", "")
+	wantNoOpts := `CREATE FOREIGN TABLE "app"."plain" ("id" integer NOT NULL, "name" text) SERVER "srv"`
+	if gotNoOpts != wantNoOpts {
+		t.Fatalf("without options: got %q, want %q", gotNoOpts, wantNoOpts)
 	}
 }
 
