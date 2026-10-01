@@ -800,45 +800,67 @@ func applyColumnCompressionOverrides(ctx context.Context, tgtDB execer, rows []c
 	return nil
 }
 
-type tableFillfactorRow struct {
-	schema     string
-	table      string
-	fillfactor int
+type tableReloptionsRow struct {
+	schema string
+	table  string
+	opts   map[string]string
 }
 
-func loadTableFillfactors(ctx context.Context, q *sql.DB, schemas []string) ([]tableFillfactorRow, error) {
+var replayedTableReloptionNames = []string{
+	"fillfactor",
+	"autovacuum_enabled",
+	"autovacuum_vacuum_scale_factor",
+	"autovacuum_analyze_scale_factor",
+	"toast_tuple_target",
+	"parallel_workers",
+}
+
+func loadTableReloptions(ctx context.Context, q *sql.DB, schemas []string) ([]tableReloptionsRow, error) {
 	inClause, args := schemaINClause(schemas)
+	optionList := make([]string, len(replayedTableReloptionNames))
+	for i, name := range replayedTableReloptionNames {
+		optionList[i] = quoteLiteral(name)
+	}
 	query := fmt.Sprintf(`
-		SELECT n.nspname, c.relname, opt.option_value
+		SELECT n.nspname, c.relname, opt.option_name, opt.option_value
 		FROM pg_class c
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		CROSS JOIN LATERAL pg_catalog.pg_options_to_table(c.reloptions) opt
 		WHERE c.relkind IN ('r', 'p')
 		  AND c.reloptions IS NOT NULL
-		  AND opt.option_name = 'fillfactor'
+		  AND opt.option_name IN (%s)
 		  AND n.nspname IN (%s)
-		ORDER BY n.nspname, c.relname`, inClause)
+		ORDER BY n.nspname, c.relname, opt.option_name`, strings.Join(optionList, ", "), inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list table fillfactors: %w", err)
+		return nil, fmt.Errorf("list table reloptions: %w", err)
 	}
 	defer rows.Close()
 
-	var out []tableFillfactorRow
+	byTable := make(map[string]*tableReloptionsRow)
+	var order []string
 	for rows.Next() {
-		var row tableFillfactorRow
-		var value string
-		if err := rows.Scan(&row.schema, &row.table, &value); err != nil {
-			return nil, fmt.Errorf("scan table fillfactor: %w", err)
+		var schema, table, name, value string
+		if err := rows.Scan(&schema, &table, &name, &value); err != nil {
+			return nil, fmt.Errorf("scan table reloption: %w", err)
 		}
-		ff, err := parseFillfactorOption(value)
-		if err != nil {
-			continue
+		key := schema + "\x00" + table
+		row := byTable[key]
+		if row == nil {
+			row = &tableReloptionsRow{schema: schema, table: table, opts: make(map[string]string)}
+			byTable[key] = row
+			order = append(order, key)
 		}
-		row.fillfactor = ff
-		out = append(out, row)
+		row.opts[name] = value
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]tableReloptionsRow, 0, len(order))
+	for _, key := range order {
+		out = append(out, *byTable[key])
+	}
+	return out, nil
 }
 
 func parseFillfactorOption(value string) (int, error) {
@@ -849,11 +871,64 @@ func parseFillfactorOption(value string) (int, error) {
 	return n, nil
 }
 
-func applyTableFillfactors(ctx context.Context, tgtDB execer, rows []tableFillfactorRow) error {
+func applyTableReloptions(ctx context.Context, tgtDB execer, rows []tableReloptionsRow) error {
 	for _, row := range rows {
-		stmt := formatAlterTableFillfactor(row.schema, row.table, row.fillfactor)
+		stmt, ok := formatAlterTableReloptions(row.schema, row.table, row.opts)
+		if !ok {
+			continue
+		}
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("fillfactor on %s.%s: %w", row.schema, row.table, err)
+			return fmt.Errorf("reloptions on %s.%s: %w", row.schema, row.table, err)
+		}
+	}
+	return nil
+}
+
+type columnStatisticsTargetRow struct {
+	schema string
+	table  string
+	column string
+	target int
+}
+
+func columnStatisticsTargetQuery(inClause string) string {
+	return fmt.Sprintf(`
+		SELECT n.nspname, c.relname, a.attname, a.attstattarget
+		FROM pg_catalog.pg_attribute a
+		INNER JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		INNER JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind IN ('r', 'p')
+		  AND a.attnum > 0
+		  AND NOT a.attisdropped
+		  AND a.attstattarget >= 0
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, a.attnum`, inClause)
+}
+
+func loadColumnStatisticsTargets(ctx context.Context, q *sql.DB, schemas []string) ([]columnStatisticsTargetRow, error) {
+	inClause, args := schemaINClause(schemas)
+	rows, err := q.QueryContext(ctx, columnStatisticsTargetQuery(inClause), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list column statistics targets: %w", err)
+	}
+	defer rows.Close()
+
+	var out []columnStatisticsTargetRow
+	for rows.Next() {
+		var row columnStatisticsTargetRow
+		if err := rows.Scan(&row.schema, &row.table, &row.column, &row.target); err != nil {
+			return nil, fmt.Errorf("scan column statistics target: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func applyColumnStatisticsTargets(ctx context.Context, tgtDB execer, rows []columnStatisticsTargetRow) error {
+	for _, row := range rows {
+		stmt := formatAlterColumnStatistics(row.schema, row.table, row.column, row.target)
+		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("column statistics on %s.%s.%s: %w", row.schema, row.table, row.column, err)
 		}
 	}
 	return nil

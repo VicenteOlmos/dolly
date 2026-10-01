@@ -320,11 +320,19 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
-	tableFillfactors, err := loadTableFillfactors(ctx, srcDB, schemas)
+	tableReloptions, err := loadTableReloptions(ctx, srcDB, schemas)
 	if err != nil {
 		return err
 	}
-	if err := applyTableFillfactors(ctx, tgtDB, tableFillfactors); err != nil {
+	if err := applyTableReloptions(ctx, tgtDB, tableReloptions); err != nil {
+		return err
+	}
+
+	columnStatistics, err := loadColumnStatisticsTargets(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyColumnStatisticsTargets(ctx, tgtDB, columnStatistics); err != nil {
 		return err
 	}
 

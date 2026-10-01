@@ -2,6 +2,7 @@ package clone
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -266,10 +267,108 @@ func formatAlterColumnCompression(schema, table, column, code string) (string, b
 
 // formatAlterTableFillfactor emits ALTER TABLE ... SET (fillfactor=N).
 func formatAlterTableFillfactor(schema, table string, fillfactor int) string {
+	stmt, _ := formatAlterTableReloptions(schema, table, map[string]string{
+		"fillfactor": strconv.Itoa(fillfactor),
+	})
+	return stmt
+}
+
+// formatTableReloptionFragment returns a single reloption assignment for ALTER TABLE SET.
+func formatTableReloptionFragment(name, rawValue string) (string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	rawValue = strings.TrimSpace(rawValue)
+	switch name {
+	case "fillfactor":
+		ff, err := parseFillfactorOption(rawValue)
+		if err != nil {
+			return "", false
+		}
+		return fmt.Sprintf("fillfactor=%d", ff), true
+	case "autovacuum_enabled":
+		emit, ok := formatReloptionBooleanValue(rawValue)
+		if !ok {
+			return "", false
+		}
+		return "autovacuum_enabled=" + emit, true
+	case "autovacuum_vacuum_scale_factor", "autovacuum_analyze_scale_factor":
+		if !isReloptionNumericText(rawValue) {
+			return "", false
+		}
+		return name + "=" + rawValue, true
+	case "toast_tuple_target", "parallel_workers":
+		n, err := strconv.Atoi(rawValue)
+		if err != nil || n < 0 {
+			return "", false
+		}
+		return fmt.Sprintf("%s=%d", name, n), true
+	default:
+		return "", false
+	}
+}
+
+// formatReloptionBooleanValue normalizes PostgreSQL boolean reloption spellings for replay.
+// Accepted (case-insensitive): on/off/true/false/yes/no/1/0. Emits on/off, or the stored
+// on/off token when that is what PostgreSQL recorded.
+func formatReloptionBooleanValue(rawValue string) (string, bool) {
+	trimmed := strings.TrimSpace(rawValue)
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "on", "true", "yes", "1":
+		if lower == "on" || lower == "off" {
+			return lower, true
+		}
+		return "on", true
+	case "off", "false", "no", "0":
+		if lower == "on" || lower == "off" {
+			return lower, true
+		}
+		return "off", true
+	default:
+		return "", false
+	}
+}
+
+func isReloptionNumericText(s string) bool {
+	if s == "" {
+		return false
+	}
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
+
+// formatAlterTableReloptions emits ALTER TABLE ... SET (...) for supported table reloptions.
+func formatAlterTableReloptions(schema, table string, options map[string]string) (string, bool) {
+	names := make([]string, 0, len(options))
+	for name := range options {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var parts []string
+	for _, name := range names {
+		fragment, ok := formatTableReloptionFragment(name, options[name])
+		if !ok {
+			continue
+		}
+		parts = append(parts, fragment)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
 	return fmt.Sprintf(
-		"ALTER TABLE %s SET (fillfactor=%d)",
+		"ALTER TABLE %s SET (%s)",
 		quoteQualifiedTable(schema, table),
-		fillfactor,
+		strings.Join(parts, ", "),
+	), true
+}
+
+// formatAlterColumnStatistics emits ALTER TABLE ... ALTER COLUMN ... SET STATISTICS.
+func formatAlterColumnStatistics(schema, table, column string, target int) string {
+	return fmt.Sprintf(
+		"ALTER TABLE ONLY %s ALTER COLUMN %s SET STATISTICS %d",
+		quoteQualifiedTable(schema, table),
+		quoteIdentifier(column),
+		target,
 	)
 }
 
