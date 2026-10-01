@@ -141,7 +141,7 @@ func TestDumpHistoryRestoreWorkersPassedToRestoreOptions(t *testing.T) {
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	user, err := restoreHistoryUserOverrides(restoreHistoryOverrides{WorkersText: "4"})
+	user, err := restoreHistoryUserOverrides(restoreHistoryOverrides{WorkersText: "4", AckPartial: true})
 	if err != nil {
 		t.Fatal(err)
 	}
