@@ -119,7 +119,7 @@ func TestPreflightReachabilityCause(t *testing.T) {
 			sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
 			t.Cleanup(func() { sqlOpenDB = origOpen })
 			mock.ExpectPing().WillReturnError(errors.New(tc.pingErr))
-			err := Preflight(context.Background(), Options{SourceDSN: tc.dsn, CloneName: "db_clone"}, &CopyStreamStrategy{})
+			_, err := Preflight(context.Background(), Options{SourceDSN: tc.dsn, CloneName: "db_clone"}, &CopyStreamStrategy{})
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -175,14 +175,20 @@ func expectTargetRestoreQueries(mock sqlmock.Sqlmock) {
 		WillReturnRows(sqlmock.NewRows([]string{"nspname"}))
 }
 
-func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts struct {
+type preflightSchemaReplayExpect struct {
 	sourceDB   string
 	cloneName  string
 	skipCreate bool
 	crossInst  bool
 	sourceVer  int
 	targetVer  int
-}) {
+	gapHyp         int
+	gapOpc         int
+	gapFT          int
+	skipGapQueries bool
+}
+
+func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaReplayExpect) {
 	if opts.sourceVer == 0 {
 		opts.sourceVer = 150002
 	}
@@ -220,9 +226,31 @@ func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts struct {
 	mock.ExpectQuery(`SHOW server_version_num`).
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.sourceVer))
 	if opts.crossInst {
-		mock.ExpectQuery(`SHOW server_version_num`).
-			WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.targetVer))
+	mock.ExpectQuery(`SHOW server_version_num`).
+		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.targetVer))
 	}
+	if !opts.skipGapQueries {
+		expectSchemaReplayGapQueries(mock, opts.gapHyp, opts.gapOpc, opts.gapFT)
+	}
+}
+
+func expectSchemaReplayGapQueries(mock sqlmock.Sqlmock, counts ...int) {
+	hyp, opc, ft := 0, 0, 0
+	if len(counts) > 0 {
+		hyp = counts[0]
+	}
+	if len(counts) > 1 {
+		opc = counts[1]
+	}
+	if len(counts) > 2 {
+		ft = counts[2]
+	}
+	mock.ExpectQuery(`pg_aggregate`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(hyp))
+	mock.ExpectQuery(`pg_opclass`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(opc))
+	mock.ExpectQuery(`relkind = 'f'`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(ft))
 }
 
 func replicationTargetDir(t *testing.T) string {
@@ -251,11 +279,9 @@ func TestPreflightMatrix(t *testing.T) {
 			opts:     Options{SourceDSN: sourceDSN, CloneName: cloneName, SkipCreate: true},
 			strategy: &SchemaReplayStrategy{},
 			setup: func(m sqlmock.Sqlmock) {
-				expectPreflightSchemaReplay(m, struct {
-					sourceDB, cloneName   string
-					skipCreate, crossInst bool
-					sourceVer, targetVer  int
-				}{sourceDB: "db_src", cloneName: cloneName, skipCreate: true})
+				expectPreflightSchemaReplay(m, preflightSchemaReplayExpect{
+					sourceDB: "db_src", cloneName: cloneName, skipCreate: true, skipGapQueries: true,
+				})
 			},
 			lookPath:  func(string) (string, error) { return "/usr/bin/x", nil },
 			pgDumpVer: func() (string, error) { return "pg_dump (PostgreSQL) 15.0", nil },
@@ -301,13 +327,9 @@ func TestPreflightMatrix(t *testing.T) {
 			},
 			strategy: &SchemaReplayStrategy{},
 			setup: func(m sqlmock.Sqlmock) {
-				expectPreflightSchemaReplay(m, struct {
-					sourceDB, cloneName   string
-					skipCreate, crossInst bool
-					sourceVer, targetVer  int
-				}{
+				expectPreflightSchemaReplay(m, preflightSchemaReplayExpect{
 					sourceDB: "db_src", cloneName: cloneName, skipCreate: true, crossInst: true,
-					sourceVer: 160000, targetVer: 150002,
+					sourceVer: 160000, targetVer: 150002, skipGapQueries: true,
 				})
 			},
 			lookPath: func(string) (string, error) { return "/usr/bin/x", nil },
@@ -319,11 +341,10 @@ func TestPreflightMatrix(t *testing.T) {
 			opts:     Options{SourceDSN: sourceDSN, CloneName: cloneName, SkipCreate: true},
 			strategy: &SchemaReplayStrategy{},
 			setup: func(m sqlmock.Sqlmock) {
-				expectPreflightSchemaReplay(m, struct {
-					sourceDB, cloneName   string
-					skipCreate, crossInst bool
-					sourceVer, targetVer  int
-				}{sourceDB: "db_src", cloneName: cloneName, skipCreate: true, sourceVer: 150002})
+				expectPreflightSchemaReplay(m, preflightSchemaReplayExpect{
+					sourceDB: "db_src", cloneName: cloneName, skipCreate: true, sourceVer: 150002,
+					skipGapQueries: true,
+				})
 			},
 			lookPath:  func(string) (string, error) { return "/usr/bin/pg_dump", nil },
 			pgDumpVer: func() (string, error) { return "pg_dump (PostgreSQL) 16.0", nil },
@@ -1026,9 +1047,13 @@ func TestPreflightMatrix(t *testing.T) {
 			}
 			defer func() { pgDumpVersion = origDump }()
 
+			origSchemaLook := schemaToolLookPath
+			schemaToolLookPath = func(string) (string, error) { return "/usr/bin/pg_dump", nil }
+			defer func() { schemaToolLookPath = origSchemaLook }()
+
 			tt.setup(mock)
 
-			err := Preflight(context.Background(), tt.opts, tt.strategy)
+			warnings, err := Preflight(context.Background(), tt.opts, tt.strategy)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -1051,10 +1076,101 @@ func TestPreflightMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			if len(warnings) != 0 {
+				t.Fatalf("expected no gap warnings on happy path, got %v", warnings)
+			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestPreflightSchemaReplayGapWarnings(t *testing.T) {
+	sourceDSN := "postgres://u:p@h-a:5432/db_src"
+	cloneName := "db_clone"
+
+	mockDB, mock := newSQLMock(t)
+	defer mockDB.Close()
+
+	origOpen := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
+	defer func() { sqlOpenDB = origOpen }()
+
+	origLook := lookPath
+	lookPath = func(string) (string, error) { return "/usr/bin/x", nil }
+	defer func() { lookPath = origLook }()
+
+	origDump := pgDumpVersion
+	pgDumpVersion = func() (string, error) { return "pg_dump (PostgreSQL) 15.0", nil }
+	defer func() { pgDumpVersion = origDump }()
+
+	origSchemaLook := schemaToolLookPath
+	schemaToolLookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
+	defer func() { schemaToolLookPath = origSchemaLook }()
+
+	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
+		sourceDB: "db_src", cloneName: cloneName, skipCreate: true, gapHyp: 1, gapFT: 2,
+	})
+
+	warnings, err := Preflight(context.Background(), Options{
+		SourceDSN: sourceDSN, CloneName: cloneName, SkipCreate: true,
+	}, &SchemaReplayStrategy{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("expected 2 warnings, got %v", warnings)
+	}
+	if warnings[0] != "schema-replay will not copy 1 hypothetical aggregate(s); pg_dump is required for those objects" {
+		t.Fatalf("warning[0] = %q", warnings[0])
+	}
+	if warnings[1] != "schema-replay will not copy 2 foreign table(s); pg_dump is required for those objects" {
+		t.Fatalf("warning[1] = %q", warnings[1])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPreflightSchemaReplaySkipsGapWarningsWhenPgDumpOnPath(t *testing.T) {
+	sourceDSN := "postgres://u:p@h-a:5432/db_src"
+	cloneName := "db_clone"
+
+	mockDB, mock := newSQLMock(t)
+	defer mockDB.Close()
+
+	origOpen := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) { return mockDB, nil }
+	defer func() { sqlOpenDB = origOpen }()
+
+	origLook := lookPath
+	lookPath = func(string) (string, error) { return "/usr/bin/pg_dump", nil }
+	defer func() { lookPath = origLook }()
+
+	origDump := pgDumpVersion
+	pgDumpVersion = func() (string, error) { return "pg_dump (PostgreSQL) 15.0", nil }
+	defer func() { pgDumpVersion = origDump }()
+
+	origSchemaLook := schemaToolLookPath
+	schemaToolLookPath = func(string) (string, error) { return "/usr/bin/pg_dump", nil }
+	defer func() { schemaToolLookPath = origSchemaLook }()
+
+	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
+		sourceDB: "db_src", cloneName: cloneName, skipCreate: true, skipGapQueries: true,
+	})
+
+	warnings, err := Preflight(context.Background(), Options{
+		SourceDSN: sourceDSN, CloneName: cloneName, SkipCreate: true,
+	}, &SchemaReplayStrategy{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no gap warnings when pg_dump is on PATH, got %v", warnings)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
