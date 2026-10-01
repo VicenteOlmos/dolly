@@ -349,10 +349,8 @@ type rangeTypeDef struct {
 	collSchema        string
 	collName          string
 	canonicalSchema   string
-	canonicalName     string
 	canonical         string
 	subtypeDiffSchema string
-	subtypeDiffName   string
 	subtypeDiff       string
 	multirange        string
 }
@@ -399,28 +397,6 @@ func defaultMultirangeName(rangeName string) string {
 		return rangeName[:i] + "multirange" + rangeName[i+len("range"):]
 	}
 	return rangeName + "_multirange"
-}
-
-// formatUncheckedRoutine runs a CREATE FUNCTION that mentions a shell type.
-// PostgreSQL rejects those bodies while check_function_bodies is on, which
-// is the default. The setting is restored before the DO block ends.
-func formatUncheckedRoutine(def string) string {
-	return `DO $dolly$ BEGIN PERFORM set_config('check_function_bodies', 'off', false); BEGIN EXECUTE ` + quoteLiteral(def) + `; EXCEPTION WHEN OTHERS THEN PERFORM set_config('check_function_bodies', 'on', false); RAISE; END; PERFORM set_config('check_function_bodies', 'on', false); END $dolly$`
-}
-
-func routineSkipsBodyCheck(name string, ranges []rangeTypeDef) bool {
-	for _, r := range ranges {
-		if !r.needsShell() {
-			continue
-		}
-		if r.canonicalName != "" && name == r.canonicalSchema+"."+r.canonicalName {
-			return true
-		}
-		if r.subtypeDiffName != "" && name == r.subtypeDiffSchema+"."+r.subtypeDiffName {
-			return true
-		}
-	}
-	return false
 }
 
 func formatRangeFunc(schema, name string) string {

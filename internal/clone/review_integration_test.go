@@ -399,16 +399,13 @@ func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
 	previous := db.SkipRelationAnnotations
 	db.SkipRelationAnnotations = false
 	t.Cleanup(func() { db.SkipRelationAnnotations = previous })
-	src.SetMaxOpenConns(1)
 	if _, err := src.ExecContext(ctx, `
 		CREATE SCHEMA app;
 		CREATE TYPE app.span;
-		SET check_function_bodies = off;
-		CREATE FUNCTION app.span_canonical(r app.span) RETURNS app.span
-			LANGUAGE sql IMMUTABLE AS 'SELECT $1';
+		CREATE FUNCTION app.span_canonical(app.span) RETURNS app.span
+			LANGUAGE internal IMMUTABLE AS 'int4range_canonical';
 		CREATE FUNCTION app.span_diff(x integer, y integer) RETURNS double precision
 			LANGUAGE sql IMMUTABLE AS 'SELECT ($2 - $1)::float8';
-		RESET check_function_bodies;
 		CREATE TYPE app.span AS RANGE (
 			SUBTYPE = integer,
 			CANONICAL = app.span_canonical,
