@@ -524,9 +524,9 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
 	mock.ExpectQuery(`pg_range`).WillReturnRows(sqlmock.NewRows([]string{
 		"schema", "name", "subtype", "opc_schema", "opc", "coll_schema", "coll",
-		"can_schema", "can_name", "diff_schema", "diff_name", "multirange",
-	}).AddRow("app", "span", "integer", "pg_catalog", "int4_ops", "", "", "", "", "", "", "").
-		AddRow("app", "span2", "integer", "", "", "", "", "app", "span2_canonical", "app", "span2_diff", "span2_set"))
+		"can_schema", "can_name", "diff_schema", "diff_name", "mr_schema", "multirange",
+	}).AddRow("app", "span", "integer", "pg_catalog", "int4_ops", "", "", "", "", "", "", "", "").
+		AddRow("app", "span2", "integer", "", "", "", "", "app", "span2_canonical", "app", "span2_diff", "app", "span2_set"))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
@@ -577,7 +577,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	if !strings.Contains(script, `CANONICAL = "app"."span2_canonical"`) || strings.Contains(script, "span2_canonical(") {
 		t.Fatalf("canonical must be a bare name:\n%s", script)
 	}
-	if !strings.Contains(script, `SUBTYPE_DIFF = "app"."span2_diff"`) || !strings.Contains(script, `MULTIRANGE_TYPE_NAME = "span2_set"`) {
+	if !strings.Contains(script, `SUBTYPE_DIFF = "app"."span2_diff"`) || !strings.Contains(script, `MULTIRANGE_TYPE_NAME = "app"."span2_set"`) {
 		t.Fatalf("missing range options:\n%s", script)
 	}
 	if !strings.Contains(script, `ALTER MATERIALIZED VIEW "app"."mv" SET (fillfactor=70)`) {

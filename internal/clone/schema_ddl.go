@@ -352,6 +352,7 @@ type rangeTypeDef struct {
 	canonical         string
 	subtypeDiffSchema string
 	subtypeDiff       string
+	multirangeSchema  string
 	multirange        string
 }
 
@@ -380,14 +381,34 @@ func formatCreateRangeType(r rangeTypeDef) string {
 	if r.subtypeDiff != "" {
 		parts = append(parts, "SUBTYPE_DIFF = "+r.subtypeDiff)
 	}
-	if multi := strings.TrimSpace(r.multirange); multi != "" && multi != defaultMultirangeName(r.name) {
-		parts = append(parts, "MULTIRANGE_TYPE_NAME = "+quoteIdentifier(multi))
+	if clause, ok := formatMultirangeTypeName(r); ok {
+		parts = append(parts, clause)
 	}
 	return fmt.Sprintf("CREATE TYPE %s AS RANGE (%s)", quoteQualifiedType(r.schema, r.name), strings.Join(parts, ", "))
 }
 
 func formatCreateRangeShell(schema, name string) string {
 	return "CREATE TYPE " + quoteQualifiedType(schema, name)
+}
+
+// formatMultirangeTypeName emits a schema-qualified MULTIRANGE_TYPE_NAME when
+// the multirange name or schema differs from PostgreSQL's default. An
+// unqualified name is created in search_path, not next to the range type.
+func formatMultirangeTypeName(r rangeTypeDef) (string, bool) {
+	multi := strings.TrimSpace(r.multirange)
+	if multi == "" {
+		return "", false
+	}
+	schema := strings.TrimSpace(r.multirangeSchema)
+	if schema == "" {
+		schema = r.schema
+	}
+	customName := multi != defaultMultirangeName(r.name)
+	customSchema := !strings.EqualFold(schema, r.schema)
+	if !customName && !customSchema {
+		return "", false
+	}
+	return "MULTIRANGE_TYPE_NAME = " + quoteQualifiedType(schema, multi), true
 }
 
 // defaultMultirangeName matches PostgreSQL: replace the first "range"

@@ -997,6 +997,7 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 		       COALESCE(can.proname, ''),
 		       COALESCE(diff_ns.nspname, ''),
 		       COALESCE(diff.proname, ''),
+		       COALESCE(mr_ns.nspname, ''),
 		       COALESCE(mr.typname, '')
 		FROM pg_type t
 		INNER JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -1010,6 +1011,7 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 		LEFT JOIN pg_proc diff ON diff.oid = r.rngsubdiff
 		LEFT JOIN pg_namespace diff_ns ON diff_ns.oid = diff.pronamespace
 		LEFT JOIN pg_type mr ON mr.oid = r.rngmultitypid
+		LEFT JOIN pg_namespace mr_ns ON mr_ns.oid = mr.typnamespace
 		WHERE t.typtype = 'r'
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, t.typname`, inClause)
@@ -1029,7 +1031,7 @@ func loadRangeTypes(ctx context.Context, q *sql.DB, schemas []string) ([]rangeTy
 			&r.collSchema, &r.collName,
 			&canSchema, &canName,
 			&diffSchema, &diffName,
-			&r.multirange,
+			&r.multirangeSchema, &r.multirange,
 		); err != nil {
 			return nil, fmt.Errorf("scan range type: %w", err)
 		}

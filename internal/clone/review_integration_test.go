@@ -410,7 +410,7 @@ func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
 			SUBTYPE = integer,
 			CANONICAL = app.span_canonical,
 			SUBTYPE_DIFF = app.span_diff,
-			MULTIRANGE_TYPE_NAME = span_set
+			MULTIRANGE_TYPE_NAME = app.span_set
 		);
 		CREATE TABLE app.events (id integer, during app.span, slots app.span_set);
 	`); err != nil {
@@ -419,9 +419,9 @@ func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
 	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
 		t.Fatal(err)
 	}
-	var canSchema, canName, diffName, multi string
+	var canSchema, canName, diffName, multiSchema, multi string
 	if err := tgt.QueryRowContext(ctx, `
-		SELECT can_ns.nspname, can.proname, diff.proname, mr.typname
+		SELECT can_ns.nspname, can.proname, diff.proname, mr_ns.nspname, mr.typname
 		FROM pg_range r
 		JOIN pg_type t ON t.oid = r.rngtypid
 		JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -429,12 +429,13 @@ func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
 		JOIN pg_namespace can_ns ON can_ns.oid = can.pronamespace
 		JOIN pg_proc diff ON diff.oid = r.rngsubdiff
 		JOIN pg_type mr ON mr.oid = r.rngmultitypid
+		JOIN pg_namespace mr_ns ON mr_ns.oid = mr.typnamespace
 		WHERE n.nspname = 'app' AND t.typname = 'span'
-	`).Scan(&canSchema, &canName, &diffName, &multi); err != nil {
+	`).Scan(&canSchema, &canName, &diffName, &multiSchema, &multi); err != nil {
 		t.Fatal(err)
 	}
-	if canSchema != "app" || canName != "span_canonical" || diffName != "span_diff" || multi != "span_set" {
-		t.Fatalf("range helpers = %s.%s diff=%s multi=%s", canSchema, canName, diffName, multi)
+	if canSchema != "app" || canName != "span_canonical" || diffName != "span_diff" || multiSchema != "app" || multi != "span_set" {
+		t.Fatalf("range helpers = %s.%s diff=%s multi=%s.%s", canSchema, canName, diffName, multiSchema, multi)
 	}
 	var during, slots string
 	if err := tgt.QueryRowContext(ctx, `

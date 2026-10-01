@@ -179,11 +179,12 @@ func TestFormatCreateRangeType(t *testing.T) {
 	got := formatCreateRangeType(rangeTypeDef{
 		schema: "app", name: "span", subtype: "integer",
 		opclassSchema: "pg_catalog", opclass: "int4_ops",
-		canonical:   `"app"."span_canonical"`,
-		subtypeDiff: `"app"."span_diff"`,
-		multirange:  "span_set",
+		canonical:        `"app"."span_canonical"`,
+		subtypeDiff:      `"app"."span_diff"`,
+		multirangeSchema: "app",
+		multirange:       "span_set",
 	})
-	want := `CREATE TYPE "app"."span" AS RANGE (SUBTYPE = integer, SUBTYPE_OPCLASS = "int4_ops", CANONICAL = "app"."span_canonical", SUBTYPE_DIFF = "app"."span_diff", MULTIRANGE_TYPE_NAME = "span_set")`
+	want := `CREATE TYPE "app"."span" AS RANGE (SUBTYPE = integer, SUBTYPE_OPCLASS = "int4_ops", CANONICAL = "app"."span_canonical", SUBTYPE_DIFF = "app"."span_diff", MULTIRANGE_TYPE_NAME = "app"."span_set")`
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
