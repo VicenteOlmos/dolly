@@ -153,12 +153,12 @@ func TestParseCloneFlags(t *testing.T) {
 		},
 		{
 			name: "clone overrides",
-			args: []string{"-ff", "--replace", "--on-conflict", "skip", "--skip-create", "--dump-dir", "/tmp/dumps"},
+			args: []string{"-ff", "--replace", "--on-conflict", "error", "--skip-create", "--dump-dir", "/tmp/dumps"},
 			want: cloneFlags{
 				FastForward:   true,
 				Replace:       true,
 				ReplaceSet:    true,
-				OnConflict:    "skip",
+				OnConflict:    "error",
 				OnConflictSet: true,
 				SkipCreate:    true,
 				SkipCreateSet: true,
@@ -674,7 +674,7 @@ func TestRunCloneRestoreOptionsWired(t *testing.T) {
 	cloneLoadConfig = func(path string) (*config.Config, error) {
 		cfg := config.DefaultConfig()
 		cfg.Clone.Replace = true
-		cfg.Clone.RestoreOnConflict = "skip"
+		cfg.Clone.RestoreOnConflict = "error"
 		return cfg, nil
 	}
 	defer func() { cloneLoadConfig = origLoadConfig }()
@@ -691,8 +691,8 @@ func TestRunCloneRestoreOptionsWired(t *testing.T) {
 	if len(capturedOpts.RestoreOpts) == 0 {
 		t.Fatal("expected RestoreOpts to be set")
 	}
-	if len(capturedOpts.RestoreOpts) != 3 {
-		t.Fatalf("expected 3 RestoreOpts (schemas + replace + skip), got %d", len(capturedOpts.RestoreOpts))
+	if len(capturedOpts.RestoreOpts) != 2 {
+		t.Fatalf("expected 2 RestoreOpts (schemas + replace), got %d", len(capturedOpts.RestoreOpts))
 	}
 }
 
@@ -761,7 +761,7 @@ func TestRunCloneCLIOverridesConfig(t *testing.T) {
 		Yes:           true,
 		Replace:       true,
 		ReplaceSet:    true,
-		OnConflict:    "upsert",
+		OnConflict:    "error",
 		OnConflictSet: true,
 		SkipCreate:    true,
 		SkipCreateSet: true,
@@ -780,6 +780,28 @@ func TestRunCloneCLIOverridesConfig(t *testing.T) {
 	}
 	if len(capturedOpts.RestoreOpts) != 2 {
 		t.Fatalf("expected schemas + replace restore opts, got %d", len(capturedOpts.RestoreOpts))
+	}
+}
+
+func TestRunCloneOnConflictWithoutReplace(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Replace = false
+	cfg.Clone.RestoreOnConflict = "error"
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	flags := cloneFlags{OnConflict: "skip", OnConflictSet: true}
+	if err := runCloneExecute(context.Background(), flags, cfg, "postgres://u:p@h/db", "clone_x", "", []string{"public"}, "schema-replay"); err != nil {
+		t.Fatalf("runCloneExecute: %v", err)
+	}
+	if len(capturedOpts.RestoreOpts) != 2 {
+		t.Fatalf("expected schemas + skip restore opts, got %d", len(capturedOpts.RestoreOpts))
 	}
 }
 

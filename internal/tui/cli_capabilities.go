@@ -193,6 +193,13 @@ func RenderCLIHelp(cmd CLICommand, width int) string {
 	}
 	lines = append(lines, StyleHeader.Render(title))
 	lines = append(lines, StyleBase.Render(cmd.Short))
+	if len(cmd.Examples) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, StyleHeader.Render("shell: examples"))
+		for _, ex := range cmd.Examples {
+			lines = append(lines, StyleAccent.Render(ex))
+		}
+	}
 	if len(cmd.Flags) > 0 {
 		lines = append(lines, "")
 		lines = append(lines, StyleHeader.Render("Flags"))
@@ -204,13 +211,6 @@ func RenderCLIHelp(cmd CLICommand, width int) string {
 		lines = append(lines, "")
 		lines = append(lines, StyleHeader.Render("Config"))
 		lines = append(lines, StyleBase.Render(wrapText(cmd.ConfigNote, width)))
-	}
-	if len(cmd.Examples) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, StyleHeader.Render("shell: examples"))
-		for _, ex := range cmd.Examples {
-			lines = append(lines, StyleAccent.Render(ex))
-		}
 	}
 	return strings.Join(lines, "\n")
 }
