@@ -99,8 +99,8 @@ func loadForeignTables(ctx context.Context, q *sql.DB, schemas []string) ([]fore
 
 	for colRows.Next() {
 		var schema, name, colName, sqlType string
-		var notNull bool
-		if err := colRows.Scan(&schema, &name, &colName, &sqlType, &notNull); err != nil {
+		var nullable bool
+		if err := colRows.Scan(&schema, &name, &colName, &sqlType, &nullable); err != nil {
 			return nil, fmt.Errorf("scan foreign table column: %w", err)
 		}
 		key := schema + "\x00" + name
@@ -113,7 +113,7 @@ func loadForeignTables(ctx context.Context, q *sql.DB, schemas []string) ([]fore
 		ft.columns = append(ft.columns, foreignTableColumn{
 			name:     colName,
 			sqlType:  sqlType,
-			nullable: !notNull,
+			nullable: nullable,
 		})
 	}
 	if err := colRows.Err(); err != nil {
