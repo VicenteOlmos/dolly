@@ -1015,6 +1015,9 @@ func (a *App) shouldDeferRunKey() bool {
 	switch a.screen {
 	case ScreenDump:
 		if ds, ok := a.screens[ScreenDump].(*dumpScreen); ok {
+			if ds.sectionActive(dumpSectionHistory) && ds.historyFocus == historyFocusList && ds.draft.History.FilterEditing {
+				return true
+			}
 			return ds.sectionActive(dumpSectionPath) || ds.modeTextFocused()
 		}
 	case ScreenClone:
