@@ -463,6 +463,51 @@ func formatRangeFunc(schema, name string) string {
 	return quoteQualifiedType(schema, name)
 }
 
+// formatCreateCast emits CREATE CAST for user-defined source and target types.
+func formatCreateCast(row castRow) (string, bool) {
+	src := quoteQualifiedType(row.srcSchema, row.srcType)
+	dst := quoteQualifiedType(row.tgtSchema, row.tgtType)
+	stmt := fmt.Sprintf("CREATE CAST (%s AS %s)", src, dst)
+	switch row.castMethod {
+	case "f":
+		if strings.TrimSpace(row.fnName) == "" {
+			return "", false
+		}
+		fn := formatCastFunction(row.fnSchema, row.fnName, row.fnArgs)
+		stmt += " WITH FUNCTION " + fn
+	case "i":
+		stmt += " WITH INOUT"
+	case "b":
+		stmt += " WITHOUT FUNCTION"
+	default:
+		return "", false
+	}
+	switch row.castContext {
+	case "e":
+		stmt += " AS IMPLICIT"
+	case "a":
+		stmt += " AS ASSIGNMENT"
+	}
+	return stmt, true
+}
+
+func formatCastFunction(schema, name, args string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	schema = strings.TrimSpace(schema)
+	qual := quoteIdentifier(name)
+	if schema != "" && !strings.EqualFold(schema, "pg_catalog") {
+		qual = quoteQualifiedType(schema, name)
+	}
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return qual + "()"
+	}
+	return qual + "(" + args + ")"
+}
+
 // formatCommentOn emits COMMENT ON statements.
 func formatCommentOn(kind, schema, object, column, description string) string {
 	target := commentTarget(kind, schema, object, column)
@@ -501,6 +546,15 @@ func commentTarget(kind, schema, object, column string) string {
 		return "DOMAIN " + quoteQualifiedType(schema, object)
 	case "type":
 		return "TYPE " + quoteQualifiedType(schema, object)
+	case "aggregate":
+		target := "AGGREGATE "
+		args := strings.TrimSpace(column)
+		if args == "" {
+			return target + quoteQualifiedType(schema, object)
+		}
+		return target + quoteQualifiedType(schema, object) + "(" + args + ")"
+	case "statistics":
+		return "STATISTICS " + quoteQualifiedType(schema, object)
 	case "collation":
 		return "COLLATION " + quoteQualifiedType(schema, object)
 	case "policy":
