@@ -80,6 +80,16 @@ func connectionFieldHelp(label string, width int) string {
 		return wrapText("PostgreSQL role used for dump, clone, and schema introspection.", width)
 	case "Password":
 		return wrapText("Password for the PostgreSQL role. Masked in the UI.", width)
+	case "SSLMODE":
+		return wrapText("PostgreSQL sslmode for this connection. Press Space to cycle common modes (disable, allow, prefer, require, verify-ca, verify-full). Empty defaults to verify-full in generated DSNs.", width)
+	case "Channel binding":
+		return wrapText("SCRAM channel binding (require, prefer, or disable). Used when sslmode is not disable; empty defaults to require in the DSN.", width)
+	case "SSL root cert":
+		return wrapText("Path to the server CA bundle (sslrootcert). Used for verify-ca and verify-full.", width)
+	case "SSL cert":
+		return wrapText("Client certificate path (sslcert) for mutual TLS.", width)
+	case "SSL key":
+		return wrapText("Client private key path (sslkey) for mutual TLS.", width)
 	default:
 		return wrapText("Connection field: "+label, width)
 	}
@@ -101,7 +111,7 @@ func (d *dumpScreen) contextHelp(width int) string {
 	case dumpSectionPicker:
 		return wrapText("Schemas included in the dump. Space toggles a schema; a selects or clears all. At least one schema is required to start.", width)
 	case dumpSectionHistory:
-		return wrapText("Previously completed dumps under the output base. Enter or r restores the highlighted dump into the current connection using the same restore seam as dolly restore.", width)
+		return wrapText("Previously completed dumps under the output base, or a typed restore directory (p). Space cycles on-conflict, replace, partial-state acknowledgement (required when workers > 1), and trusted schema.sql. Enter or r restores using the same seam as dolly restore.", width)
 	case dumpSectionLog:
 		return wrapText("Progress and table-level messages from the current or last dump run.", width)
 	default:
