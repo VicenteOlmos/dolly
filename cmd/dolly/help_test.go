@@ -16,11 +16,16 @@ func captureStderr(fn func()) string {
 		panic(err)
 	}
 	os.Stderr = w
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(done)
+	}()
 	fn()
 	_ = w.Close()
 	os.Stderr = old
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
+	<-done
 	return buf.String()
 }
 
