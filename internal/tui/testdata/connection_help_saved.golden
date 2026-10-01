@@ -7,7 +7,7 @@
 │           ||    ||         ││ Port:          ││ run            ││                │
 │                            ││ Database:      ││ (dump/clone)   ││ F1/Esc close · │
 │            dolly           ││ User:          ││                ││ n/p pages ·    │
-│                            ││ Password:      ││ 1-5  [global]  ││ 1/6 Keys       │
+│                            ││ Password:      ││ 1-5  [global]  ││ 1/7 Keys       │
 │ > 1 connect                ││ SSLMODE:       ││ jump to screen ││                │
 │   2 schema                 ││ Channel        ││ Ctrl+Tab       ││                │
 │   3 dump                   ││ binding:       ││ [global]  next ││                │

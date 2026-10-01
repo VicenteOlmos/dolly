@@ -61,7 +61,7 @@ func TestRenderCLIHelpRequiredAndSubsetLabels(t *testing.T) {
 		}
 	}
 
-	restore := CLICatalog()[1]
+	restore := catalogCommand("restore")
 	gotRestore := stripANSI(RenderCLIHelp(restore, 80))
 	if strings.Contains(gotRestore, "--dsn*") {
 		t.Fatalf("restore dsn alternative must not be marked required: %s", gotRestore)
@@ -91,6 +91,17 @@ func TestRenderCLIHelpRequiredAndSubsetLabels(t *testing.T) {
 		t.Fatalf("missing clone config note: %s", gotClone)
 	}
 
+	dumpList := catalogCommand("dump list")
+	gotDumpList := stripANSI(RenderCLIHelp(dumpList, 80))
+	if dumpList.ShellPolicy != ShellPolicyCLIOnly {
+		t.Fatalf("dump list ShellPolicy = %v, want CLIOnly", dumpList.ShellPolicy)
+	}
+	for _, sub := range []string{"shell only", "dolly dump list", "without a database connection"} {
+		if !strings.Contains(gotDumpList, sub) {
+			t.Fatalf("dump list help missing %q: %s", sub, gotDumpList)
+		}
+	}
+
 	update := catalogCommand("update")
 	gotUpdate := stripANSI(RenderCLIHelp(update, 80))
 	if update.ShellPolicy != ShellPolicyCLIOnly {
@@ -116,8 +127,8 @@ func catalogCommand(name string) CLICommand {
 }
 
 func TestHelpPageCountAndBindingsPage(t *testing.T) {
-	if HelpPageCount() != 6 {
-		t.Fatalf("HelpPageCount = %d, want 6", HelpPageCount())
+	if HelpPageCount() != 7 {
+		t.Fatalf("HelpPageCount = %d, want 7", HelpPageCount())
 	}
 	page0 := stripANSI(RenderHelpPaged(ScreenConnection, DumpStatusIdle, CloneStatusIdle, 0, 80, 24, false))
 	if !strings.Contains(page0, "Keyboard Help") {
