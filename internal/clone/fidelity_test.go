@@ -8,6 +8,28 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func TestUserTriggerStatesIncludesPartitionedParents(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`c\.relkind IN \('r', 'p'\)`).WillReturnRows(
+		sqlmock.NewRows([]string{"schema", "table", "trigger", "mode"}).
+			AddRow("app", "events", "audit", "O"),
+	)
+	states, err := userTriggerStates(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(states) != 1 || states[0].table != "events" {
+		t.Fatalf("states = %+v", states)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApplyTargetFidelityRestoresModesAfterFailure(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
