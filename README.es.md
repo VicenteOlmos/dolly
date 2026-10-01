@@ -119,6 +119,7 @@ Para volcado y restauración sin clonar, proporcione un DSN de PostgreSQL:
 ```bash
 export DB='postgres://user:pass@localhost:5432/mydb?sslmode=disable'
 dolly dump --dsn "$DB" --output ./dolly_dump
+dolly dump --dsn "$DB" --schemas app,public --exclude-schema staging --output ./dolly_dump
 dolly dump list --output ./dolly_dump
 dolly restore --dsn "$DB" --input ./dolly_dump/1 --on-conflict skip
 ```
@@ -154,7 +155,7 @@ Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para
 | Comando | Propósito |
 |---|---|
 | `dolly tui` | Interfaz interactiva para conectarse, crear volcados y clonar. |
-| `dolly dump` | Exporta datos a directorios de volcado NDJSON numerados. |
+| `dolly dump` | Exporta datos a directorios de volcado NDJSON numerados. Alcance de esquemas: `--schemas` (separados por comas) anula los del perfil guardado, luego `dump.schemas` en config y, si no hay ninguno, `public`. `--exclude-schema` (o `dump.exclude_schemas`) quita esquemas tras resolver los incluidos. Se niega si el alcance efectivo queda vacío. Los metadatos del volcado registran las versiones de PostgreSQL y de dolly cuando están disponibles. |
 | `dolly dump --percent N` | Volcado parcial: raíces recientes más cierre de claves foráneas; la salida puede superar el `N%`. |
 | `dolly dump list` | Enumera el historial local de volcados sin conectarse a una base de datos. |
 | `dolly restore` | Carga un volcado de Dolly en PostgreSQL. `--schemas` anula los esquemas del perfil guardado. Las columnas identity `ALWAYS` usan `INSERT ... OVERRIDING SYSTEM VALUE` en la ruta fila a fila; COPY mantiene esas columnas en la lista explícita. |
