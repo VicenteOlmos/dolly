@@ -17,11 +17,13 @@ import (
 type restoreConfirmRequestedMsg struct {
 	inputDir         string
 	trustedSchemaSQL bool
+	ackPartialState  bool
 }
 
 type restoreRequestedMsg struct {
 	inputDir         string
 	trustedSchemaSQL bool
+	ackPartialState  bool
 }
 
 type restoreProgressMsg struct {
@@ -46,13 +48,15 @@ type restoreHistoryOverrides struct {
 	Replace     bool
 	ReplaceSet  bool
 	WorkersText string
+	AckPartial  bool
 }
 
 func restoreHistoryUserOverrides(history restoreHistoryOverrides) (runopts.RestoreHistoryUserOverrides, error) {
 	o := runopts.RestoreHistoryUserOverrides{
-		OnConflict: history.OnConflict,
-		Replace:    history.Replace,
-		ReplaceSet: history.ReplaceSet,
+		OnConflict:      history.OnConflict,
+		Replace:         history.Replace,
+		ReplaceSet:      history.ReplaceSet,
+		AckPartialState: history.AckPartial,
 	}
 	raw := strings.TrimSpace(history.WorkersText)
 	if raw == "" {
@@ -90,6 +94,7 @@ func restoreHistoryOverridesFromDraft(d DumpDraft) restoreHistoryOverrides {
 		Replace:     d.RestoreReplace,
 		ReplaceSet:  d.RestoreReplaceSet,
 		WorkersText: d.RestoreWorkersText,
+		AckPartial:  d.RestoreAckPartial,
 	}
 }
 
