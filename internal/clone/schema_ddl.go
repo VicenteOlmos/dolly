@@ -573,6 +573,31 @@ func formatGrantSchema(privileges, schema, grantee string) string {
 	)
 }
 
+// formatAlterDefaultPrivilege emits ALTER DEFAULT PRIVILEGES ... GRANT/REVOKE ... ON objKind.
+// When schema is empty the statement is global (no IN SCHEMA).
+func formatAlterDefaultPrivilege(ownerRole, schema, objKind, privilege, grantee string, revoke bool) string {
+	action := "GRANT"
+	dir := "TO"
+	if revoke {
+		action = "REVOKE"
+		dir = "FROM"
+	}
+	scope := ""
+	if schema != "" {
+		scope = " IN SCHEMA " + quoteIdentifier(schema)
+	}
+	return fmt.Sprintf(
+		"ALTER DEFAULT PRIVILEGES FOR ROLE %s%s %s %s ON %s %s %s",
+		quoteIdentifier(ownerRole),
+		scope,
+		action,
+		privilege,
+		objKind,
+		dir,
+		quoteGrantee(grantee),
+	)
+}
+
 func quoteGrantee(name string) string {
 	if strings.EqualFold(name, "PUBLIC") {
 		return "PUBLIC"
