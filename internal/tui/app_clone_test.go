@@ -396,6 +396,54 @@ func TestAppCloneNoReplaceSkipsConfirm(t *testing.T) {
 	}
 }
 
+func TestAppCloneFormReplaceRequiresConfirmWhenConfigFalse(t *testing.T) {
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	app.cfg.Clone.Replace = false
+	app.clone.Replace = true
+	app.clone.ReplaceSet = true
+
+	app = drainUpdate(app, ctrlEnter())
+
+	if !app.modalOpen() || app.modal.kind != modalCloneConfirm {
+		t.Fatal("expected clone confirm modal for form replace")
+	}
+	if runner.lastSchemas != nil {
+		t.Fatal("clone started before confirm")
+	}
+}
+
+func TestAppCloneFormReplaceOffSkipsConfirmWhenConfigFalse(t *testing.T) {
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	app.cfg.Clone.Replace = true
+	app.clone.Replace = false
+	app.clone.ReplaceSet = true
+
+	app = drainUpdate(app, ctrlEnter())
+
+	if app.modalOpen() {
+		t.Fatal("expected no confirm when form replace is off")
+	}
+	if app.cloneStatus != CloneStatusComplete {
+		t.Fatalf("cloneStatus = %v, want complete", app.cloneStatus)
+	}
+}
+
+func TestEffectiveCloneReplace(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Clone.Replace = true
+	draft := CloneDraft{Replace: false, ReplaceSet: true}
+	if effectiveCloneReplace(draft, cfg) {
+		t.Fatal("form replace off should override config replace")
+	}
+	draft = CloneDraft{Replace: true, ReplaceSet: true}
+	cfg.Clone.Replace = false
+	if !effectiveCloneReplace(draft, cfg) {
+		t.Fatal("form replace on should require confirm even when config false")
+	}
+}
+
 func TestCloneAnalyzeReplaceRequiresConfirmBeforeClone(t *testing.T) {
 	orig := analyzeSourceFunc
 	analyzeSourceFunc = func(_ context.Context, _ *sql.DB, _, _ string, _ []string) (analyzeResult, error) {

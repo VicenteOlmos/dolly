@@ -18,6 +18,7 @@ const (
 	historyFocusConflict
 	historyFocusReplace
 	historyFocusWorkers
+	historyFocusAck
 	historyFocusTrust
 	historyFocusCount
 )
@@ -271,6 +272,9 @@ func (d *dumpScreen) Update(msg tea.Msg) tea.Cmd {
 			case historyFocusReplace:
 				d.toggleRestoreReplace()
 				return nil
+			case historyFocusAck:
+				d.draft.RestoreAckPartial = !d.draft.RestoreAckPartial
+				return nil
 			case historyFocusTrust:
 				d.trustedSchemaSQL = !d.trustedSchemaSQL
 				return nil
@@ -392,8 +396,12 @@ func (d *dumpScreen) requestRestore() tea.Cmd {
 		return nil
 	}
 	trusted := d.trustedSchemaSQL
+	ack := d.draft.RestoreAckPartial
 	d.trustedSchemaSQL = false
-	return func() tea.Msg { return restoreConfirmRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted} }
+	d.draft.RestoreAckPartial = false
+	return func() tea.Msg {
+		return restoreConfirmRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted, ackPartialState: ack}
+	}
 }
 
 func (d *dumpScreen) onFieldCursorNavigation() bool {
@@ -871,12 +879,17 @@ func (d *dumpScreen) historySection(maxLines int) []string {
 		workersVal = renderEditableField(d.draft.RestoreWorkersText, d.restoreWorkersCursor, false, true)
 	}
 	lines = append(lines, d.historyControlLine(historyFocusWorkers, "Workers:", workersVal))
+	ack := "[ ]"
+	if d.draft.RestoreAckPartial {
+		ack = "[x]"
+	}
+	lines = append(lines, d.historyControlLine(historyFocusAck, "", ack+" Ack partial-state risk (required when workers > 1)"))
 	trusted := "[ ]"
 	if d.trustedSchemaSQL {
 		trusted = "[x]"
 	}
 	lines = append(lines, d.historyControlLine(historyFocusTrust, "", trusted+" Trust schema.sql for this restore"))
-	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-6)...)
+	lines = append(lines, renderDumpHistoryLines(&d.draft.History, maxLines-7)...)
 	return lines
 }
 
