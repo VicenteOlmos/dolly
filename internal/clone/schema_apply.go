@@ -37,6 +37,18 @@ type uniqueConstraint struct {
 	deferred   bool
 }
 
+type primaryConstraint struct {
+	name       string
+	columns    []string
+	deferrable bool
+	deferred   bool
+}
+
+type excludeConstraint struct {
+	name string
+	def  string
+}
+
 // ApplySchemasFromSource creates selected schemas and database objects on target to match
 // source introspection, without invoking pg_dump or psql subprocesses.
 //
@@ -45,7 +57,7 @@ type uniqueConstraint struct {
 // order), triggers, rules, comments, grants, and RLS.
 //
 // Limitations (prefer pg_dump when it is on PATH):
-//   - Ordered-set and hypothetical aggregates, exclusion constraints, and operator classes are not replayed.
+//   - Ordered-set and hypothetical aggregates and operator classes are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
@@ -227,7 +239,18 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		if err := mergeUniqueConstraintDeferrability(ctx, srcDB, schemas, uniqueMap); err != nil {
 			return err
 		}
+		primaryMap, err := loadAllPrimaryConstraints(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		if err := mergePrimaryConstraintDeferrability(ctx, srcDB, schemas, primaryMap); err != nil {
+			return err
+		}
 		checkMap, err := loadAllCheckConstraints(ctx, srcDB, schemas)
+		if err != nil {
+			return err
+		}
+		excludeMap, err := loadAllExcludeConstraints(ctx, srcDB, schemas)
 		if err != nil {
 			return err
 		}
@@ -239,7 +262,7 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		for _, table := range sorted {
 			key := table.Schema + "." + table.Name
 			cols := schemaCols[key]
-			if err := createTable(ctx, tgtDB, table, cols, uniqueMap[key], checkMap[key]); err != nil {
+			if err := createTable(ctx, tgtDB, table, cols, primaryMap[key], uniqueMap[key], checkMap[key], excludeMap[key]); err != nil {
 				return err
 			}
 		}
@@ -592,6 +615,102 @@ func mergeUniqueConstraintDeferrability(ctx context.Context, q *sql.DB, schemas 
 	return nil
 }
 
+func loadAllPrimaryConstraints(ctx context.Context, q *sql.DB, schemas []string) (map[string]*primaryConstraint, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT tc.table_schema, tc.table_name, tc.constraint_name,
+		       kcu.column_name, kcu.ordinal_position
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+		  ON tc.constraint_name = kcu.constraint_name
+		  AND tc.table_schema = kcu.table_schema
+		  AND tc.table_name = kcu.table_name
+		WHERE tc.constraint_type = 'PRIMARY KEY'
+		  AND tc.table_schema IN (%s)
+		ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position;
+	`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load all primary keys: %w", err)
+	}
+	defer rows.Close()
+
+	type trackedKey struct {
+		key     string
+		conName string
+	}
+	out := make(map[string]*primaryConstraint)
+	var last trackedKey
+	var cur *primaryConstraint
+	for rows.Next() {
+		var schema, table, conName, colName string
+		var ord int
+		if err := rows.Scan(&schema, &table, &conName, &colName, &ord); err != nil {
+			return nil, fmt.Errorf("scan primary key: %w", err)
+		}
+		key := schema + "." + table
+		if cur == nil || last.key != key || last.conName != conName {
+			cur = &primaryConstraint{name: conName}
+			out[key] = cur
+		}
+		cur.columns = append(cur.columns, colName)
+		last = trackedKey{key, conName}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load all primary keys: %w", err)
+	}
+	return out, nil
+}
+
+func mergePrimaryConstraintDeferrability(ctx context.Context, q *sql.DB, schemas []string, primaryMap map[string]*primaryConstraint) error {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, con.conname, con.condeferrable, con.condeferred
+		FROM pg_constraint con
+		INNER JOIN pg_class c ON c.oid = con.conrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE con.contype = 'p'
+		  AND con.conparentid = 0
+		  AND n.nspname IN (%s)
+	`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("load primary key deferrability: %w", err)
+	}
+	defer rows.Close()
+
+	type deferKey struct {
+		key  string
+		name string
+	}
+	deferBy := make(map[deferKey]struct{ deferrable, deferred bool })
+	for rows.Next() {
+		var schema, table, name string
+		var deferrable, deferred bool
+		if err := rows.Scan(&schema, &table, &name, &deferrable, &deferred); err != nil {
+			return fmt.Errorf("scan primary key deferrability: %w", err)
+		}
+		deferBy[deferKey{schema + "." + table, name}] = struct{ deferrable, deferred bool }{deferrable, deferred}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load primary key deferrability: %w", err)
+	}
+	for key, pk := range primaryMap {
+		if pk == nil {
+			delete(primaryMap, key)
+			continue
+		}
+		d, ok := deferBy[deferKey{key, pk.name}]
+		if !ok {
+			delete(primaryMap, key)
+			continue
+		}
+		pk.deferrable = d.deferrable
+		pk.deferred = d.deferred
+	}
+	return nil
+}
+
 // loadAllCheckConstraints loads CHECK constraints for all tables in the given
 // schemas in a single query. Returns a map keyed by "schema.table".
 func loadAllCheckConstraints(ctx context.Context, q *sql.DB, schemas []string) (map[string][]checkConstraint, error) {
@@ -624,6 +743,40 @@ func loadAllCheckConstraints(ctx context.Context, q *sql.DB, schemas []string) (
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("load all check constraints: %w", err)
+	}
+	return out, nil
+}
+
+func loadAllExcludeConstraints(ctx context.Context, q *sql.DB, schemas []string) (map[string][]excludeConstraint, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT n.nspname, c.relname, con.conname, pg_get_constraintdef(con.oid, true)
+		FROM pg_constraint con
+		INNER JOIN pg_class c ON c.oid = con.conrelid
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE con.contype = 'x'
+		  AND con.conparentid = 0
+		  AND n.nspname IN (%s)
+		ORDER BY n.nspname, c.relname, con.conname;
+	`, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load all exclusion constraints: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]excludeConstraint)
+	for rows.Next() {
+		var schema, table string
+		var ec excludeConstraint
+		if err := rows.Scan(&schema, &table, &ec.name, &ec.def); err != nil {
+			return nil, fmt.Errorf("scan exclusion constraint: %w", err)
+		}
+		key := schema + "." + table
+		out[key] = append(out[key], ec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load all exclusion constraints: %w", err)
 	}
 	return out, nil
 }
@@ -733,8 +886,8 @@ func loadUniqueConstraints(ctx context.Context, q *sql.DB, schema, table string)
 	return out, nil
 }
 
-func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) error {
-	stmt, err := formatCreateTable(table, cols, uniques, checks)
+func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schemaColumn, primary *primaryConstraint, uniques []uniqueConstraint, checks []checkConstraint, excludes []excludeConstraint) error {
+	stmt, err := formatCreateTable(table, cols, primary, uniques, checks, excludes)
 	if err != nil {
 		return err
 	}
@@ -744,7 +897,7 @@ func createTable(ctx context.Context, tgtDB execer, table db.Table, cols []schem
 	return nil
 }
 
-func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueConstraint, checks []checkConstraint) (string, error) {
+func formatCreateTable(table db.Table, cols []schemaColumn, primary *primaryConstraint, uniques []uniqueConstraint, checks []checkConstraint, excludes []excludeConstraint) (string, error) {
 	qual := quoteQualifiedTable(table.Schema, table.Name)
 	if table.PartitionOf != "" {
 		parentSchema, parentName, ok := splitQualified(table.PartitionOf)
@@ -762,8 +915,14 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 				local = append(local, fmt.Sprintf("%s WITH OPTIONS DEFAULT %s", quoteIdentifier(c.name), c.defaultExpr.String))
 			}
 		}
+		if primary != nil && len(primary.columns) > 0 {
+			local = append(local, formatTablePrimaryKeyConstraint(*primary))
+		}
 		for _, chk := range checks {
 			local = append(local, formatTableCheckConstraint(chk.name, chk.def))
+		}
+		for _, exc := range excludes {
+			local = append(local, formatTableExcludeConstraint(exc.name, exc.def))
 		}
 		if len(local) > 0 {
 			stmt += " (" + strings.Join(local, ", ") + ")"
@@ -809,13 +968,17 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 		parts = append(parts, part)
 	}
 
-	pkCols := primaryKeyColumnNames(table.Columns)
-	if len(pkCols) > 0 {
-		quoted := make([]string, len(pkCols))
-		for i, name := range pkCols {
-			quoted[i] = quoteIdentifier(name)
+	if primary != nil && len(primary.columns) > 0 {
+		parts = append(parts, formatTablePrimaryKeyConstraint(*primary))
+	} else {
+		pkCols := primaryKeyColumnNames(table.Columns)
+		if len(pkCols) > 0 {
+			quoted := make([]string, len(pkCols))
+			for i, name := range pkCols {
+				quoted[i] = quoteIdentifier(name)
+			}
+			parts = append(parts, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(quoted, ", ")))
 		}
-		parts = append(parts, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(quoted, ", ")))
 	}
 
 	for _, uq := range uniques {
@@ -839,6 +1002,10 @@ func formatCreateTable(table db.Table, cols []schemaColumn, uniques []uniqueCons
 
 	for _, chk := range checks {
 		parts = append(parts, formatTableCheckConstraint(chk.name, chk.def))
+	}
+
+	for _, exc := range excludes {
+		parts = append(parts, formatTableExcludeConstraint(exc.name, exc.def))
 	}
 
 	createKind := "CREATE TABLE"
