@@ -1269,7 +1269,9 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		  AND n.nspname IN (%s)
 		UNION ALL
 		SELECT 'operator', n.nspname,
-		       o.oprname || '(' || format_type(o.oprleft, NULL) || ', ' || format_type(o.oprright, NULL) || ')',
+		       o.oprname || '(' ||
+		         CASE WHEN o.oprleft = 0 THEN 'NONE' ELSE format_type(o.oprleft, NULL) END || ', ' ||
+		         CASE WHEN o.oprright = 0 THEN 'NONE' ELSE format_type(o.oprright, NULL) END || ')',
 		       '', d.description
 		FROM pg_description d
 		INNER JOIN pg_operator o ON o.oid = d.objoid
