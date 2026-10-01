@@ -41,6 +41,7 @@ var screenBindings = map[Screen][]KeyBinding{
 		{Key: "Space", Scope: "dump", Action: "toggle schema (inside schemas section)"},
 		{Key: "a", Scope: "dump", Action: "select/deselect all schemas (inside schemas section)"},
 		{Key: "Enter/r", Scope: "dump", Action: "restore selected dump (inside history section)"},
+		{Key: "/", Scope: "dump", Action: "filter dump history list (inside history section, list focus)"},
 		{Key: "g / F5", Scope: "dump", Action: "start dump"},
 		{Key: "Ctrl+Enter", Scope: "dump", Action: "start dump (terminal-dependent)"},
 		{Key: "t", Scope: "dump", Action: "toggle transaction (inside path section)"},
