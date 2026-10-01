@@ -42,6 +42,7 @@ func CLICatalog() []CLICommand {
 				{Name: "connection", Description: "saved connection profile name (requires save_connections in config.jsonc)"},
 				{Name: "output", Description: "output directory (or config dump.output_dir)"},
 				{Name: "schemas", Description: "comma-separated source schema names (overrides saved profile and dump.schemas; default public; fails closed when scope has no tables)"},
+				{Name: "exclude-schema", Description: "comma-separated schema names removed from dump scope after includes resolve (overrides dump.exclude_schemas; fails closed when scope is empty)"},
 				{Name: "no-transaction", Description: "skip read-only transaction wrapper (recommended for large subset closures)"},
 				{Name: "seed-file", Description: "JSON seed file for subset dump (omit for full-schema dump; table may be schema.table; conflicts with --percent/--slow-connection)"},
 				{Name: "percent", Description: "percent-based subset dump (1-100). Samples recent root rows, then FK closure may exceed percent. Conflicts with --seed-file/--slow-connection"},

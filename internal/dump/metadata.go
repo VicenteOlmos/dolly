@@ -94,6 +94,9 @@ type Provenance struct {
 	OmittedPartitionParents []string                  `json:"omitted_partition_parents,omitempty"`
 	NoTransaction           bool                      `json:"no_transaction,omitempty"`
 	SnapshotConsistent      bool                      `json:"snapshot_consistent"`
+	ServerVersion           string                    `json:"server_version,omitempty"`
+	DollyVersion            string                    `json:"dolly_version,omitempty"`
+	ElapsedMs               int64                     `json:"elapsed_ms,omitempty"`
 }
 
 // BuildStrategyRecords returns deterministic strategy provenance for explicitly

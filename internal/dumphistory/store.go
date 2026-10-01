@@ -22,6 +22,8 @@ type Record struct {
 	SchemaLabel    string    `json:"schema_label,omitempty"`
 	TableCount     int       `json:"table_count"`
 	RowEstimate    int64     `json:"row_estimate,omitempty"`
+	ServerVersion  string    `json:"server_version,omitempty"`
+	DollyVersion   string    `json:"dolly_version,omitempty"`
 }
 
 type document struct {

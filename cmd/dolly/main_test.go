@@ -98,27 +98,16 @@ func TestDispatchExitMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			old := os.Stderr
-			r, w, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
-			}
-			os.Stderr = w
-
 			origTerminal := isTerminal
 			isTerminal = func(uintptr) bool { return false }
 			t.Cleanup(func() {
 				isTerminal = origTerminal
-				os.Stderr = old
 			})
 
-			got := dispatch(tt.args)
-
-			_ = w.Close()
-			os.Stderr = old
-			var buf bytes.Buffer
-			_, _ = io.Copy(&buf, r)
-			stderr := buf.String()
+			var got int
+			stderr := captureStderr(func() {
+				got = dispatch(tt.args)
+			})
 
 			if got != tt.wantExit {
 				t.Fatalf("dispatch exit = %d, want %d\nstderr:\n%s", got, tt.wantExit, stderr)
