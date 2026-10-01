@@ -216,6 +216,33 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 
+	eventTriggers, err := loadEventTriggers(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+
+	textSearchDicts, err := loadTextSearchDictionaries(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyTextSearchDictionaries(ctx, tgtDB, textSearchDicts); err != nil {
+		return err
+	}
+	textSearchConfigs, err := loadTextSearchConfigurations(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyTextSearchConfigurations(ctx, tgtDB, textSearchConfigs); err != nil {
+		return err
+	}
+	textSearchMappings, err := loadTextSearchMappings(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	if err := applyTextSearchMappings(ctx, tgtDB, textSearchMappings); err != nil {
+		return err
+	}
+
 	tables, err := db.LoadPostgresSchemasBatched(ctx, srcDB, schemas)
 	if err != nil {
 		return fmt.Errorf("load source schema: %w", err)
@@ -467,6 +494,10 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyComments(ctx, tgtDB, policyComments); err != nil {
+		return err
+	}
+
+	if err := applyEventTriggers(ctx, tgtDB, eventTriggers); err != nil {
 		return err
 	}
 
