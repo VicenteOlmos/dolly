@@ -14,7 +14,7 @@ import (
 
 func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 	srcMock.ExpectQuery(`FROM pg_extension`).WillReturnRows(
-		sqlmock.NewRows([]string{"extname"}))
+		sqlmock.NewRows([]string{"extname", "nspname", "extversion"}))
 	srcMock.ExpectQuery(`t\.typtype = 'e'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "enumlabel"}))
 	srcMock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(
@@ -28,6 +28,11 @@ func expectEmptySchemaCatalog(srcMock sqlmock.Sqlmock) {
 		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
+	srcMock.ExpectQuery(`pg_range`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "typname", "subtype", "opc_schema", "opcname", "coll_schema", "collname",
+			"can_schema", "can_name", "diff_schema", "diff_name", "multirange",
+		}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
@@ -411,7 +416,7 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	t.Cleanup(func() { _ = tgt.Close() })
 
 	srcMock.ExpectQuery(`FROM pg_extension`).WillReturnRows(
-		sqlmock.NewRows([]string{"extname"}).AddRow("uuid-ossp"))
+		sqlmock.NewRows([]string{"extname", "nspname", "extversion"}).AddRow("uuid-ossp", "public", ""))
 	srcMock.ExpectQuery(`t\.typtype = 'e'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname", "enumlabel"}).
 			AddRow("app", "status_enum", "active").
@@ -427,6 +432,11 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		}))
 	srcMock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "typname"}))
+	srcMock.ExpectQuery(`pg_range`).WillReturnRows(
+		sqlmock.NewRows([]string{
+			"nspname", "typname", "subtype", "opc_schema", "opcname", "coll_schema", "collname",
+			"can_schema", "can_name", "diff_schema", "diff_name", "multirange",
+		}))
 	srcMock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(
 		sqlmock.NewRows([]string{
 			"schemaname", "sequencename", "increment_by", "min_value", "max_value", "start_value", "cache_size", "cycle",
@@ -453,8 +463,8 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 	srcMock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(
 		sqlmock.NewRows([]string{"pg_get_statisticsobjdef"}))
 	srcMock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(
-		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind"}).
-			AddRow("app", "active_users", "SELECT id FROM users", false))
+		sqlmock.NewRows([]string{"nspname", "relname", "pg_get_viewdef", "relkind", "reloptions"}).
+			AddRow("app", "active_users", "SELECT id FROM users", false, "security_barrier=true,check_option=local"))
 	srcMock.ExpectQuery(`pg_rewrite`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "nspname", "relname"}))
 	srcMock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(
@@ -481,9 +491,10 @@ func TestApplySchemasFromSourceEnumExtensionView(t *testing.T) {
 		}))
 
 	tgtMock.ExpectExec(regexp.QuoteMeta(`CREATE SCHEMA IF NOT EXISTS "app"`)).WillReturnResult(sqlmock.NewResult(0, 0))
-	tgtMock.ExpectExec(regexp.QuoteMeta(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`)).WillReturnResult(sqlmock.NewResult(0, 0))
+	tgtMock.ExpectExec(regexp.QuoteMeta(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA "public"`)).WillReturnResult(sqlmock.NewResult(0, 0))
 	tgtMock.ExpectExec(regexp.QuoteMeta(`CREATE TYPE "app"."status_enum" AS ENUM ('active', 'inactive')`)).WillReturnResult(sqlmock.NewResult(0, 0))
 	tgtMock.ExpectExec(regexp.QuoteMeta(`CREATE VIEW "app"."active_users" AS SELECT id FROM users`)).WillReturnResult(sqlmock.NewResult(0, 0))
+	tgtMock.ExpectExec(regexp.QuoteMeta(`ALTER VIEW "app"."active_users" SET (security_barrier=true, check_option=local)`)).WillReturnResult(sqlmock.NewResult(0, 0))
 
 	if err := ApplySchemasFromSource(context.Background(), src, tgt, []string{"app"}); err != nil {
 		t.Fatal(err)
@@ -502,7 +513,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = src.Close() })
-	mock.ExpectQuery(`FROM pg_extension`).WillReturnRows(sqlmock.NewRows([]string{"extname"}))
+	mock.ExpectQuery(`FROM pg_extension`).WillReturnRows(sqlmock.NewRows([]string{"extname", "nspname", "extversion"}))
 	mock.ExpectQuery(`t\.typtype = 'e'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "label"}))
 	mock.ExpectQuery(`t\.typtype = 'd'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "base", "notnull", "default"}).AddRow("app", "positive", "integer", false, ""))
 	mock.ExpectQuery(`t\.typtype = 'd' AND c\.contype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "domain", "name", "def"}).AddRow("app", "positive", "valid", "CHECK (app.valid_value(VALUE))"))
@@ -511,6 +522,11 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 		"nspname", "collname", "collprovider", "colliculocale", "collicurules", "collcollate", "collctype", "collisdeterministic",
 	}))
 	mock.ExpectQuery(`t\.typtype = 'c'`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name"}))
+	mock.ExpectQuery(`pg_range`).WillReturnRows(sqlmock.NewRows([]string{
+		"schema", "name", "subtype", "opc_schema", "opc", "coll_schema", "coll",
+		"can_schema", "can_name", "diff_schema", "diff_name", "mr_schema", "multirange",
+	}).AddRow("app", "span", "integer", "pg_catalog", "int4_ops", "", "", "", "", "", "", "", "").
+		AddRow("app", "span2", "integer", "", "", "", "", "app", "span2_canonical", "app", "span2_diff", "app", "span2_set"))
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
@@ -525,13 +541,15 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`pg_options_to_table`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "option_value"}))
 	mock.ExpectQuery(`FROM pg_indexes`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "def", "inherited"}).AddRow("app", "items", "items_code_idx", `CREATE UNIQUE INDEX "items_code_idx" ON "app"."items" (code)`, false))
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
-	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true))
+	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized", "options"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true, "fillfactor=70"))
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
 	mock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`FROM pg_description`).WillReturnRows(sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).
 		AddRow("domain_constraint", "app", "positive", "valid", "must be positive").
-		AddRow("policy", "app", "items", "tenant", "tenant filter"))
+		AddRow("policy", "app", "items", "tenant", "tenant filter").
+		AddRow("trigger", "app", "items", "touch", "keeps updated_at").
+		AddRow("rule", "app", "items", "log_del", "audit"))
 	mock.ExpectQuery(`c\.relrowsecurity`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "force"}).AddRow("app", "items", false))
 	mock.ExpectQuery(`FROM pg_policy`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "command", "permissive", "using", "check", "roles"}).
 		AddRow("app", "items", "tenant", "SELECT", true, "true", "", ""))
@@ -541,7 +559,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := rec.String()
-	parts := []string{"CREATE DOMAIN", "CREATE FUNCTION", "ALTER DOMAIN", "ALTER TABLE ONLY", "CREATE UNIQUE INDEX", "REPLICA IDENTITY USING INDEX", "CREATE MATERIALIZED VIEW", "CREATE STATISTICS", "COMMENT ON CONSTRAINT", "CREATE POLICY", "COMMENT ON POLICY"}
+	parts := []string{"CREATE DOMAIN", `CREATE TYPE "app"."span" AS RANGE`, "CREATE FUNCTION", "ALTER DOMAIN", "ALTER TABLE ONLY", "CREATE UNIQUE INDEX", "REPLICA IDENTITY USING INDEX", "CREATE MATERIALIZED VIEW", "ALTER MATERIALIZED VIEW", "CREATE STATISTICS", "COMMENT ON CONSTRAINT", "COMMENT ON TRIGGER", "COMMENT ON RULE", "CREATE POLICY", "COMMENT ON POLICY"}
 	last := -1
 	for _, part := range parts {
 		pos := strings.Index(script, part)
@@ -549,6 +567,21 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 			t.Fatalf("%s not ordered after prior statement:\n%s", part, script)
 		}
 		last = pos
+	}
+	shell := strings.Index(script, `CREATE TYPE "app"."span2";`)
+	full := strings.Index(script, `CREATE TYPE "app"."span2" AS RANGE`)
+	fn := strings.Index(script, "CREATE FUNCTION")
+	if shell < 0 || full < 0 || shell >= fn || fn >= full {
+		t.Fatalf("range shell order shell=%d fn=%d full=%d\n%s", shell, fn, full, script)
+	}
+	if !strings.Contains(script, `CANONICAL = "app"."span2_canonical"`) || strings.Contains(script, "span2_canonical(") {
+		t.Fatalf("canonical must be a bare name:\n%s", script)
+	}
+	if !strings.Contains(script, `SUBTYPE_DIFF = "app"."span2_diff"`) || !strings.Contains(script, `MULTIRANGE_TYPE_NAME = "app"."span2_set"`) {
+		t.Fatalf("missing range options:\n%s", script)
+	}
+	if !strings.Contains(script, `ALTER MATERIALIZED VIEW "app"."mv" SET (fillfactor=70)`) {
+		t.Fatalf("missing matview fillfactor:\n%s", script)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
