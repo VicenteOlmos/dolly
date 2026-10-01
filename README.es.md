@@ -263,6 +263,8 @@ Las conexiones guardadas están desactivadas de forma predeterminada. Actívelas
 
 Después, los comandos de la CLI pueden usar `--connection <name>` en lugar de `--dsn`. Los almacenes con alcance de proyecto son prácticos, pero es más fácil incluirlos en un commit por accidente; los almacenes cifrados requieren `DOLLY_CONNECTIONS_KEY`, y perder esa clave impide acceder a los perfiles cifrados.
 
+La sección `db` define el tamaño del pool y parámetros de sesión de PostgreSQL inyectados en las conexiones de la CLI y la TUI: `max_open_conns`, `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout` y `application_name` (predeterminado `dolly`). Los tiempos de espera usan cadenas de duración de Go; déjelos en `""` o `"0"` para desactivarlos. `application_name` no puede contener retorno de carro, salto de línea ni `=`.
+
 `dump`, `restore`, `clone` y `version` aceptan `--json`:
 
 - Exit 0: JSON de éxito en **stdout**.

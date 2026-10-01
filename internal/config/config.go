@@ -82,6 +82,14 @@ type Config struct {
 		// Applied as the PostgreSQL statement_timeout session parameter on every connection.
 		// Set to empty string to disable.
 		StatementTimeout string `json:"statement_timeout"`
+		// LockTimeout aborts lock waits exceeding this duration (Go duration string).
+		// Applied as the PostgreSQL lock_timeout session parameter. Empty or "0" disables.
+		LockTimeout string `json:"lock_timeout"`
+		// IdleInTransactionSessionTimeout ends idle transactions after this duration (Go duration string).
+		// Applied as idle_in_transaction_session_timeout. Empty or "0" disables.
+		IdleInTransactionSessionTimeout string `json:"idle_in_transaction_session_timeout"`
+		// ApplicationName sets the PostgreSQL application_name session parameter (default "dolly").
+		ApplicationName string `json:"application_name"`
 	} `json:"db"`
 	TUI struct {
 		// SectionEntry controls whether section screens open in overview ("overview")
@@ -138,6 +146,7 @@ func DefaultConfig() *Config {
 	cfg.Dump.ExcludeSchemas = []string{}
 	cfg.DB.MaxOpenConns = 5
 	cfg.DB.StatementTimeout = "5min"
+	cfg.DB.ApplicationName = "dolly"
 	cfg.TUI.SectionEntry = "inside"
 	cfg.TUI.Theme = "catppuccin-mocha"
 	return cfg
@@ -214,6 +223,9 @@ func LoadConfig(path string) (*Config, error) {
 	plain := stripJSONC(data)
 	if err := json.Unmarshal(plain, cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }

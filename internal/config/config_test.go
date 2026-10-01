@@ -191,6 +191,13 @@ func TestConfigDBStatementTimeoutDefaults(t *testing.T) {
 	}
 }
 
+func TestConfigDBApplicationNameDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.DB.ApplicationName != "dolly" {
+		t.Fatalf("DB.ApplicationName = %q, want dolly", cfg.DB.ApplicationName)
+	}
+}
+
 func TestLoadConfigDBMaxOpenConnsOverlay(t *testing.T) {
 	content := `{
   "db": {

@@ -198,12 +198,9 @@ func runRestore(args []string) (err error) {
 	}
 	schemas := resolveRestoreSchemas(flags.SchemasSet, flags.Schemas, profileSchemas)
 
-	if cfg.DB.StatementTimeout != "" && cfg.DB.StatementTimeout != "0" {
-		var err error
-		dsn, err = appendQueryParam(dsn, "statement_timeout", cfg.DB.StatementTimeout)
-		if err != nil {
-			return err
-		}
+	dsn, err = cfg.ApplySessionGUCs(dsn, appendQueryParam)
+	if err != nil {
+		return err
 	}
 
 	db, err := sql.Open("pgx", dsn)
