@@ -100,7 +100,7 @@ func CLICatalog() []CLICommand {
 				{Name: "no-transaction", Description: "advanced: commit after each table (no global rollback; requires --yes; default is atomic)"},
 				{Name: "trust-schema-sql", Description: "replay reviewed schema.sql when target tables are missing (requires --no-transaction --yes; default off)"},
 				{Name: "yes", Description: "confirm destructive or advanced operations (required with --replace/--no-transaction)"},
-				{Name: "workers", Default: "1", Description: "parallel table restore workers (max 16; requires --no-transaction --yes --ack-partial-state; TUI history restore confirms before a non-atomic parallel run)"},
+				{Name: "workers", Default: "1", Description: "parallel table restore workers (max 16; requires --no-transaction --yes --ack-partial-state; TUI history restore requires a per-run acknowledgement toggle when workers are greater than 1)"},
 				{Name: "ack-partial-state", Description: "acknowledge partial-state risk for parallel restore (CLI flag; TUI history uses a per-run toggle, never stored in config)"},
 				{Name: "partial-state-file", Description: "partial-state manifest path (default: config restore.partial_state_file or input/.dolly-restore-partial-state.json)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},

@@ -1,6 +1,8 @@
 package restore
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,10 +67,18 @@ func PartialStateTargetFromConninfo(conninfo string) PartialStateTarget {
 // PartialStateManifest records committed, failed, and pending qualified tables.
 // It never stores connection strings, passwords, or other credentials.
 type PartialStateManifest struct {
-	Target    PartialStateTarget    `json:"target,omitempty"`
-	Committed []string              `json:"committed"`
-	Failed    []PartialStateFailure `json:"failed,omitempty"`
-	Pending   []string              `json:"pending"`
+	Target              PartialStateTarget    `json:"target,omitempty"`
+	TableSetFingerprint string                `json:"table_set_fingerprint,omitempty"`
+	Committed           []string              `json:"committed"`
+	Failed              []PartialStateFailure `json:"failed,omitempty"`
+	Pending             []string              `json:"pending"`
+}
+
+// partialStateTableSetFingerprint fingerprints the sorted qualified table label list for this restore scope.
+func partialStateTableSetFingerprint(labels []string) string {
+	normalized := normalizeQualifiedList(labels)
+	sum := sha256.Sum256([]byte(strings.Join(normalized, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // DefaultPartialStatePath returns the default manifest path under workDir.
@@ -129,10 +139,11 @@ func mergePartialStateManifestForRetry(existing PartialStateManifest, allLabels 
 		}
 	}
 	return PartialStateManifest{
-		Target:    target,
-		Committed: normalizeQualifiedList(retained),
-		Failed:    nil,
-		Pending:   pending,
+		Target:              target,
+		TableSetFingerprint: partialStateTableSetFingerprint(allLabels),
+		Committed:           normalizeQualifiedList(retained),
+		Failed:              nil,
+		Pending:             pending,
 	}
 }
 
