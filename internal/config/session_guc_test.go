@@ -8,7 +8,7 @@ import (
 func TestApplySessionGUCsDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DB.LockTimeout = "30s"
-	cfg.DB.IdleInTransactionSessionTimeout = "1min"
+	cfg.DB.IdleInTransactionSessionTimeout = "1m30s"
 
 	var keys []string
 	set := func(dsn, key, value string) (string, error) {
@@ -36,8 +36,8 @@ func TestApplySessionGUCsDefaultConfig(t *testing.T) {
 	for _, part := range []string{
 		"application_name=dolly",
 		"statement_timeout=5min",
-		"lock_timeout=30s",
-		"idle_in_transaction_session_timeout=1min",
+		"lock_timeout=30000",
+		"idle_in_transaction_session_timeout=90000",
 	} {
 		if !strings.Contains(got, part) {
 			t.Fatalf("ApplySessionGUCs() = %q, missing %q", got, part)
@@ -66,5 +66,21 @@ func TestApplySessionGUCsSkipsDisabledTimeouts(t *testing.T) {
 	}
 	if got != "dsn" {
 		t.Fatalf("ApplySessionGUCs() = %q, want unchanged DSN", got)
+	}
+}
+
+func TestSessionGUCTimeoutForDSN(t *testing.T) {
+	tests := map[string]string{
+		"1m":     "60000",
+		"1m30s":  "90000",
+		"5s":     "5000",
+		"5min":   "5min",
+		"30s":    "30000",
+		"250ms":  "250",
+	}
+	for in, want := range tests {
+		if got := sessionGUCTimeoutForDSN(in); got != want {
+			t.Fatalf("sessionGUCTimeoutForDSN(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

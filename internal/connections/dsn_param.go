@@ -67,7 +67,7 @@ func setKeywordParam(dsn, key, value string) (string, error) {
 			if !replaced {
 				b.WriteString(tok.key)
 				b.WriteByte('=')
-				b.WriteString(value)
+				b.WriteString(formatLibpqKeywordValue(value))
 				replaced = true
 			}
 			continue
@@ -82,9 +82,44 @@ func setKeywordParam(dsn, key, value string) (string, error) {
 		}
 		b.WriteString(key)
 		b.WriteByte('=')
-		b.WriteString(value)
+		b.WriteString(formatLibpqKeywordValue(value))
 	}
 	return b.String(), nil
+}
+
+// formatLibpqKeywordValue returns a libpq keyword DSN value, quoting when required.
+func formatLibpqKeywordValue(value string) string {
+	if !needsLibpqQuoting(value) {
+		return value
+	}
+	var b strings.Builder
+	b.Grow(len(value) + 2)
+	b.WriteByte('\'')
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '\'':
+			b.WriteString("''")
+		case '\\':
+			b.WriteString("\\\\")
+		default:
+			b.WriteByte(value[i])
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
+
+func needsLibpqQuoting(value string) bool {
+	if value == "" {
+		return true
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == ' ' || c == '\'' || c == '\\' {
+			return true
+		}
+	}
+	return false
 }
 
 func tokenizeKeywordDSN(dsn string) ([]keywordToken, error) {
