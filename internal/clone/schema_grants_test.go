@@ -2,6 +2,8 @@ package clone
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -148,6 +150,29 @@ func TestLoadProcedureComment(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestApplyCommentsAggregateErrorPropagates(t *testing.T) {
+	t.Parallel()
+	errExec := &commentErrExec{err: errors.New("permission denied")}
+	comments := []commentRow{
+		{kind: "aggregate", schema: "app", object: "my_sum", column: "integer", description: "totals"},
+	}
+	err := applyComments(context.Background(), errExec, comments)
+	if err == nil {
+		t.Fatal("expected aggregate comment error")
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+type commentErrExec struct {
+	err error
+}
+
+func (c *commentErrExec) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return nil, c.err
 }
 
 func TestLoadConstraintCommentsOnlyForReplayedConstraints(t *testing.T) {

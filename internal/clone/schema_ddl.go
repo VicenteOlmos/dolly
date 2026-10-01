@@ -438,12 +438,14 @@ func formatCreateCast(row castRow) (string, bool) {
 	dst := quoteQualifiedType(row.tgtSchema, row.tgtType)
 	stmt := fmt.Sprintf("CREATE CAST (%s AS %s)", src, dst)
 	switch row.castMethod {
-	case "f", "i":
+	case "f":
 		if strings.TrimSpace(row.fnName) == "" {
 			return "", false
 		}
 		fn := formatCastFunction(row.fnSchema, row.fnName, row.fnArgs)
 		stmt += " WITH FUNCTION " + fn
+	case "i":
+		stmt += " WITH INOUT"
 	case "b":
 		stmt += " WITHOUT FUNCTION"
 	default:
@@ -515,12 +517,11 @@ func commentTarget(kind, schema, object, column string) string {
 		return "TYPE " + quoteQualifiedType(schema, object)
 	case "aggregate":
 		target := "AGGREGATE "
-		fn, argList, ok := strings.Cut(object, "(")
-		if !ok || !strings.HasSuffix(argList, ")") {
+		args := strings.TrimSpace(column)
+		if args == "" {
 			return target + quoteQualifiedType(schema, object)
 		}
-		argList = strings.TrimSuffix(argList, ")")
-		return target + quoteQualifiedType(schema, fn) + "(" + argList + ")"
+		return target + quoteQualifiedType(schema, object) + "(" + args + ")"
 	case "statistics":
 		return "STATISTICS " + quoteQualifiedType(schema, object)
 	case "collation":

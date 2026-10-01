@@ -24,7 +24,7 @@ func loadClassicInherits(ctx context.Context, q *sql.DB, schemas []string) (map[
 		  AND pc.relkind = 'r'
 		  AND n.nspname IN (%s)
 		  AND pn.nspname IN (%s)
-		ORDER BY n.nspname, c.relname, pn.nspname, pc.relname`, inClause, inClause)
+		ORDER BY n.nspname, c.relname, i.inhseqno`, inClause, inClause)
 	// Both IN lists reuse the same placeholders, so the schema args are passed once.
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -52,7 +52,7 @@ func loadInheritedColumnNames(ctx context.Context, q *sql.DB, schemas []string) 
 		JOIN pg_class c ON c.oid = a.attrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE a.attnum > 0 AND NOT a.attisdropped
-		  AND a.attinhcount > 0
+		  AND a.attinhcount > 0 AND NOT a.attislocal
 		  AND c.relkind IN ('r', 'p')
 		  AND n.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, a.attnum`, inClause)

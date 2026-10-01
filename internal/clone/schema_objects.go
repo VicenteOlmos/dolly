@@ -1227,15 +1227,14 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		  AND t.typtype = 'm'
 		  AND n.nspname IN (%s)
 		UNION ALL
-		SELECT 'aggregate', n.nspname,
-		       p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',
-		       '', d.description
+		SELECT 'aggregate', n.nspname, p.proname,
+		       pg_catalog.pg_get_function_identity_arguments(p.oid), d.description
 		FROM pg_description d
 		INNER JOIN pg_proc p ON p.oid = d.objoid
 		INNER JOIN pg_namespace n ON n.oid = p.pronamespace
 		INNER JOIN pg_aggregate a ON a.aggfnoid = p.oid
 		WHERE d.classoid = 'pg_proc'::regclass AND d.objsubid = 0
-		  AND a.aggkind IN ('n', 'o')
+		  AND a.aggkind = 'n'
 		  AND NOT EXISTS (
 		    SELECT 1 FROM pg_depend d2
 		    WHERE d2.objid = p.oid AND d2.deptype = 'e'
@@ -1273,9 +1272,6 @@ func applyComments(ctx context.Context, tgtDB execer, comments []commentRow) err
 	for _, c := range comments {
 		stmt := formatCommentOn(c.kind, c.schema, c.object, c.column, c.description)
 		if _, err := tgtDB.ExecContext(ctx, stmt); err != nil {
-			if c.kind == "aggregate" {
-				continue
-			}
 			return fmt.Errorf("comment on %s %s.%s: %w", c.kind, c.schema, c.object, err)
 		}
 	}
