@@ -474,6 +474,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		fmt.Fprintf(os.Stderr, "warning: skip_create may leave partial state on the existing target database if the clone fails\n")
 	}
 
+	var preflightWarnings []string
 	opts := clone.Options{
 		SourceDSN:         sourceDSN,
 		CloneName:         cloneName,
@@ -488,6 +489,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		MaxOpenConns:      maxConns,
 		IncludePrivileges: flags.IncludePrivileges,
 		RowTransform:      dump.InspectRowTransform(dump.SanitizationOptions(cfg.Sanitization.Enabled && strategy == "logical-stream")...),
+		PreflightWarnings: &preflightWarnings,
 		ProgressEvent: func(ev clone.ProgressEvent) {
 			if flags.JSON {
 				return
@@ -499,6 +501,9 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 	if err := cloneRun(ctx, opts); err != nil {
 		return fmt.Errorf("clone: %w", err)
 	}
+	for _, w := range preflightWarnings {
+		fmt.Fprintln(os.Stderr, w)
+	}
 	fmt.Fprintln(os.Stderr, "clone complete")
 
 	if flags.JSON {
@@ -506,14 +511,19 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		if sch == nil {
 			sch = []string{}
 		}
+		pw := preflightWarnings
+		if pw == nil {
+			pw = []string{}
+		}
 		result := map[string]any{
-			"ok":              true,
-			"command":         "clone",
-			"source_database": databaseFromDSN(sourceDSN),
-			"clone_name":      cloneName,
-			"strategy":        strategy,
-			"target_dir":      targetDir,
-			"schemas":         sch,
+			"ok":                 true,
+			"command":            "clone",
+			"source_database":    databaseFromDSN(sourceDSN),
+			"clone_name":         cloneName,
+			"strategy":           strategy,
+			"target_dir":         targetDir,
+			"schemas":            sch,
+			"preflight_warnings": pw,
 		}
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {

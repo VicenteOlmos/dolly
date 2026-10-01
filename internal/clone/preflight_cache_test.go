@@ -244,8 +244,14 @@ func TestPreflightSkipsPermissionQueriesOnCacheHit(t *testing.T) {
 	mock.ExpectPing()
 	mock.ExpectQuery(`SHOW server_version_num`).
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(150002))
+	mock.ExpectQuery(`pg_aggregate`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`pg_opclass`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`relkind = 'f'`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	if err := Preflight(context.Background(), opts, &SchemaReplayStrategy{}); err != nil {
+	if _, err := Preflight(context.Background(), opts, &SchemaReplayStrategy{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
