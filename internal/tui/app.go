@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -576,12 +577,14 @@ func (a *App) restoreNeedsConfirm(trustedSchemaSQL bool) (bool, string) {
 func (a *App) handleRestoreConfirmRequested(msg restoreConfirmRequestedMsg) (tea.Model, tea.Cmd) {
 	needs, policy := a.restoreNeedsConfirm(msg.trustedSchemaSQL)
 	if !needs {
-		return a.handleRestoreRequested(restoreRequestedMsg{inputDir: msg.inputDir, trustedSchemaSQL: msg.trustedSchemaSQL})
+		return a.handleRestoreRequested(restoreRequestedMsg{inputDir: msg.inputDir, trustedSchemaSQL: msg.trustedSchemaSQL, ackPartialState: msg.ackPartialState})
 	}
 	body := fmt.Sprintf("Path: %s\nTarget: %s\n\nThis will %s.", msg.inputDir, connections.RedactMessage(a.conn.DSN()), policy)
-	dir, trusted := msg.inputDir, msg.trustedSchemaSQL
+	dir, trusted, ack := msg.inputDir, msg.trustedSchemaSQL, msg.ackPartialState
 	a.mountRestoreConfirmModal("Restore dump?", body, dir, func() tea.Cmd {
-		return func() tea.Msg { return restoreRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted} }
+		return func() tea.Msg {
+			return restoreRequestedMsg{inputDir: dir, trustedSchemaSQL: trusted, ackPartialState: ack}
+		}
 	})
 	return a, nil
 }
@@ -616,6 +619,16 @@ func (a *App) handleRestoreRequested(msg restoreRequestedMsg) (tea.Model, tea.Cm
 		a.statusMsg = truncateStatus(StyleWarning.Render(err.Error()), a.width)
 		return a, nil
 	}
+	workers, err := effectiveRestoreWorkers(a.cfg, history)
+	if err != nil {
+		a.statusMsg = truncateStatus(StyleWarning.Render(err.Error()), a.width)
+		return a, nil
+	}
+	if workers > 1 && !msg.ackPartialState {
+		a.statusMsg = truncateStatus(StyleWarning.Render("Parallel restore requires acknowledging partial-state risk on the history screen"), a.width)
+		return a, nil
+	}
+	history.AckPartial = msg.ackPartialState
 	a.restoreRunning = true
 	a.restoreProgress = nil
 	a.statusMsg = "Restoring…"
@@ -785,6 +798,16 @@ func (a *App) persistConfig(showSavedStatus bool) bool {
 	if a.cfg == nil {
 		a.statusMsg = truncateStatus(StyleWarning.Render("No config loaded"), a.width)
 		return false
+	}
+	if a.cfg.SaveConnections {
+		cwd := filepath.Dir(a.cfgPath)
+		if cwd == "" {
+			cwd = "."
+		}
+		if _, err := connections.OpenStore(a.cfg, cwd); err != nil {
+			a.statusMsg = truncateStatus(StyleWarning.Render(err.Error()), a.width)
+			return false
+		}
 	}
 	if err := config.SaveConfig(a.cfg, a.cfgPath); err != nil {
 		a.statusMsg = truncateStatus(StyleWarning.Render("Save failed: "+err.Error()), a.width)
