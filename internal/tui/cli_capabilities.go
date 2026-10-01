@@ -89,11 +89,11 @@ func CLICatalog() []CLICommand {
 				{Name: "trust-schema-sql", Description: "replay reviewed schema.sql when target tables are missing (requires --no-transaction --yes; default off)"},
 				{Name: "yes", Description: "confirm destructive or advanced operations (required with --replace/--no-transaction)"},
 				{Name: "workers", Default: "1", Description: "parallel table restore workers (max 16; requires --no-transaction --yes --ack-partial-state; TUI history restore confirms before a non-atomic parallel run)"},
-				{Name: "ack-partial-state", Description: "acknowledge partial-state risk for parallel restore (CLI-only; never stored in config)"},
+				{Name: "ack-partial-state", Description: "acknowledge partial-state risk for parallel restore (CLI flag; TUI history uses a per-run toggle, never stored in config)"},
 				{Name: "partial-state-file", Description: "partial-state manifest path (default: config restore.partial_state_file or input/.dolly-restore-partial-state.json)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
 			},
-			ConfigNote: "Reads config.jsonc for restore.workers and restore.partial_state_file. Parallel acknowledgement is CLI-only.",
+			ConfigNote: "Reads config.jsonc for restore.workers and restore.partial_state_file. Parallel acknowledgement uses a TUI history toggle or CLI --ack-partial-state.",
 			Examples: []string{
 				"dolly restore --dsn \"$DATABASE_URL\" --input ./out",
 				"dolly restore --dsn \"$DATABASE_URL\" --input ./out --on-conflict upsert",
