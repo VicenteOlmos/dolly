@@ -40,6 +40,12 @@ func loadCasts(ctx context.Context, q *sql.DB, schemas []string) ([]castRow, err
 		  AND tgt_ns.nspname IN (%s)
 		  AND src_ns.nspname <> 'pg_catalog'
 		  AND tgt_ns.nspname <> 'pg_catalog'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    WHERE d.classid = 'pg_cast'::regclass
+		      AND d.objid = c.oid
+		      AND d.deptype = 'i'
+		  )
 		ORDER BY src_ns.nspname, src_t.typname, tgt_ns.nspname, tgt_t.typname`, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {

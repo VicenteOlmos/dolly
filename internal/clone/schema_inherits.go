@@ -25,8 +25,8 @@ func loadClassicInherits(ctx context.Context, q *sql.DB, schemas []string) (map[
 		  AND n.nspname IN (%s)
 		  AND pn.nspname IN (%s)
 		ORDER BY n.nspname, c.relname, pn.nspname, pc.relname`, inClause, inClause)
-	allArgs := append(append([]any{}, args...), args...)
-	rows, err := q.QueryContext(ctx, query, allArgs...)
+	// Both IN lists reuse the same placeholders, so the schema args are passed once.
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list table inheritance: %w", err)
 	}
