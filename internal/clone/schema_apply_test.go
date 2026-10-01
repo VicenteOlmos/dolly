@@ -3,6 +3,7 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -83,9 +84,17 @@ func expectBatchedSchemaObjects(srcMock sqlmock.Sqlmock, schemaCount string, all
 		WillReturnRows(allUniques)
 	srcMock.ExpectQuery(`con\.contype = 'u'[\s\S]*nspname IN \(\$1`).
 		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "conname", "condeferrable", "condeferred"}))
+	// loadAllPrimaryConstraints (1 query).
+	srcMock.ExpectQuery(`constraint_type = 'PRIMARY KEY'[\s\S]*table_schema IN \(\$1`).
+		WillReturnRows(sqlmock.NewRows([]string{"table_schema", "table_name", "constraint_name", "column_name", "ordinal_position"}))
+	srcMock.ExpectQuery(`con\.contype = 'p'[\s\S]*nspname IN \(\$1`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "conname", "condeferrable", "condeferred"}))
 	// loadAllCheckConstraints (1 query).
 	srcMock.ExpectQuery(`con\.contype = 'c'[\s\S]*nspname IN \(\$1`).
 		WillReturnRows(allChecks)
+	// loadAllExcludeConstraints (1 query).
+	srcMock.ExpectQuery(`con\.contype = 'x'[\s\S]*nspname IN \(\$1`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "conname", "pg_get_constraintdef"}))
 	// loadAllForeignKeyConstraints (1 query).
 	srcMock.ExpectQuery(`con\.contype = 'f'[\s\S]*nspname IN \(\$1`).
 		WillReturnRows(allFKDefs)
@@ -633,7 +642,7 @@ func TestFormatCreateTableDeferrableUnique(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		got, err := formatCreateTable(table, cols, []uniqueConstraint{tt.unique}, nil, nil)
+		got, err := formatCreateTable(table, cols, nil, []uniqueConstraint{tt.unique}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tt.name, err)
 		}
@@ -655,7 +664,7 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 		{name: "id", sqlType: "integer"},
 		{name: "total", sqlType: "integer", generatedExpr: "id * 2"},
 	}
-	got, err := formatCreateTable(parent, cols, nil, nil, nil)
+	got, err := formatCreateTable(parent, cols, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +679,7 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 		PartitionOf:    "public.events",
 		PartitionBound: "FOR VALUES FROM (1) TO (2)",
 	}
-	got, err = formatCreateTable(child, cols, nil, nil, nil)
+	got, err = formatCreateTable(child, cols, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,10 +687,21 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 	if got != want {
 		t.Fatalf("child SQL =\n%s\nwant\n%s", got, want)
 	}
+
+	pk := primaryConstraint{name: "events_2024_pkey", columns: []string{"id"}}
+	got, err = formatCreateTable(child, cols, &pk, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `CREATE TABLE "public"."events_2024" PARTITION OF "public"."events" (CONSTRAINT "events_2024_pkey" PRIMARY KEY ("id")) FOR VALUES FROM (1) TO (2)`
+	if got != want {
+		t.Fatalf("partition local primary key SQL =\n%s\nwant\n%s", got, want)
+	}
+
 	child.RelKind = "p"
 	child.PartitionBy = "LIST (total)"
 	cols[0].defaultExpr = sql.NullString{String: "42", Valid: true}
-	got, err = formatCreateTable(child, cols, nil, []checkConstraint{{name: "positive", def: "CHECK (id > 0)"}}, nil)
+	got, err = formatCreateTable(child, cols, nil, nil, []checkConstraint{{name: "positive", def: "CHECK (id > 0)"}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,7 +718,7 @@ func TestFormatCreateTableIdentityCollateUnlogged(t *testing.T) {
 		{name: "label", sqlType: "text", collationSchema: "public", collationName: "und", nullable: true},
 	}
 	unloggedParent := db.Table{Schema: "public", Name: "cache", Unlogged: true}
-	got, err := formatCreateTable(unloggedParent, cols, nil, nil, nil)
+	got, err := formatCreateTable(unloggedParent, cols, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,7 +742,7 @@ func TestFormatCreateTableIdentityCollateUnlogged(t *testing.T) {
 		PartitionBound: "FOR VALUES IN ('a')",
 		Unlogged:       true,
 	}
-	got, err = formatCreateTable(child, cols[:1], nil, nil, nil)
+	got, err = formatCreateTable(child, cols[:1], nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,7 +758,7 @@ func TestFormatCreateTableClassicInherits(t *testing.T) {
 		{name: "id", sqlType: "integer", nullable: false},
 		{name: "extra", sqlType: "text", nullable: true},
 	}
-	got, err := formatCreateTable(child, []schemaColumn{cols[1]}, nil, nil, []inheritParent{{schema: "app", name: "base"}})
+	got, err := formatCreateTable(child, []schemaColumn{cols[1]}, nil, nil, nil, nil, []inheritParent{{schema: "app", name: "base"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -746,7 +766,7 @@ func TestFormatCreateTableClassicInherits(t *testing.T) {
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	gotParent, err := formatCreateTable(parent, cols[:1], nil, nil, nil)
+	gotParent, err := formatCreateTable(parent, cols[:1], nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -822,7 +842,7 @@ func TestIdentitySequenceDDL(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
-	stmt, err := formatCreateTable(db.Table{Schema: "app", Name: "items"}, []schemaColumn{{name: "id", sqlType: "bigint", identityGen: "ALWAYS", identitySeq: &seq}}, nil, nil, nil)
+	stmt, err := formatCreateTable(db.Table{Schema: "app", Name: "items"}, []schemaColumn{{name: "id", sqlType: "bigint", identityGen: "ALWAYS", identitySeq: &seq}}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -860,6 +880,175 @@ func TestFormatAggregateNormal(t *testing.T) {
 	want := `CREATE AGGREGATE "public"."sum_int"(integer) (SFUNC = "public"."int4_sum", STYPE = bigint, INITCOND = '0', PARALLEL = SAFE)`
 	if got != want {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestFormatCreateTableDeferrablePrimary(t *testing.T) {
+	t.Parallel()
+	table := db.Table{
+		Schema:  "app",
+		Name:    "items",
+		Columns: []db.Column{{Name: "id", PrimaryKey: true}},
+	}
+	cols := []schemaColumn{{name: "id", sqlType: "integer", nullable: false}}
+	tests := []struct {
+		name string
+		pk   primaryConstraint
+		want string
+	}{
+		{
+			name: "non_deferrable",
+			pk:   primaryConstraint{name: "items_pkey", columns: []string{"id"}},
+			want: `CONSTRAINT "items_pkey" PRIMARY KEY ("id")`,
+		},
+		{
+			name: "deferrable_immediate",
+			pk:   primaryConstraint{name: "items_pkey", columns: []string{"id"}, deferrable: true},
+			want: `CONSTRAINT "items_pkey" PRIMARY KEY ("id") DEFERRABLE`,
+		},
+		{
+			name: "deferrable_deferred",
+			pk:   primaryConstraint{name: "items_pkey", columns: []string{"id"}, deferrable: true, deferred: true},
+			want: `CONSTRAINT "items_pkey" PRIMARY KEY ("id") DEFERRABLE INITIALLY DEFERRED`,
+		},
+	}
+	for _, tt := range tests {
+		got, err := formatCreateTable(table, cols, &tt.pk, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if !strings.Contains(got, tt.want) {
+			t.Fatalf("%s: got %q, want substring %q", tt.name, got, tt.want)
+		}
+		if strings.Contains(got, `PRIMARY KEY ("id")`) && strings.Count(got, "PRIMARY KEY") > 1 {
+			t.Fatalf("%s: duplicate inline primary key: %q", tt.name, got)
+		}
+	}
+}
+
+func TestLoadIndexesQueryOmitsExclusionBackingIndex(t *testing.T) {
+	src, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+
+	mock.ExpectQuery(`contype IN \('p', 'u', 'x'\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
+
+	indexes, err := loadIndexes(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexes) != 0 {
+		t.Fatalf("indexes = %+v", indexes)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFormatCreateTableExcludeConstraint(t *testing.T) {
+	t.Parallel()
+	table := db.Table{Schema: "app", Name: "bookings"}
+	cols := []schemaColumn{
+		{name: "room", sqlType: "integer", nullable: false},
+		{name: "during", sqlType: "tsrange", nullable: false},
+	}
+	exc := excludeConstraint{
+		name: "bookings_room_during_excl",
+		def:  "EXCLUDE USING gist (room WITH =, during WITH &&)",
+	}
+	got, err := formatCreateTable(table, cols, nil, nil, nil, []excludeConstraint{exc}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `CONSTRAINT "bookings_room_during_excl" EXCLUDE USING gist (room WITH =, during WITH &&)`
+	if !strings.Contains(got, want) {
+		t.Fatalf("got %q, want substring %q", got, want)
+	}
+}
+
+func TestLoadReplicaIdentitiesIncludesPartitions(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`(?s)relreplident.*n\.nspname IN \(\$1\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}).
+			AddRow("app", "events_2024", "f", ""))
+	rows, err := loadReplicaIdentities(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].table != "events_2024" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadReplicaIdentitiesQueryOmitsPartitionFilter(t *testing.T) {
+	src, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherFunc(func(_ string, actual string) error {
+		if strings.Contains(actual, "relispartition") {
+			return fmt.Errorf("replica identity query must include partition children")
+		}
+		return nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`.*`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
+	if _, err := loadReplicaIdentities(context.Background(), src, []string{"app"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadTriggersSkipsExtensionOwned(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`pg_get_triggerdef`).
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}).
+			AddRow("app", "items", "user_touch", "O", `CREATE TRIGGER "user_touch" BEFORE UPDATE ON "app"."items" FOR EACH ROW EXECUTE FUNCTION touch()`))
+	defs, err := loadTriggers(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 || !strings.Contains(defs[0], "user_touch") {
+		t.Fatalf("defs = %v", defs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadRulesSkipsExtensionOwned(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`pg_get_ruledef`).
+		WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}).
+			AddRow("app", "items", "log_del", "O", `CREATE RULE "log_del" AS ON DELETE TO "app"."items" DO INSTEAD NOTHING`))
+	defs, err := loadRules(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 || !strings.Contains(defs[0], "log_del") {
+		t.Fatalf("defs = %v", defs)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
