@@ -71,6 +71,7 @@ type Config struct {
 		ChunkTables       []string `json:"chunk_tables"`
 		ChunkTableFiles   []string `json:"chunk_table_files"`
 		Schemas           []string `json:"schemas"`
+		ExcludeSchemas    []string `json:"exclude_schemas"`
 		RequireSafeKey    bool     `json:"require_safe_key"`
 	} `json:"dump"`
 	SaveConnections bool `json:"save_connections"`
@@ -134,6 +135,7 @@ func DefaultConfig() *Config {
 	cfg.Dump.ExcludeTableFiles = []string{}
 	cfg.Dump.ChunkTables = []string{}
 	cfg.Dump.ChunkTableFiles = []string{}
+	cfg.Dump.ExcludeSchemas = []string{}
 	cfg.DB.MaxOpenConns = 5
 	cfg.DB.StatementTimeout = "5min"
 	cfg.TUI.SectionEntry = "inside"

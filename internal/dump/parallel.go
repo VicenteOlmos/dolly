@@ -87,6 +87,11 @@ func Prepare(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Opti
 	sorted := SortTables(tables)
 	assignDataFiles(sorted)
 
+	if err := captureDumpRuntime(ctx, coordinator.q, &cfg); err != nil {
+		coordinator.close()
+		return nil, err
+	}
+
 	stagingDir, err := os.MkdirTemp(outputDir, parallelStagingPrefix)
 	if err != nil {
 		coordinator.close()
@@ -108,7 +113,7 @@ func Prepare(ctx context.Context, dbConn *sql.DB, outputDir string, opts ...Opti
 		sequences:   sequences,
 		metaTmpPath: metaTmpPath,
 		stagingDir:  stagingDir,
-		startedAt:   time.Now(),
+		startedAt:   cfg.startedAt,
 		coordinator: coordinator,
 	}, nil
 }
