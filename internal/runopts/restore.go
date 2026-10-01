@@ -21,6 +21,7 @@ type RestoreOverrides struct {
 	PartialStateFileSet bool
 	AckPartialState     bool
 	Yes                 bool
+	ExcludeTables       []string
 }
 
 // ResolveRestoreWorkers returns effective parallel restore worker count.
@@ -109,6 +110,18 @@ func validateParallelRestoreConfigEffective(cfg *config.Config, workers int, tru
 	return nil
 }
 
+// ResolveRestoreExcludeTables merges CLI --exclude-table values with restore.exclude_tables.
+// When the CLI passes at least one selector, it replaces the config list entirely.
+func ResolveRestoreExcludeTables(o RestoreOverrides, cfg *config.Config) []string {
+	if len(o.ExcludeTables) > 0 {
+		return append([]string(nil), o.ExcludeTables...)
+	}
+	if len(cfg.Restore.ExcludeTables) > 0 {
+		return append([]string(nil), cfg.Restore.ExcludeTables...)
+	}
+	return nil
+}
+
 // RestoreHistoryUserOverrides carries optional per-run overrides for TUI history restore.
 // Zero value uses restore.* config for all fields.
 type RestoreHistoryUserOverrides struct {
@@ -190,10 +203,11 @@ func RestoreHistoryOptionsWithOverrides(cfg *config.Config, inputDir string, sch
 	if trustedSchemaSQL {
 		opts = append(opts, restore.WithTrustedSchemaSQL())
 	}
+	if excludes := ResolveRestoreExcludeTables(RestoreOverrides{}, cfg); len(excludes) > 0 {
+		opts = append(opts, restore.WithExcludeTables(excludes))
+	}
 	return opts, nil
 }
-
-// AppendRestoreOptionsFromFlags builds restore options for the CLI restore command.
 func AppendRestoreOptionsFromFlags(o RestoreOverrides, cfg *config.Config, inputDir string, policy restore.ConflictPolicy, workers int, schemas []string, dsn string) ([]restore.Option, error) {
 	partialStatePath := ResolveRestorePartialStatePath(o, cfg, inputDir)
 	if workers > 1 {
@@ -223,6 +237,9 @@ func AppendRestoreOptionsFromFlags(o RestoreOverrides, cfg *config.Config, input
 	}
 	if o.TrustSchemaSQL {
 		opts = append(opts, restore.WithTrustedSchemaSQL())
+	}
+	if excludes := ResolveRestoreExcludeTables(o, cfg); len(excludes) > 0 {
+		opts = append(opts, restore.WithExcludeTables(excludes))
 	}
 	return opts, nil
 }
