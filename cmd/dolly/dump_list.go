@@ -100,7 +100,7 @@ func runDumpList(args []string) (err error) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SEQ\tPATH\tSCHEMA\tTABLES\tSOURCE\tCREATED")
+	fmt.Fprintln(w, "SEQ\tPATH\tSCHEMA\tTABLES\tSOURCE\tSERVER\tDOLLY\tCREATED")
 	for _, r := range recs {
 		created := ""
 		if !r.CreatedAt.IsZero() {
@@ -114,8 +114,16 @@ func runDumpList(args []string) (err error) {
 		if schema == "" {
 			schema = "?"
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\t%s\n",
-			r.Seq, r.Path, schema, r.TableCount, source, created)
+		serverVer := r.ServerVersion
+		if serverVer == "" {
+			serverVer = "-"
+		}
+		dollyVer := r.DollyVersion
+		if dollyVer == "" {
+			dollyVer = "-"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			r.Seq, r.Path, schema, r.TableCount, source, serverVer, dollyVer, created)
 	}
 	return w.Flush()
 }

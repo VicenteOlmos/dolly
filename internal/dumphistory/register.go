@@ -22,7 +22,7 @@ func RecordFromMetadata(baseDir string, seq int, outputDir, sourceDB string, sch
 	if meta.Provenance != nil && meta.Provenance.TableCount > 0 {
 		tableCount = meta.Provenance.TableCount
 	}
-	return Record{
+	rec := Record{
 		Seq:            seq,
 		BaseDir:        baseDir,
 		Path:           outputDir,
@@ -33,4 +33,9 @@ func RecordFromMetadata(baseDir string, seq int, outputDir, sourceDB string, sch
 		TableCount:     tableCount,
 		RowEstimate:    rowEst,
 	}
+	if meta.Provenance != nil {
+		rec.ServerVersion = meta.Provenance.ServerVersion
+		rec.DollyVersion = meta.Provenance.DollyVersion
+	}
+	return rec
 }
