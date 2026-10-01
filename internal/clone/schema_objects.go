@@ -619,7 +619,7 @@ func loadIndexes(ctx context.Context, q *sql.DB, schemas []string) ([]indexRow, 
 		    FROM pg_constraint con
 		    INNER JOIN pg_class c ON c.oid = con.conrelid
 		    INNER JOIN pg_namespace n ON n.oid = c.relnamespace
-		    WHERE con.contype IN ('p', 'u')
+		    WHERE con.contype IN ('p', 'u', 'x')
 		      AND n.nspname = i.schemaname
 		      AND c.relname = i.tablename
 		      AND con.conname = i.indexname

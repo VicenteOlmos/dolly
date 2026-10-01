@@ -668,6 +668,17 @@ func TestFormatCreateTablePartitionAndGenerated(t *testing.T) {
 	if got != want {
 		t.Fatalf("child SQL =\n%s\nwant\n%s", got, want)
 	}
+
+	pk := primaryConstraint{name: "events_2024_pkey", columns: []string{"id"}}
+	got, err = formatCreateTable(child, cols, &pk, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `CREATE TABLE "public"."events_2024" PARTITION OF "public"."events" (CONSTRAINT "events_2024_pkey" PRIMARY KEY ("id")) FOR VALUES FROM (1) TO (2)`
+	if got != want {
+		t.Fatalf("partition local primary key SQL =\n%s\nwant\n%s", got, want)
+	}
+
 	child.RelKind = "p"
 	child.PartitionBy = "LIST (total)"
 	cols[0].defaultExpr = sql.NullString{String: "42", Valid: true}
@@ -869,6 +880,28 @@ func TestFormatCreateTableDeferrablePrimary(t *testing.T) {
 		if strings.Contains(got, `PRIMARY KEY ("id")`) && strings.Count(got, "PRIMARY KEY") > 1 {
 			t.Fatalf("%s: duplicate inline primary key: %q", tt.name, got)
 		}
+	}
+}
+
+func TestLoadIndexesQueryOmitsExclusionBackingIndex(t *testing.T) {
+	src, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+
+	mock.ExpectQuery(`contype IN \('p', 'u', 'x'\)`).
+		WillReturnRows(sqlmock.NewRows([]string{"schemaname", "tablename", "indexname", "indexdef", "inherited"}))
+
+	indexes, err := loadIndexes(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(indexes) != 0 {
+		t.Fatalf("indexes = %+v", indexes)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

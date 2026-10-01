@@ -663,6 +663,7 @@ func mergePrimaryConstraintDeferrability(ctx context.Context, q *sql.DB, schemas
 		INNER JOIN pg_class c ON c.oid = con.conrelid
 		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE con.contype = 'p'
+		  AND con.conparentid = 0
 		  AND n.nspname IN (%s)
 	`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -689,12 +690,16 @@ func mergePrimaryConstraintDeferrability(ctx context.Context, q *sql.DB, schemas
 	}
 	for key, pk := range primaryMap {
 		if pk == nil {
+			delete(primaryMap, key)
 			continue
 		}
-		if d, ok := deferBy[deferKey{key, pk.name}]; ok {
-			pk.deferrable = d.deferrable
-			pk.deferred = d.deferred
+		d, ok := deferBy[deferKey{key, pk.name}]
+		if !ok {
+			delete(primaryMap, key)
+			continue
 		}
+		pk.deferrable = d.deferrable
+		pk.deferred = d.deferred
 	}
 	return nil
 }
@@ -902,6 +907,9 @@ func formatCreateTable(table db.Table, cols []schemaColumn, primary *primaryCons
 			if c.defaultExpr.Valid && c.defaultExpr.String != "" && c.generatedExpr == "" {
 				local = append(local, fmt.Sprintf("%s WITH OPTIONS DEFAULT %s", quoteIdentifier(c.name), c.defaultExpr.String))
 			}
+		}
+		if primary != nil && len(primary.columns) > 0 {
+			local = append(local, formatTablePrimaryKeyConstraint(*primary))
 		}
 		for _, chk := range checks {
 			local = append(local, formatTableCheckConstraint(chk.name, chk.def))
