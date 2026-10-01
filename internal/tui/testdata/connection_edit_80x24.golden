@@ -11,10 +11,10 @@
 │ > 1 connect                ││ Password: ********                        │
 │   2 schema                 ││ SSLMODE:                                  │
 │   3 dump                   ││ Channel binding:                          │
-│   4 clone                  ││ Schemas: app, billing                     │
-│   5 config                 ││                                           │
-│                            ││                                           │
-│                            ││                                           │
+│   4 clone                  ││ SSL root cert:                            │
+│   5 config                 ││ SSL cert:                                 │
+│                            ││ SSL key:                                  │
+│                            ││ Schemas: app, billing                     │
 │                            ││                                           │
 │                            ││                                           │
 ╰────────────────────────────╯╰───────────────────────────────────────────╯

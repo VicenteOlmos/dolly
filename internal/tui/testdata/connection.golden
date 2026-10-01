@@ -9,9 +9,9 @@
 │            dolly           ││ Password:                                 │
 │                            ││ SSLMODE:                                  │
 │ > 1 connect                ││ Channel binding:                          │
-│   2 schema                 ││                                           │
-│   3 dump                   ││                                           │
-│   4 clone                  ││                                           │
+│   2 schema                 ││ SSL root cert:                            │
+│   3 dump                   ││ SSL cert:                                 │
+│   4 clone                  ││ SSL key:                                  │
 │   5 config                 ││                                           │
 │                            ││                                           │
 │                            ││                                           │

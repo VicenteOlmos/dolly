@@ -27,6 +27,9 @@ func draftFromConnection(c connections.Connection) ConnectionDraft {
 		Password:       c.Password,
 		SSLMODE:        c.SSLMODE,
 		ChannelBinding: c.ChannelBinding,
+		SSLRootCert:    c.SSLRootCert,
+		SSLCert:        c.SSLCert,
+		SSLKey:         c.SSLKey,
 	}
 }
 
@@ -40,6 +43,9 @@ func connectionFromDraft(d ConnectionDraft, name string, schemas []string) conne
 		Password:       d.Password,
 		SSLMODE:        d.SSLMODE,
 		ChannelBinding: d.ChannelBinding,
+		SSLRootCert:    d.SSLRootCert,
+		SSLCert:        d.SSLCert,
+		SSLKey:         d.SSLKey,
 		Schemas:        append([]string(nil), schemas...),
 	}
 }
