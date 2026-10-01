@@ -30,6 +30,31 @@ func TestParseRestoreFlags(t *testing.T) {
 	}
 }
 
+func TestParseRestoreFlagsSchemas(t *testing.T) {
+	got, err := parseRestoreFlags([]string{
+		"--dsn", "postgres://h-a/db_a",
+		"--input", "/tmp/in",
+		"--schemas", "app, billing",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SchemasSet || len(got.Schemas) != 2 || got.Schemas[0] != "app" || got.Schemas[1] != "billing" {
+		t.Fatalf("schemas = %v set=%v", got.Schemas, got.SchemasSet)
+	}
+}
+
+func TestResolveRestoreSchemasPrecedence(t *testing.T) {
+	got := resolveRestoreSchemas(true, []string{"cli"}, []string{"profile"})
+	if len(got) != 1 || got[0] != "cli" {
+		t.Fatalf("got %v", got)
+	}
+	got = resolveRestoreSchemas(false, nil, []string{"profile"})
+	if len(got) != 1 || got[0] != "profile" {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestParseRestoreFlagsReplaceConflict(t *testing.T) {
 	_, err := parseRestoreFlags([]string{
 		"--dsn", "postgres://h-a/db_a",
@@ -130,7 +155,7 @@ func TestParseRestoreFlagsHelp(t *testing.T) {
 					t.Fatalf("err = %v, want errHelp", err)
 				}
 			})
-			for _, sub := range []string{"--dsn", "--connection", "--input", "--on-conflict"} {
+			for _, sub := range []string{"--dsn", "--connection", "--input", "--schemas", "--on-conflict"} {
 				if !strings.Contains(out, sub) {
 					t.Fatalf("restore usage missing %q:\n%s", sub, out)
 				}
@@ -186,6 +211,53 @@ func TestRunRestoreConnectionPassesSchemasToRestore(t *testing.T) {
 	got := restore.InspectSchemas(captured...)
 	if len(got) != 1 || got[0] != "app" {
 		t.Fatalf("schemas = %v, want [app]", got)
+	}
+}
+
+func TestRunRestoreSchemasFlagOverridesProfile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DOLLY_CONNECTIONS_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	cfg := config.DefaultConfig()
+	cfg.SaveConnections = true
+	store, err := connections.OpenStore(cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(connections.Connection{
+		Name: "prod", Host: "h-a", Port: "5432", Database: "db_a",
+		User: "u", Password: "p", Schemas: []string{"profile_only"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldLoad := restoreLoadConfig
+	restoreLoadConfig = func(string) (*config.Config, error) {
+		c := config.DefaultConfig()
+		c.SaveConnections = true
+		return c, nil
+	}
+	t.Cleanup(func() { restoreLoadConfig = oldLoad })
+
+	var captured []restore.Option
+	oldRestore := restoreRestore
+	restoreRestore = func(_ context.Context, _ *sql.DB, _ string, opts ...restore.Option) error {
+		captured = opts
+		return errors.New("stop after capture")
+	}
+	t.Cleanup(func() { restoreRestore = oldRestore })
+
+	oldPing := restorePingContext
+	restorePingContext = func(*sql.DB, context.Context) error { return nil }
+	t.Cleanup(func() { restorePingContext = oldPing })
+
+	t.Chdir(dir)
+	err = runRestore([]string{"--connection", "prod", "--input", t.TempDir(), "--schemas", "cli_only"})
+	if err == nil || !strings.Contains(err.Error(), "stop after capture") {
+		t.Fatalf("runRestore err = %v", err)
+	}
+	got := restore.InspectSchemas(captured...)
+	if len(got) != 1 || got[0] != "cli_only" {
+		t.Fatalf("schemas = %v, want [cli_only]", got)
 	}
 }
 
