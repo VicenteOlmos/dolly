@@ -168,8 +168,8 @@ Copyable recipes for each mode are in [Common workflows and limits](#common-work
 | `dolly dump` | Export data to numbered NDJSON dump directories. Schema scope: `--schemas` (comma-separated) overrides saved connection profile schemas, then `dump.schemas` in config, then `public`. Refuses when the effective schema scope has no tables. |
 | `dolly dump --percent N` | Subset dump: recent roots plus FK closure; output can exceed `N%`. Empty schema scope fails closed; nonempty scope with no eligible percent roots reports a candidate-root diagnostic. |
 | `dolly dump list` | List local dump history without a database connection. |
-| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. `ALWAYS` identity columns use `INSERT ... OVERRIDING SYSTEM VALUE` on the row-by-row path; COPY keeps identity columns in the column list. |
-| `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. |
+| `dolly restore` | Load a Dolly dump into PostgreSQL. Refuses zero-table dumps before any database mutation. `--schemas` overrides saved connection profile schemas. `ALWAYS` identity columns use `INSERT ... OVERRIDING SYSTEM VALUE` on the row-by-row path; COPY keeps identity columns in the column list. |
+| `dolly clone` | Clone with `schema-replay`, `template`, `logical-stream`, or `physical-backup`. CLI flags `--replace`, `--on-conflict`, `--skip-create`, and `--dump-dir` override matching `clone.*` config keys for that run. |
 | `dolly config` | Create or inspect `config.jsonc` with `init` and `show`. |
 | `dolly update` | Install the latest stable GitHub release (`--check` verifies without replacing; Windows defers replacement to a hidden helper). |
 | `dolly version` | Print build version. |

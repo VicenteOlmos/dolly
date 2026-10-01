@@ -29,8 +29,16 @@ type cloneFlags struct {
 	FastForward       bool
 	Strategy          string
 	TargetDir         string
+	DumpDir           string
+	DumpDirSet        bool
 	Connection        string
 	Schemas           []string
+	Replace           bool
+	ReplaceSet        bool
+	OnConflict        string
+	OnConflictSet     bool
+	SkipCreate        bool
+	SkipCreateSet     bool
 	Yes               bool
 	JSON              bool
 	IncludePrivileges bool
@@ -42,7 +50,11 @@ func cloneFlagSet(flags *cloneFlags, schemasRaw *string) *flag.FlagSet {
 	fs.BoolVar(&flags.FastForward, "ff", false, "fast-forward: skip prompts and use config defaults")
 	fs.StringVar(&flags.Strategy, "strategy", "", "clone strategy: template, schema-replay, logical-stream (large single-DB), physical-backup")
 	fs.StringVar(&flags.TargetDir, "target-dir", "", "target data directory for physical-backup clone (pg_basebackup -D)")
+	fs.StringVar(&flags.DumpDir, "dump-dir", "", "intermediate dump directory for schema-replay clone (overrides clone.dump_dir config)")
 	fs.StringVar(&flags.Connection, "connection", "", "saved connection profile name (requires save_connections in config.jsonc)")
+	fs.BoolVar(&flags.Replace, "replace", false, "truncate target tables before restore (overrides clone.replace config)")
+	fs.StringVar(&flags.OnConflict, "on-conflict", "", "restore row conflict policy: error, skip, upsert (overrides clone.restore_on_conflict config)")
+	fs.BoolVar(&flags.SkipCreate, "skip-create", false, "skip creating the target database (overrides clone.skip_create config)")
 	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive operations (required with -ff when clone.replace=true)")
 	fs.BoolVar(&flags.IncludePrivileges, "with-privileges", false, "schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
@@ -66,7 +78,28 @@ func parseCloneFlags(args []string) (cloneFlags, error) {
 	if err := fs.Parse(args); err != nil {
 		return flags, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "replace":
+			flags.ReplaceSet = true
+		case "on-conflict":
+			flags.OnConflictSet = true
+		case "skip-create":
+			flags.SkipCreateSet = true
+		case "dump-dir":
+			flags.DumpDirSet = true
+		}
+	})
 	flags.Schemas = parseCommaSeparatedSchemas(schemasRaw)
+
+	if flags.OnConflictSet {
+		if _, err := restore.ParseConflictPolicy(flags.OnConflict); err != nil {
+			return flags, fmt.Errorf("invalid --on-conflict %q: %w", flags.OnConflict, err)
+		}
+	}
+	if flags.ReplaceSet && flags.OnConflictSet && flags.Replace && flags.OnConflict != "" && flags.OnConflict != "error" {
+		return flags, errors.New("--replace cannot be combined with --on-conflict other than error")
+	}
 
 	if flags.Connection != "" && !flags.FastForward {
 		return flags, errors.New("--connection requires -ff (non-interactive fast-forward mode)")
@@ -379,18 +412,31 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		restoreOpts = append(restoreOpts, restore.WithSchemas(schemas))
 	}
 	dumpOpts = append(dumpOpts, dump.SanitizationOptions(cfg.Sanitization.Enabled)...)
-	if cfg.Clone.Replace {
+	replace := cfg.Clone.Replace
+	if flags.ReplaceSet {
+		replace = flags.Replace
+	}
+	onConflict := cfg.Clone.RestoreOnConflict
+	if onConflict == "" {
+		onConflict = "error"
+	}
+	if flags.OnConflictSet {
+		onConflict = flags.OnConflict
+	}
+	policy, err := restore.ParseConflictPolicy(onConflict)
+	if err != nil {
+		return fmt.Errorf("invalid restore_on_conflict %q: %w", onConflict, err)
+	}
+	if replace && policy != restore.ConflictError {
+		return errors.New("restore.replace cannot be combined with restore.on_conflict other than error")
+	}
+	if replace {
 		if !flags.Yes {
-			return errors.New("clone with config clone.replace=true truncates the target; pass --yes to confirm")
+			return errors.New("clone with replace truncates the target; pass --yes to confirm")
 		}
 		fmt.Fprintf(os.Stderr, "info: target database: %s\n", databaseFromDSN(targetURL))
 		restoreOpts = append(restoreOpts, restore.WithReplace())
-	}
-	if cfg.Clone.RestoreOnConflict != "" && cfg.Clone.RestoreOnConflict != "error" {
-		policy, err := restore.ParseConflictPolicy(cfg.Clone.RestoreOnConflict)
-		if err != nil {
-			return fmt.Errorf("invalid restore_on_conflict %q: %w", cfg.Clone.RestoreOnConflict, err)
-		}
+	} else if policy != restore.ConflictError {
 		restoreOpts = append(restoreOpts, restore.WithConflictPolicy(policy))
 	}
 
@@ -419,7 +465,17 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 	if !cfg.Sanitization.Enabled {
 		fmt.Fprintf(os.Stderr, "warning: clone will copy unsanitized data (strategy=%s, sanitization=%v)\n", strategy, cfg.Sanitization.Enabled)
 	}
-	if cfg.Clone.SkipCreate {
+	skipCreate := cfg.Clone.SkipCreate
+	if flags.SkipCreateSet {
+		skipCreate = flags.SkipCreate
+	}
+	dumpDir := cfg.Clone.DumpDir
+	if flags.DumpDirSet {
+		if trimmed := strings.TrimSpace(flags.DumpDir); trimmed != "" {
+			dumpDir = trimmed
+		}
+	}
+	if skipCreate {
 		fmt.Fprintf(os.Stderr, "warning: skip_create may leave partial state on the existing target database if the clone fails\n")
 	}
 
@@ -428,8 +484,8 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		CloneName:         cloneName,
 		TargetDSN:         targetURL,
 		TargetDir:         targetDir,
-		SkipCreate:        cfg.Clone.SkipCreate,
-		DumpDir:           cfg.Clone.DumpDir,
+		SkipCreate:        skipCreate,
+		DumpDir:           dumpDir,
 		DumpOpts:          dumpOpts,
 		RestoreOpts:       restoreOpts,
 		Strategy:          strategy,

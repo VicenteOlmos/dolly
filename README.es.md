@@ -157,8 +157,8 @@ Consulte `dolly dump --help`, `dolly restore --help` y `dolly clone --help` para
 | `dolly dump` | Exporta datos a directorios de volcado NDJSON numerados. |
 | `dolly dump --percent N` | Volcado parcial: raíces recientes más cierre de claves foráneas; la salida puede superar el `N%`. |
 | `dolly dump list` | Enumera el historial local de volcados sin conectarse a una base de datos. |
-| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. Las columnas identity `ALWAYS` usan `INSERT ... OVERRIDING SYSTEM VALUE` en la ruta fila a fila; COPY mantiene esas columnas en la lista explícita. |
-| `dolly clone` | Clona con `schema-replay`, `template`, `logical-stream` o `physical-backup`. |
+| `dolly restore` | Carga un volcado de Dolly en PostgreSQL. `--schemas` anula los esquemas del perfil guardado. Las columnas identity `ALWAYS` usan `INSERT ... OVERRIDING SYSTEM VALUE` en la ruta fila a fila; COPY mantiene esas columnas en la lista explícita. |
+| `dolly clone` | Clona con `schema-replay`, `template`, `logical-stream` o `physical-backup`. Los flags `--replace`, `--on-conflict`, `--skip-create` y `--dump-dir` anulan las claves `clone.*` correspondientes en esa ejecución. |
 | `dolly config` | Crea o inspecciona `config.jsonc` con `init` y `show`. |
 | `dolly version` | Muestra la versión de compilación. |
 
