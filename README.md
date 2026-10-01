@@ -332,7 +332,7 @@ Default `schema-replay` clone recreates schema and object definitions (including
 
 `physical-backup` uses `pg_basebackup`, requires replication privileges, and copies the entire cluster data directory rather than one database. Read [physical backup](docs/physical-backup.md) before using it.
 
-Non-profile `clone -ff` keeps your dotenv or shell `DB_URL` as-is (query params such as `sslmode` stay intact; config may add only `statement_timeout`). When preflight cannot reach the source, the error includes a redacted connection detail before the generic network hint — passwords and full raw DSNs are not printed.
+Non-profile `clone -ff` keeps your dotenv or shell `DB_URL` as-is (query params such as `sslmode` stay intact; config may add session parameters such as `statement_timeout` and `application_name`). When preflight cannot reach the source, the error includes a redacted connection detail before the generic network hint — passwords and full raw DSNs are not printed.
 
 ## Safety
 
@@ -362,6 +362,8 @@ Saved connections are off by default. Enable them explicitly:
 ```
 
 Then CLI commands can use `--connection <name>` instead of `--dsn`. Project-scoped stores are convenient but easier to commit by accident; encrypted stores need `DOLLY_CONNECTIONS_KEY`, and losing that key loses access to encrypted profiles.
+
+The `db` section sets connection pool size and PostgreSQL session parameters injected into CLI and TUI connections: `max_open_conns`, `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, and `application_name` (default `dolly`). Timeout fields use Go duration strings; set them to `""` or `"0"` to disable. `application_name` must not contain carriage return, line feed, or `=`.
 
 `dump`, `restore`, `clone`, `version`, and `update` accept `--json`:
 

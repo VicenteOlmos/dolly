@@ -154,7 +154,18 @@
 
     // Abort queries exceeding this duration (Go duration string, default "5min").
     // Set to "" or "0" to disable.
-    "statement_timeout": "5min"
+    "statement_timeout": "5min",
+
+    // Abort lock waits exceeding this duration (Go duration string).
+    // Set to "" or "0" to disable.
+    "lock_timeout": "",
+
+    // End idle-in-transaction sessions after this duration (Go duration string).
+    // Set to "" or "0" to disable.
+    "idle_in_transaction_session_timeout": "",
+
+    // PostgreSQL application_name on every connection (default "dolly").
+    "application_name": "dolly"
   },
 
   // ── TUI ──────────────────────────────────────────────────────────────────

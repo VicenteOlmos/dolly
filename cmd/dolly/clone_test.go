@@ -474,8 +474,8 @@ func TestRunCloneFFDefaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedOpts.SourceDSN != "postgres://u:p@h-a:5432/db_a?channel_binding=require&sslmode=verify-full&statement_timeout=5min" {
-		t.Fatalf("SourceDSN = %q, want %q", capturedOpts.SourceDSN, "postgres://u:p@h-a:5432/db_a?channel_binding=require&sslmode=verify-full&statement_timeout=5min")
+	if capturedOpts.SourceDSN != "postgres://u:p@h-a:5432/db_a?application_name=dolly&channel_binding=require&sslmode=verify-full&statement_timeout=5min" {
+		t.Fatalf("SourceDSN = %q, want %q", capturedOpts.SourceDSN, "postgres://u:p@h-a:5432/db_a?application_name=dolly&channel_binding=require&sslmode=verify-full&statement_timeout=5min")
 	}
 	if capturedOpts.CloneName != "db_a_dolly_1" {
 		t.Fatalf("CloneName = %q, want %q", capturedOpts.CloneName, "db_a_dolly_1")
@@ -624,8 +624,8 @@ func TestRunCloneFFCustomTargetURL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedOpts.TargetDSN != "postgres://u:p@h-b:5432/otherdb?statement_timeout=5min" {
-		t.Fatalf("TargetDSN = %q, want %q", capturedOpts.TargetDSN, "postgres://u:p@h-b:5432/otherdb?statement_timeout=5min")
+	if capturedOpts.TargetDSN != "postgres://u:p@h-b:5432/otherdb?application_name=dolly&statement_timeout=5min" {
+		t.Fatalf("TargetDSN = %q, want %q", capturedOpts.TargetDSN, "postgres://u:p@h-b:5432/otherdb?application_name=dolly&statement_timeout=5min")
 	}
 	if capturedOpts.CloneName != "db_a_dolly_1" {
 		t.Fatalf("CloneName = %q, want %q", capturedOpts.CloneName, "db_a_dolly_1")
@@ -881,8 +881,8 @@ func TestRunClonePromptPath(t *testing.T) {
 	if capturedOpts.CloneName != "db_clone_x" {
 		t.Fatalf("CloneName = %q, want %q", capturedOpts.CloneName, "db_clone_x")
 	}
-	if capturedOpts.TargetDSN != "postgres://u:p@h-b:5432/db_tgt?statement_timeout=5min" {
-		t.Fatalf("TargetDSN = %q, want %q", capturedOpts.TargetDSN, "postgres://u:p@h-b:5432/db_tgt?statement_timeout=5min")
+	if capturedOpts.TargetDSN != "postgres://u:p@h-b:5432/db_tgt?application_name=dolly&statement_timeout=5min" {
+		t.Fatalf("TargetDSN = %q, want %q", capturedOpts.TargetDSN, "postgres://u:p@h-b:5432/db_tgt?application_name=dolly&statement_timeout=5min")
 	}
 	if capturedOpts.Strategy != "template" {
 		t.Fatalf("Strategy = %q, want %q", capturedOpts.Strategy, "template")
@@ -1013,8 +1013,8 @@ func TestRunClonePromptPathDefaultTargetURL(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if capturedOpts.TargetDSN != "postgres://u:p@h-b:5432/db_cfg?statement_timeout=5min" {
-		t.Fatalf("TargetDSN = %q, want %q", capturedOpts.TargetDSN, "postgres://u:p@h-b:5432/db_cfg?statement_timeout=5min")
+	if capturedOpts.TargetDSN != "postgres://u:p@h-b:5432/db_cfg?application_name=dolly&statement_timeout=5min" {
+		t.Fatalf("TargetDSN = %q, want %q", capturedOpts.TargetDSN, "postgres://u:p@h-b:5432/db_cfg?application_name=dolly&statement_timeout=5min")
 	}
 	if capturedOpts.Strategy != "streaming-copy" {
 		t.Fatalf("Strategy = %q, want %q", capturedOpts.Strategy, "streaming-copy")
@@ -1064,7 +1064,7 @@ func TestRunCloneInteractiveNoDotEnvManual(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if capturedOpts.SourceDSN != "postgres://u:p@h-a:5432/db_a?channel_binding=require&sslmode=verify-full&statement_timeout=5min" {
+	if capturedOpts.SourceDSN != "postgres://u:p@h-a:5432/db_a?application_name=dolly&channel_binding=require&sslmode=verify-full&statement_timeout=5min" {
 		t.Fatalf("SourceDSN = %q, want manual URL", capturedOpts.SourceDSN)
 	}
 	if capturedOpts.CloneName != "db_a_dolly_1" {
@@ -1793,7 +1793,7 @@ func TestRunCloneFFDotenvSource(t *testing.T) {
 				return captured
 			},
 			checkLeak: []string{"secret", rawShellURL},
-			wants:     []string{"sslmode=disable", "connect_timeout=3", "application_name=clone", "statement_timeout=5min"},
+			wants:     []string{"sslmode=disable", "connect_timeout=3", "application_name=dolly", "statement_timeout=5min"},
 			rejects:   []string{"sslmode=verify-full"},
 		},
 		{
@@ -1818,7 +1818,7 @@ func TestRunCloneFFDotenvSource(t *testing.T) {
 				useRealLoadDotEnv(t)
 				return captured
 			},
-			wants: []string{"sslmode=disable", "channel_binding=prefer", "statement_timeout=5min", "file-host:5433/filedb"},
+			wants: []string{"sslmode=disable", "channel_binding=prefer", "application_name=dolly", "statement_timeout=5min", "file-host:5433/filedb"},
 		},
 		{
 			name: "component_fallback",
@@ -2058,7 +2058,7 @@ func TestRunCloneFFBroadCwdDotenvNonMutating(t *testing.T) {
 	if n := strings.Count(stderr, broadDotenvWarning); n != 1 {
 		t.Fatalf("want exactly one broad dotenv warning, got %d in %q", n, stderr)
 	}
-	assertContainsAll(t, captured.SourceDSN, "sslmode=disable", "h-a:5432/db_a", "statement_timeout=5min", "dotenv-user")
+	assertContainsAll(t, captured.SourceDSN, "sslmode=disable", "h-a:5432/db_a", "statement_timeout=5min", "application_name=dolly", "dotenv-user")
 	assertCwdDotenvUnchanged(t, envPath, before)
 }
 
