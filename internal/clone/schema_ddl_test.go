@@ -437,16 +437,19 @@ func TestCommentTargetFunctionAndIndex(t *testing.T) {
 	if idx != wantIdx {
 		t.Fatalf("index target = %q, want %q", idx, wantIdx)
 	}
-	if got := commentTarget("operator", "app", "=(integer, integer)", ""); got != `OPERATOR "app"."="(integer, integer)` {
+	if got := commentTarget("operator", "app", "=(integer, integer)", ""); got != `OPERATOR "app".=(integer, integer)` {
 		t.Fatalf("operator target = %q", got)
 	}
-	if got := formatCommentOn("operator", "app", "=(integer, integer)", "", "commutative"); got != `COMMENT ON OPERATOR "app"."="(integer, integer) IS 'commutative'` {
+	if got := formatCommentOn("operator", "app", "=(integer, integer)", "", "commutative"); got != `COMMENT ON OPERATOR "app".=(integer, integer) IS 'commutative'` {
 		t.Fatalf("operator comment = %q", got)
 	}
-	if got := commentTarget("cast", "", "(app.status_enum AS text)", ""); got != `CAST (app.status_enum AS text)` {
+	if got := commentTarget("operator", "app", "!(NONE, integer)", ""); got != `OPERATOR "app".!(NONE, integer)` {
+		t.Fatalf("prefix operator target = %q", got)
+	}
+	if got := commentTarget("cast", "", `("app"."status_enum" AS text)`, ""); got != `CAST ("app"."status_enum" AS text)` {
 		t.Fatalf("cast target = %q", got)
 	}
-	if got := formatCommentOn("cast", "", "(app.status_enum AS text)", "", "enum to text"); got != `COMMENT ON CAST (app.status_enum AS text) IS 'enum to text'` {
+	if got := formatCommentOn("cast", "", `("app"."status_enum" AS text)`, "", "enum to text"); got != `COMMENT ON CAST ("app"."status_enum" AS text) IS 'enum to text'` {
 		t.Fatalf("cast comment = %q", got)
 	}
 	if got := formatCommentOn("publication", "", "orders_pub", "", "order changes"); got != `COMMENT ON PUBLICATION "orders_pub" IS 'order changes'` {

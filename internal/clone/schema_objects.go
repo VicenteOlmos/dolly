@@ -1277,10 +1277,17 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		INNER JOIN pg_operator o ON o.oid = d.objoid
 		INNER JOIN pg_namespace n ON n.oid = o.oprnamespace
 		WHERE d.classoid = 'pg_operator'::regclass AND d.objsubid = 0
+		  AND o.oprleft <> 0 AND o.oprright <> 0
 		  AND n.nspname IN (%s)
 		UNION ALL
 		SELECT 'cast', '',
-		       '(' || format_type(c.castsource, NULL) || ' AS ' || format_type(c.casttarget, NULL) || ')',
+		       '(' ||
+		         CASE WHEN src_ns.nspname = 'pg_catalog' THEN format_type(c.castsource, NULL)
+		              ELSE quote_ident(src_ns.nspname) || '.' || quote_ident(src_t.typname) END ||
+		         ' AS ' ||
+		         CASE WHEN tgt_ns.nspname = 'pg_catalog' THEN format_type(c.casttarget, NULL)
+		              ELSE quote_ident(tgt_ns.nspname) || '.' || quote_ident(tgt_t.typname) END ||
+		         ')',
 		       '', d.description
 		FROM pg_description d
 		INNER JOIN pg_cast c ON c.oid = d.objoid
@@ -1306,8 +1313,13 @@ func loadComments(ctx context.Context, q *sql.DB, schemas []string) ([]commentRo
 		      JOIN pg_namespace n ON n.oid = c.relnamespace
 		      WHERE pr.prpubid = p.oid AND n.nspname IN (%s)
 		    )
+		    OR EXISTS (
+		      SELECT 1 FROM pg_publication_namespace pn
+		      JOIN pg_namespace n ON n.oid = pn.pnnspid
+		      WHERE pn.pnpubid = p.oid AND n.nspname IN (%s)
+		    )
 		  )
-		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
+		ORDER BY 1, 2, 3, 4`, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)

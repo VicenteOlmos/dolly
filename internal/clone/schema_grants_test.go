@@ -328,6 +328,78 @@ func (c *commentErrExec) ExecContext(context.Context, string, ...any) (sql.Resul
 	return nil, c.err
 }
 
+func TestLoadCommentsUnaryOperatorFilterMatchesLoadOperators(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`INNER JOIN pg_operator o ON o\.oid = d\.objoid[\s\S]*o\.oprleft <> 0 AND o\.oprright <> 0`).WillReturnRows(
+		sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}))
+	comments, err := loadComments(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 0 {
+		t.Fatalf("expected no comments, got %d", len(comments))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadCastCommentUsesSchemaQualifiedTypes(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`quote_ident\(src_ns\.nspname\)[\s\S]*pg_cast c ON c\.oid = d\.objoid`).WillReturnRows(
+		sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).
+			AddRow("cast", "", `("app"."status_enum" AS text)`, "", "enum to text"))
+	comments, err := loadComments(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyComments(context.Background(), rec, comments); err != nil {
+		t.Fatal(err)
+	}
+	want := `COMMENT ON CAST ("app"."status_enum" AS text) IS 'enum to text';` + "\n"
+	if got := rec.String(); got != want {
+		t.Fatalf("comment SQL = %q, want %q", got, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadPublicationCommentIncludesSchemaScopedPublications(t *testing.T) {
+	src, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = src.Close() })
+	mock.ExpectQuery(`INNER JOIN pg_publication p ON p\.oid = d\.objoid[\s\S]*pg_publication_namespace pn`).WillReturnRows(
+		sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).
+			AddRow("publication", "", "app_schema_pub", "", "all tables in app"))
+	comments, err := loadComments(context.Background(), src, []string{"app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &scriptExec{}
+	if err := applyComments(context.Background(), rec, comments); err != nil {
+		t.Fatal(err)
+	}
+	want := `COMMENT ON PUBLICATION "app_schema_pub" IS 'all tables in app';` + "\n"
+	if got := rec.String(); got != want {
+		t.Fatalf("comment SQL = %q, want %q", got, want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadConstraintCommentsOnlyForReplayedConstraints(t *testing.T) {
 	src, mock, err := sqlmock.New()
 	if err != nil {

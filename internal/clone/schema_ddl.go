@@ -567,10 +567,10 @@ func commentTarget(kind, schema, object, column string) string {
 		target := "OPERATOR "
 		name, argList, ok := strings.Cut(object, "(")
 		if !ok || !strings.HasSuffix(argList, ")") {
-			return target + quoteQualifiedType(schema, object)
+			return target + formatOperatorCommentRef(schema, object)
 		}
 		argList = strings.TrimSuffix(argList, ")")
-		return target + quoteQualifiedType(schema, name) + "(" + argList + ")"
+		return target + formatOperatorCommentRef(schema, name) + "(" + argList + ")"
 	case "cast":
 		return "CAST " + object
 	case "publication":
@@ -578,6 +578,35 @@ func commentTarget(kind, schema, object, column string) string {
 	default:
 		return "TABLE " + quoteQualifiedTable(schema, object)
 	}
+}
+
+// formatOperatorCommentRef builds schema.operator for COMMENT ON OPERATOR.
+// Operator symbols (!, =, +, …) must not be quoted; plain identifiers may be.
+func formatOperatorCommentRef(schema, name string) string {
+	return quoteIdentifier(schema) + "." + operatorCommentName(name)
+}
+
+func operatorCommentName(name string) string {
+	if isSimpleSQLIdentifier(name) {
+		return quoteIdentifier(name)
+	}
+	return name
+}
+
+func isSimpleSQLIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_' || r == '$':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // formatSecurityLabel emits SECURITY LABEL FOR provider ON TABLE/COLUMN.
