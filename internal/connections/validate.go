@@ -17,10 +17,12 @@ func ValidateConnectionsConfig(cfg *config.Config, cwd string) error {
 		return nil
 	}
 	scope := strings.TrimSpace(cfg.Connections.Scope)
+	cfg.Connections.Scope = scope
 	if scope != "" && scope != "project" && scope != "xdg" {
 		return fmt.Errorf("unknown connections.scope %q (supported: project, xdg)", scope)
 	}
 	path := strings.TrimSpace(cfg.Connections.Path)
+	cfg.Connections.Path = path
 	if path == "" {
 		return nil
 	}
@@ -52,17 +54,32 @@ func validateConnectionsParentDir(parent string) error {
 	if !os.IsNotExist(err) {
 		return fmt.Errorf("connections.path: parent %q: %w", parent, err)
 	}
-	grandParent := filepath.Dir(parent)
-	if grandParent == parent {
-		return fmt.Errorf("connections.path: cannot create parent directory %q", parent)
+	var missing []string
+	cur := parent
+	for {
+		st, statErr := os.Stat(cur)
+		if statErr == nil {
+			if !st.IsDir() {
+				return fmt.Errorf("connections.path: parent %q is not a directory", cur)
+			}
+			break
+		}
+		if !os.IsNotExist(statErr) {
+			return fmt.Errorf("connections.path: parent %q: %w", cur, statErr)
+		}
+		missing = append(missing, cur)
+		parentOf := filepath.Dir(cur)
+		if parentOf == cur {
+			return fmt.Errorf("connections.path: cannot create parent directory %q", parent)
+		}
+		cur = parentOf
 	}
-	if err := validateConnectionsParentDir(grandParent); err != nil {
-		return err
-	}
-	if err := os.Mkdir(parent, 0o700); err != nil {
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("connections.path: cannot create parent directory %q: %w", parent, err)
 	}
-	_ = os.Remove(parent)
+	for _, p := range missing {
+		_ = os.Remove(p)
+	}
 	return nil
 }
 
@@ -76,6 +93,9 @@ func ValidateDSNTLSFiles(dsn string) error {
 	for _, key := range []string{"sslrootcert", "sslcert", "sslkey"} {
 		path := strings.TrimSpace(params.Get(key))
 		if path == "" {
+			continue
+		}
+		if key == "sslrootcert" && path == "system" {
 			continue
 		}
 		f, err := os.Open(path)

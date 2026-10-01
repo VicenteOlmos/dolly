@@ -27,6 +27,18 @@ func TestValidateConnectionsConfigScope(t *testing.T) {
 	}
 }
 
+func TestValidateConnectionsConfigScopeTrimmedOnSave(t *testing.T) {
+	t.Parallel()
+	cfg := config.DefaultConfig()
+	cfg.Connections.Scope = " project "
+	if err := ValidateConnectionsConfig(cfg, t.TempDir()); err != nil {
+		t.Fatalf("ValidateConnectionsConfig = %v", err)
+	}
+	if cfg.Connections.Scope != "project" {
+		t.Fatalf("scope after validate = %q, want trimmed project", cfg.Connections.Scope)
+	}
+}
+
 func TestValidateConnectionsConfigPathParentIsFile(t *testing.T) {
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
@@ -38,6 +50,19 @@ func TestValidateConnectionsConfigPathParentIsFile(t *testing.T) {
 	err := ValidateConnectionsConfig(cfg, dir)
 	if err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("ValidateConnectionsConfig = %v, want parent not directory", err)
+	}
+}
+
+func TestValidateConnectionsConfigPathNestedMissingParents(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Connections.Path = filepath.Join("a", "b", "connections.yaml")
+	if err := ValidateConnectionsConfig(cfg, dir); err != nil {
+		t.Fatalf("ValidateConnectionsConfig = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
+		t.Fatalf("expected probe dirs removed, a still exists")
 	}
 }
 
@@ -54,6 +79,14 @@ func TestValidateDSNTLSFilesMissing(t *testing.T) {
 	err := ValidateDSNTLSFiles(dsn)
 	if err == nil || !strings.Contains(err.Error(), "sslrootcert") || !strings.Contains(err.Error(), "/no/such/root.crt") {
 		t.Fatalf("ValidateDSNTLSFiles = %v, want sslrootcert path error", err)
+	}
+}
+
+func TestValidateDSNTLSFilesSSLRootCertSystem(t *testing.T) {
+	t.Parallel()
+	dsn := "postgres://user@host/db?sslmode=verify-full&sslrootcert=system"
+	if err := ValidateDSNTLSFiles(dsn); err != nil {
+		t.Fatalf("ValidateDSNTLSFiles = %v, want system sentinel allowed", err)
 	}
 }
 
