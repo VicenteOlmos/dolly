@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/VicenteOlmos/dolly/internal/config"
+	"github.com/VicenteOlmos/dolly/internal/dump"
 )
 
 // dumpListSchemaNames lists schema names on the source for dump validation.
@@ -17,6 +18,21 @@ var dumpListSchemaNames = func(ctx context.Context, dsn string) ([]string, error
 type dumpSchemasFlag struct {
 	set    bool
 	values []string
+}
+
+type dumpExcludeSchemasFlag struct {
+	set    bool
+	values []string
+}
+
+func (f *dumpExcludeSchemasFlag) String() string {
+	return strings.Join(f.values, ",")
+}
+
+func (f *dumpExcludeSchemasFlag) Set(s string) error {
+	f.set = true
+	f.values = parseCommaSeparatedSchemas(s)
+	return nil
 }
 
 func (f *dumpSchemasFlag) String() string {
@@ -34,26 +50,7 @@ func (f *dumpSchemasFlag) Set(s string) error {
 }
 
 func normalizeDumpSchemaList(raw []string) ([]string, error) {
-	if len(raw) == 0 {
-		return nil, errors.New("schema list is empty")
-	}
-	seen := make(map[string]struct{}, len(raw))
-	out := make([]string, 0, len(raw))
-	for _, name := range raw {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return nil, errors.New("schema name cannot be empty")
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
-	}
-	if len(out) == 0 {
-		return nil, errors.New("schema list is empty")
-	}
-	return out, nil
+	return dump.NormalizeSchemaList(raw)
 }
 
 func validateDumpSchemasInCatalog(ctx context.Context, dsn string, schemas []string) error {
@@ -99,4 +96,12 @@ func resolveEffectiveDumpSchemas(ctx context.Context, dsn string, cliSet bool, c
 		}
 	}
 	return normalized, nil
+}
+
+func resolveEffectiveExcludeDumpSchemas(excludeSet bool, excludeValues []string, cfg *config.Config) ([]string, error) {
+	return dump.ResolveEffectiveExcludeSchemas(excludeSet, excludeValues, cfg)
+}
+
+func applyDumpSchemaExclusions(schemas, exclude []string) ([]string, error) {
+	return dump.ApplySchemaExclusions(schemas, exclude)
 }

@@ -119,6 +119,57 @@ func TestParseDumpFlagsSchemas(t *testing.T) {
 	}
 }
 
+func TestResolveEffectiveExcludeDumpSchemasFlagOverridesConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Dump.ExcludeSchemas = []string{"config_only"}
+	got, err := resolveEffectiveExcludeDumpSchemas(true, []string{"flag_only"}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "flag_only" {
+		t.Fatalf("got %v", got)
+	}
+	got, err = resolveEffectiveExcludeDumpSchemas(false, nil, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "config_only" {
+		t.Fatalf("config exclude = %v", got)
+	}
+}
+
+func TestApplyDumpSchemaExclusionsEmptyScope(t *testing.T) {
+	_, err := applyDumpSchemaExclusions([]string{"public"}, []string{"public"})
+	if err == nil || !strings.Contains(err.Error(), "empty after applying exclude schemas") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestApplyDumpSchemaExclusionsRemovesSchemas(t *testing.T) {
+	got, err := applyDumpSchemaExclusions([]string{"app", "public", "billing"}, []string{"billing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "app" || got[1] != "public" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestParseDumpFlagsExcludeSchema(t *testing.T) {
+	got, err := parseDumpFlags([]string{
+		"--dsn", "postgres://h/db",
+		"--output", "/tmp/out",
+		"--schemas", "app,public",
+		"--exclude-schema", "public",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ExcludeSchemasSet || len(got.ExcludeSchemas) != 1 || got.ExcludeSchemas[0] != "public" {
+		t.Fatalf("exclude = %v set=%v", got.ExcludeSchemas, got.ExcludeSchemasSet)
+	}
+}
+
 func TestParseDumpFlagsSchemasEmptyRejected(t *testing.T) {
 	_, err := parseDumpFlags([]string{"--dsn", "postgres://h/db", "--output", "/tmp/out", "--schemas", ""})
 	if err == nil {

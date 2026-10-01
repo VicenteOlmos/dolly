@@ -486,3 +486,55 @@ func TestReadMetadataLegacyWithoutStrategies(t *testing.T) {
 		}
 	})
 }
+
+func TestMetadataProvenanceRuntimeFieldsRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	prov := &Provenance{
+		Seq:           1,
+		BaseDir:       "/tmp/base",
+		ServerVersion: "PostgreSQL 16.2",
+		DollyVersion:  "1.4.0",
+		ElapsedMs:     1234,
+	}
+	path, err := writeMetadata(dir, nil, nil, []string{"public"}, nil, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, filepath.Join(dir, "metadata.json")); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadMetadata(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.Provenance == nil {
+		t.Fatal("expected provenance")
+	}
+	if meta.Provenance.ServerVersion != "PostgreSQL 16.2" {
+		t.Fatalf("server_version = %q", meta.Provenance.ServerVersion)
+	}
+	if meta.Provenance.DollyVersion != "1.4.0" {
+		t.Fatalf("dolly_version = %q", meta.Provenance.DollyVersion)
+	}
+	if meta.Provenance.ElapsedMs != 1234 {
+		t.Fatalf("elapsed_ms = %d", meta.Provenance.ElapsedMs)
+	}
+
+	legacy := `{
+		"generated_at": "2026-01-01T00:00:00Z",
+		"schema": "public",
+		"tables": [],
+		"provenance": {"seq": 1, "base_dir": "/tmp", "table_count": 0}
+	}`
+	legacyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(legacyDir, "metadata.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyMeta, err := ReadMetadata(legacyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyMeta.Provenance.ServerVersion != "" || legacyMeta.Provenance.DollyVersion != "" || legacyMeta.Provenance.ElapsedMs != 0 {
+		t.Fatalf("legacy provenance = %+v", legacyMeta.Provenance)
+	}
+}
