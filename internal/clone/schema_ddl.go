@@ -296,8 +296,9 @@ func formatAlterColumnStorage(schema, table, column, storageCode string) (string
 	), true
 }
 
-// formatCreateView emits CREATE [MATERIALIZED] VIEW.
-func formatCreateView(schema, name, definition string, materialized bool) string {
+// formatCreateView emits CREATE [MATERIALIZED] VIEW. Unpopulated materialized
+// views are created WITH NO DATA so replay matches relispopulated on the source.
+func formatCreateView(schema, name, definition string, materialized, populated bool) string {
 	kind := "VIEW"
 	if materialized {
 		kind = "MATERIALIZED VIEW"
@@ -306,12 +307,16 @@ func formatCreateView(schema, name, definition string, materialized bool) string
 	if strings.HasSuffix(def, ";") {
 		def = strings.TrimSuffix(def, ";")
 	}
-	return fmt.Sprintf(
+	stmt := fmt.Sprintf(
 		"CREATE %s %s AS %s",
 		kind,
 		quoteQualifiedTable(schema, name),
 		def,
 	)
+	if materialized && !populated {
+		stmt += " WITH NO DATA"
+	}
+	return stmt
 }
 
 // formatAlterViewOptions emits ALTER VIEW/MATERIALIZED VIEW SET for reloptions

@@ -362,11 +362,15 @@ func TestFormatAlterColumnStorage(t *testing.T) {
 
 func TestFormatCreateView(t *testing.T) {
 	t.Parallel()
-	got := formatCreateView("app", "active_users", "SELECT id FROM users WHERE active", false)
+	got := formatCreateView("app", "active_users", "SELECT id FROM users WHERE active", false, true)
 	if !strings.HasPrefix(got, `CREATE VIEW "app"."active_users" AS `) {
 		t.Fatalf("got %q", got)
 	}
-	gotMat := formatCreateView("app", "mv", "SELECT 1", true)
+	gotMat := formatCreateView("app", "mv", "SELECT 1", true, true)
+	gotEmpty := formatCreateView("app", "mv_empty", "SELECT 1", true, false)
+	if !strings.Contains(gotEmpty, "WITH NO DATA") {
+		t.Fatalf("unpopulated matview = %s", gotEmpty)
+	}
 	if !strings.HasPrefix(gotMat, `CREATE MATERIALIZED VIEW "app"."mv" AS `) {
 		t.Fatalf("got %q", gotMat)
 	}
