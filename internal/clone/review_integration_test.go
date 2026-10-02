@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -156,6 +157,118 @@ func TestCatalogReplayFunctionDefaultsIndexesAndModesPG16(t *testing.T) {
 			t.Fatal(err)
 		}
 		rows.Close()
+	}
+}
+
+func TestEnsureRoleSQLPG16(t *testing.T) {
+	ctx := context.Background()
+	src, _, _, _ := reviewDBPair(t)
+	name := "dolly_it_role_361b"
+	member := "dolly_it_member_361b"
+	drop := func() {
+		_, _ = src.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(member))
+		_, _ = src.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(name))
+	}
+	drop()
+	t.Cleanup(drop)
+	major, err := scanServerMajor(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if major < 16 {
+		t.Skip("GRANT WITH INHERIT requires PostgreSQL 16")
+	}
+	stmt := formatEnsureRole(roleSpec{name: name, inherit: true, login: true, connLimit: -1})
+	if _, err := src.ExecContext(ctx, stmt); err != nil {
+		if isInsufficientPrivilege(err) {
+			t.Skip(err.Error())
+		}
+		t.Fatal(err)
+	}
+	if _, err := src.ExecContext(ctx, stmt); err != nil {
+		t.Fatalf("existing role should be left in place: %v", err)
+	}
+	memberSQL := formatEnsureRole(roleSpec{name: member, inherit: true, connLimit: -1})
+	if _, err := src.ExecContext(ctx, memberSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.ExecContext(ctx, formatGrantRole(roleGrant{parent: name, member: member, inherit: true, set: true}, major)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCatalogReplayHypotheticalAggregatePG16(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	if _, err := src.ExecContext(ctx, `CREATE SCHEMA app;
+		CREATE FUNCTION app.hypo_step(integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 $$;
+		CREATE AGGREGATE app.my_hypo(integer ORDER BY integer) (
+			SFUNC = app.hypo_step, STYPE = integer, INITCOND = '0', HYPOTHETICAL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var kind string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT a.aggkind::text
+		FROM pg_aggregate a
+		JOIN pg_proc p ON p.oid = a.aggfnoid
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = 'app' AND p.proname = 'my_hypo'`).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "h" {
+		t.Fatalf("aggkind = %q, want h", kind)
+	}
+}
+
+func TestCatalogReplayForeignServerPG16(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	if _, err := src.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS postgres_fdw`); err != nil {
+		t.Skipf("postgres_fdw is not available: %v", err)
+	}
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE SERVER app_srv FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host '127.0.0.1', dbname 'postgres', port '5432');
+		CREATE USER MAPPING FOR PUBLIC SERVER app_srv OPTIONS (user 'dolly');
+		CREATE FOREIGN TABLE app.remote (id integer NOT NULL) SERVER app_srv OPTIONS (schema_name 'public', table_name 'remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var srv, fdw string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT srv.srvname, fdw.fdwname
+		FROM pg_foreign_server srv
+		JOIN pg_foreign_data_wrapper fdw ON fdw.oid = srv.srvfdw
+		WHERE srv.srvname = 'app_srv'`).Scan(&srv, &fdw); err != nil {
+		t.Fatal(err)
+	}
+	if srv != "app_srv" || fdw != "postgres_fdw" {
+		t.Fatalf("server = %s fdw = %s", srv, fdw)
+	}
+	var mapping string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT CASE WHEN m.umuser = 0 THEN 'PUBLIC' ELSE m.usename END
+		FROM pg_user_mappings m
+		WHERE m.srvname = 'app_srv'`).Scan(&mapping); err != nil {
+		t.Fatal(err)
+	}
+	if mapping != "PUBLIC" {
+		t.Fatalf("mapping user = %q, want PUBLIC", mapping)
+	}
+	var rel string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT c.relname FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'app' AND c.relname = 'remote' AND c.relkind = 'f'`).Scan(&rel); err != nil {
+		t.Fatal(err)
+	}
+	if rel != "remote" {
+		t.Fatalf("foreign table = %q", rel)
 	}
 }
 
@@ -452,4 +565,171 @@ func TestCatalogReplayRangeCanonicalAndMultirange(t *testing.T) {
 	`).Scan(&slots); err != nil || !strings.Contains(slots, "span_set") {
 		t.Fatalf("slots = %q, err = %v", slots, err)
 	}
+}
+
+func TestApplyClusterGlobalsSkipsExistingAsNonCreateRole(t *testing.T) {
+	ctx := context.Background()
+	src, _, _, tgtDSN := reviewDBPair(t)
+	adminDSN := os.Getenv("DOLLY_TEST_PG_DSN")
+	admin, err := sql.Open("pgx", adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() })
+
+	existing := "dolly_it_existing_361b"
+	plain := "dolly_it_plain_361b"
+	password := "dolly_it_plain_pw"
+	drop := func() {
+		_, _ = admin.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(plain))
+		_, _ = admin.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(existing))
+	}
+	drop()
+	t.Cleanup(drop)
+	if _, err := admin.ExecContext(ctx, `CREATE ROLE `+quoteIdentifier(existing)+` NOLOGIN NOINHERIT`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `GRANT pg_read_all_data TO `+quoteIdentifier(existing)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `CREATE ROLE `+quoteIdentifier(plain)+` LOGIN PASSWORD `+quoteLiteral(password)+` NOSUPERUSER NOCREATEROLE NOCREATEDB`); err != nil {
+		t.Fatal(err)
+	}
+	dbName, err := ParseDBName(tgtDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `GRANT CONNECT ON DATABASE `+quoteIdentifier(dbName)+` TO `+quoteIdentifier(plain)); err != nil {
+		t.Fatal(err)
+	}
+	plainDB, err := sql.Open("pgx", dsnWithUser(t, tgtDSN, plain, password))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { plainDB.Close() })
+	if _, err := plainDB.ExecContext(ctx, `CREATE ROLE dolly_it_should_fail_361b`); err == nil {
+		t.Fatal("plain role created a role")
+	} else if !isInsufficientPrivilege(err) {
+		t.Fatalf("plain CREATE ROLE: %v", err)
+	}
+
+	var noInherit bool
+	if err := src.QueryRowContext(ctx, `SELECT NOT rolinherit FROM pg_roles WHERE rolname = $1`, existing).Scan(&noInherit); err != nil {
+		t.Fatal(err)
+	}
+	if !noInherit {
+		t.Fatal("fixture role should be NOINHERIT")
+	}
+	major, err := scanServerMajor(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var adminOpt, inheritOpt, setOpt bool
+	if major >= 16 {
+		if err := src.QueryRowContext(ctx, `
+			SELECT m.admin_option, m.inherit_option, m.set_option
+			FROM pg_auth_members m
+			JOIN pg_roles g ON g.oid = m.roleid
+			JOIN pg_roles mem ON mem.oid = m.member
+			WHERE g.rolname = 'pg_read_all_data' AND mem.rolname = $1`, existing).Scan(&adminOpt, &inheritOpt, &setOpt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := applyClusterGlobals(ctx, src, plainDB); err != nil {
+		t.Fatal(err)
+	}
+	var noInheritAfter bool
+	if err := src.QueryRowContext(ctx, `SELECT NOT rolinherit FROM pg_roles WHERE rolname = $1`, existing).Scan(&noInheritAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !noInheritAfter {
+		t.Fatal("existing role was altered")
+	}
+	if major >= 16 {
+		var adminOpt2, inheritOpt2, setOpt2 bool
+		if err := src.QueryRowContext(ctx, `
+			SELECT m.admin_option, m.inherit_option, m.set_option
+			FROM pg_auth_members m
+			JOIN pg_roles g ON g.oid = m.roleid
+			JOIN pg_roles mem ON mem.oid = m.member
+			WHERE g.rolname = 'pg_read_all_data' AND mem.rolname = $1`, existing).Scan(&adminOpt2, &inheritOpt2, &setOpt2); err != nil {
+			t.Fatal(err)
+		}
+		if adminOpt2 != adminOpt || inheritOpt2 != inheritOpt || setOpt2 != setOpt {
+			t.Fatalf("membership options changed from %v %v %v to %v %v %v", adminOpt, inheritOpt, setOpt, adminOpt2, inheritOpt2, setOpt2)
+		}
+	}
+}
+
+func TestDuplicateObjectLiteralsPG16(t *testing.T) {
+	ctx := context.Background()
+	src, _, _, _ := reviewDBPair(t)
+	name := "dolly_it_dollar_361b"
+	if _, err := src.ExecContext(ctx, `DROP ROLE IF EXISTS `+quoteIdentifier(name)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = src.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(name))
+	})
+	comment := "keep $dolly$ marker"
+	stmt := formatEnsureRole(roleSpec{
+		name: name, inherit: true, connLimit: -1,
+		comment: sql.NullString{String: comment, Valid: true},
+	})
+	if _, err := src.ExecContext(ctx, stmt); err != nil {
+		if isInsufficientPrivilege(err) {
+			t.Skip(err.Error())
+		}
+		t.Fatal(err)
+	}
+	var got string
+	if err := src.QueryRowContext(ctx, `SELECT pg_catalog.shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = $1`, name).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != comment {
+		t.Fatalf("comment = %q", got)
+	}
+
+	if _, err := src.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS postgres_fdw`); err != nil {
+		t.Skipf("postgres_fdw is not available: %v", err)
+	}
+	srv := "dolly_it_dollar_srv_361b"
+	t.Cleanup(func() {
+		_, _ = src.ExecContext(context.Background(), `DROP SERVER IF EXISTS `+quoteIdentifier(srv)+` CASCADE`)
+	})
+	if _, err := src.ExecContext(ctx, `DROP SERVER IF EXISTS `+quoteIdentifier(srv)+` CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.ExecContext(ctx, `CREATE SERVER `+quoteIdentifier(srv)+` FOREIGN DATA WRAPPER postgres_fdw`); err != nil {
+		t.Fatal(err)
+	}
+	secret := "first\nsecond"
+	mapping := wrapDuplicateObject(formatCreateUserMapping(userMappingDef{
+		server: srv, options: map[string]string{"password": secret},
+	}))
+	if _, err := src.ExecContext(ctx, mapping); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := src.QueryRowContext(ctx, `
+		SELECT opt.option_value
+		FROM pg_user_mapping um
+		JOIN pg_foreign_server s ON s.oid = um.umserver
+		CROSS JOIN LATERAL pg_catalog.pg_options_to_table(um.umoptions) opt
+		WHERE s.srvname = $1 AND opt.option_name = 'password'`, srv).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != secret {
+		t.Fatalf("mapping password = %q", stored)
+	}
+}
+
+func dsnWithUser(t *testing.T, dsn, user, password string) string {
+	t.Helper()
+	u, err := parsePostgresURL(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String()
 }

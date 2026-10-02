@@ -57,7 +57,6 @@ type excludeConstraint struct {
 // order), triggers, rules, comments, grants, and RLS.
 //
 // Limitations (prefer pg_dump when it is on PATH):
-//   - Hypothetical aggregates are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
@@ -341,10 +340,16 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 				return err
 			}
 		}
+		if err := applyRelationTablespaces(ctx, srcDB, tgtDB, schemas, "r", "p"); err != nil {
+			return err
+		}
 	} // end if len(sorted) > 0
 
 	foreignTables, err := loadForeignTables(ctx, srcDB, schemas)
 	if err != nil {
+		return err
+	}
+	if err := applyForeignServers(ctx, srcDB, tgtDB, foreignTables); err != nil {
 		return err
 	}
 	if err := applyForeignTables(ctx, tgtDB, foreignTables); err != nil {
@@ -426,6 +431,11 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	}
 	if err := applyViews(ctx, tgtDB, views); err != nil {
 		return err
+	}
+	if viewsIncludeMaterialized(views) {
+		if err := applyRelationTablespaces(ctx, srcDB, tgtDB, schemas, "m"); err != nil {
+			return err
+		}
 	}
 	if err := applyStatistics(ctx, tgtDB, stats); err != nil {
 		return err

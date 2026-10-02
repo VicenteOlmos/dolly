@@ -248,6 +248,7 @@ func TestPreflightSkipsPermissionQueriesOnCacheHit(t *testing.T) {
 	mock.ExpectPing()
 	mock.ExpectQuery(`SHOW server_version_num`).
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(150002))
+	expectClusterPreflightQueries(mock)
 
 	if _, err := Preflight(context.Background(), opts, &SchemaReplayStrategy{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)

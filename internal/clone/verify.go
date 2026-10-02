@@ -34,17 +34,6 @@ func FormatVerifiedTables(n int) string {
 	return fmt.Sprintf("verified %d tables", n)
 }
 
-func verifyGapWarnings(c SchemaReplayGapCounts) []string {
-	var out []string
-	if c.HypotheticalAggregates > 0 {
-		out = append(out, fmt.Sprintf(
-			"verify: schema-replay did not copy %d hypothetical aggregate(s); pg_dump is required for those objects",
-			c.HypotheticalAggregates,
-		))
-	}
-	return out
-}
-
 // SchemaReplayVerify compares row counts and sequence state between source and target
 // after a successful schema-replay data restore. Mismatches are returned as warnings only.
 func SchemaReplayVerify(ctx context.Context, opts Options, srcDB, tgtDB *sql.DB, usedPgDump bool) ([]string, int, error) {
@@ -57,15 +46,8 @@ func SchemaReplayVerify(ctx context.Context, opts Options, srcDB, tgtDB *sql.DB,
 		schemas = names
 	}
 	scope := canonicalizeEffectiveScope(schemas)
-
+	_ = usedPgDump
 	var warnings []string
-	if !usedPgDump {
-		counts, err := scanSchemaReplayGapCounts(ctx, srcDB, scope)
-		if err != nil {
-			return nil, 0, fmt.Errorf("verify schema gaps: %w", err)
-		}
-		warnings = append(warnings, verifyGapWarnings(counts)...)
-	}
 
 	tables, err := db.LoadPostgresSchemas(ctx, srcDB, schemas)
 	if err != nil {

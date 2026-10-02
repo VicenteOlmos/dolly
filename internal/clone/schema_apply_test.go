@@ -124,6 +124,8 @@ func expectForeignTableCatalog(srcMock sqlmock.Sqlmock) {
 }
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`reltablespace <> 0`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "relkind", "spcname"}))
 	expectForeignTableCatalog(srcMock)
 	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
@@ -179,8 +181,7 @@ func expectClassicInheritCatalog(srcMock sqlmock.Sqlmock) {
 }
 
 func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
-	srcMock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(sqlmock.NewRows([]string{"name", "aggkind"}))
-	srcMock.ExpectQuery(`a\.aggkind IN \('n', 'o'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
+	srcMock.ExpectQuery(`a\.aggkind IN \('n', 'o', 'h'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
 	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
@@ -631,8 +632,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
-	mock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
-	mock.ExpectQuery(`a\.aggkind IN \('n', 'o'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
+	mock.ExpectQuery(`a\.aggkind IN \('n', 'o', 'h'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	mock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(sqlmock.NewRows([]string{"oid", "name", "def"}).AddRow(1, "app.valid_value(integer)", "CREATE FUNCTION app.valid_value(integer) RETURNS boolean LANGUAGE sql AS 'SELECT true'"))
 	mock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(sqlmock.NewRows([]string{"oid", "ref"}))
 	mock.ExpectQuery(`FROM pg_operator`).WillReturnRows(
@@ -676,6 +676,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
 	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized", "populated", "options"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true, true, "fillfactor=70"))
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
+	mock.ExpectQuery(`reltablespace <> 0`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relkind", "spcname"}))
 	mock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`FROM pg_description`).WillReturnRows(sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).
@@ -1158,17 +1159,35 @@ func TestLoadRulesSkipsExtensionOwned(t *testing.T) {
 	}
 }
 
-func TestLoadAggregatesRejectsHypothetical(t *testing.T) {
-	conn, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
+func TestFormatAggregateHypothetical(t *testing.T) {
+	got := formatAggregate(aggregateSpec{
+		schema: "public", name: "my_rank", args: "integer, integer",
+		aggkind: "h", aggNumDirect: 1, stype: "integer", sfuncSchema: "public", sfunc: "hypo_step",
+		parallel: "s", initVal: sql.NullString{String: "0", Valid: true},
+	})
+	want := `CREATE AGGREGATE "public"."my_rank"(integer ORDER BY integer) (SFUNC = "public"."hypo_step", STYPE = integer, INITCOND = '0', PARALLEL = SAFE, HYPOTHETICAL)`
+	if got != want {
+		t.Fatalf("got %s", got)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
-	mock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(
-		sqlmock.NewRows([]string{"name", "aggkind"}).AddRow(`"public"."rank"(integer)`, "h"))
-	_, err = loadAggregates(context.Background(), conn, []string{"public"})
-	if err == nil || !strings.Contains(err.Error(), "hypothetical aggregate") {
-		t.Fatalf("err = %v", err)
+}
+
+func TestFormatAggregateKeepsCatalogOrderBy(t *testing.T) {
+	got := formatAggregate(aggregateSpec{
+		schema: "app", name: "my_hypo", args: "integer ORDER BY integer",
+		aggkind: "h", aggNumDirect: 1, stype: "integer", sfuncSchema: "app", sfunc: "hypo_step",
+		parallel: "u", initVal: sql.NullString{String: "0", Valid: true},
+	})
+	want := `CREATE AGGREGATE "app"."my_hypo"(integer ORDER BY integer) (SFUNC = "app"."hypo_step", STYPE = integer, INITCOND = '0', PARALLEL = UNSAFE, HYPOTHETICAL)`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+	mode := formatAggregate(aggregateSpec{
+		schema: "app", name: "my_mode", args: "ORDER BY integer",
+		aggkind: "o", aggNumDirect: 0, stype: "integer", sfuncSchema: "app", sfunc: "mode_step",
+		parallel: "u",
+	})
+	if !strings.Contains(mode, `"app"."my_mode"(ORDER BY integer)`) || strings.Count(mode, "ORDER BY") != 1 {
+		t.Fatalf("mode = %s", mode)
 	}
 }
 

@@ -3,55 +3,69 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
-// SchemaReplayGapCounts tallies source objects that catalog replay does not copy.
-type SchemaReplayGapCounts struct {
-	HypotheticalAggregates int
-	ForeignTables          int
-}
-
-// SchemaReplayGapWarnings formats non-zero gap counts as preflight warning lines.
-func SchemaReplayGapWarnings(c SchemaReplayGapCounts) []string {
+func clusterPreflightWarnings(ctx context.Context, dbConn *sql.DB) ([]string, error) {
+	var tablespaces int
+	if err := scanGapCount(ctx, dbConn, `
+		SELECT COUNT(*)::bigint
+		FROM pg_tablespace
+		WHERE spcname NOT IN ('pg_default', 'pg_global')`, nil, &tablespaces); err != nil {
+		return nil, fmt.Errorf("count tablespaces: %w", err)
+	}
+	var roles int
+	if err := scanGapCount(ctx, dbConn, `
+		SELECT COUNT(*)::bigint
+		FROM pg_roles
+		WHERE oid >= 16384`, nil, &roles); err != nil {
+		return nil, fmt.Errorf("count roles: %w", err)
+	}
+	var servers int
+	if err := scanGapCount(ctx, dbConn, `
+		SELECT COUNT(*)::bigint
+		FROM pg_foreign_server`, nil, &servers); err != nil {
+		return nil, fmt.Errorf("count foreign servers: %w", err)
+	}
 	var out []string
-	if c.HypotheticalAggregates > 0 {
+	if tablespaces > 0 {
 		out = append(out, fmt.Sprintf(
-			"schema-replay will not copy %d hypothetical aggregate(s); pg_dump is required for those objects",
-			c.HypotheticalAggregates,
+			"schema-replay will create %d tablespace(s) when missing; the location directory must already exist on the target host",
+			tablespaces,
 		))
 	}
-	if c.ForeignTables > 0 {
-		out = append(out, fmt.Sprintf(
-			"schema-replay will recreate %d foreign table(s); their foreign servers must already exist on the target",
-			c.ForeignTables,
-		))
+	if roles > 0 {
+		visible, err := catalogRelationVisible(ctx, dbConn, `SELECT 1 FROM pg_authid WHERE oid >= 16384 LIMIT 1`)
+		if err != nil {
+			return nil, fmt.Errorf("read role passwords: %w", err)
+		}
+		if !visible {
+			out = append(out, "schema-replay cannot read role passwords; missing roles are created without a password")
+		}
 	}
-	return out
-}
-
-func scanSchemaReplayGapCounts(ctx context.Context, dbConn *sql.DB, scope []string) (SchemaReplayGapCounts, error) {
-	var out SchemaReplayGapCounts
-	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
-
-	if err := scanGapCount(ctx, dbConn, `
-		SELECT COUNT(*)::bigint
-		FROM pg_aggregate a
-		INNER JOIN pg_proc p ON p.oid = a.aggfnoid
-		INNER JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE a.aggkind = 'h'
-		`+userSchemaFilter+scopePred, scopeArgs, &out.HypotheticalAggregates); err != nil {
-		return SchemaReplayGapCounts{}, fmt.Errorf("count hypothetical aggregates: %w", err)
-	}
-	if err := scanGapCount(ctx, dbConn, `
-		SELECT COUNT(*)::bigint
-		FROM pg_class c
-		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE c.relkind = 'f'
-		`+userSchemaFilter+userRelationFilter+scopePred, scopeArgs, &out.ForeignTables); err != nil {
-		return SchemaReplayGapCounts{}, fmt.Errorf("count foreign tables: %w", err)
+	if servers > 0 {
+		visible, err := catalogRelationVisible(ctx, dbConn, `SELECT 1 FROM pg_user_mapping LIMIT 1`)
+		if err != nil {
+			return nil, fmt.Errorf("read user mappings: %w", err)
+		}
+		if !visible {
+			out = append(out, "schema-replay cannot read user mapping options; mappings are created without options")
+		}
 	}
 	return out, nil
+}
+
+func catalogRelationVisible(ctx context.Context, dbConn *sql.DB, query string) (bool, error) {
+	var one int
+	err := dbConn.QueryRowContext(ctx, query).Scan(&one)
+	if err == nil || errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if isInsufficientPrivilege(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func scanGapCount(ctx context.Context, dbConn *sql.DB, query string, args []any, dest *int) error {

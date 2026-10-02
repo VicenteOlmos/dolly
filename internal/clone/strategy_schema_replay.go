@@ -132,8 +132,13 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		if err := replaySchemaFromCatalog(ctx, opts, targetDSN); err != nil {
 			return fmt.Errorf("replay schema: %w", err)
 		}
-	} else if err := runner.PipeWithEnv(ctx, env, "pg_dump", srcArgs, "psql", tgtArgs); err != nil {
-		return fmt.Errorf("replay schema: %w", err)
+	} else {
+		if err := applyClusterGlobalsFn(ctx, opts.SourceDSN, targetDSN); err != nil {
+			return fmt.Errorf("create cluster roles and tablespaces: %w", err)
+		}
+		if err := runner.PipeWithEnv(ctx, env, "pg_dump", srcArgs, "psql", tgtArgs); err != nil {
+			return fmt.Errorf("replay schema: %w", err)
+		}
 	}
 
 	// Dump and restore data using existing pipeline.
@@ -261,6 +266,9 @@ func replaySchemaFromCatalog(ctx context.Context, opts Options, targetDSN string
 			return fmt.Errorf("list schemas: %w", err)
 		}
 		schemas = names
+	}
+	if err := applyClusterGlobalsDB(ctx, srcDB, tgtDB); err != nil {
+		return fmt.Errorf("create cluster roles and tablespaces: %w", err)
 	}
 	return applySchemasFromSourceFn(ctx, srcDB, tgtDB, schemas, opts.IncludePrivileges)
 }

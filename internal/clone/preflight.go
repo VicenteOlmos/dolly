@@ -261,16 +261,7 @@ func Preflight(ctx context.Context, opts Options, strat Strategy) ([]string, err
 		}
 	}
 
-	if _, err := schemaToolLookPath("pg_dump"); err == nil {
-		return nil, nil
-	}
-
-	scope := canonicalizeEffectiveScope(SchemasFromOptions(opts))
-	counts, err := scanSchemaReplayGapCounts(ctx, sourceConn, scope)
-	if err != nil {
-		return nil, err
-	}
-	return SchemaReplayGapWarnings(counts), nil
+	return clusterPreflightWarnings(ctx, sourceConn)
 }
 
 func runPermissionChecks(

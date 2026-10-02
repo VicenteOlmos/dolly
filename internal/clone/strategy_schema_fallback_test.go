@@ -18,6 +18,13 @@ func TestSchemaReplayFallsBackWhenPgDumpMissing(t *testing.T) {
 	var gotSchemas []string
 	var gotPriv bool
 	var calls int
+	var clusterCalls int
+	prevCluster := applyClusterGlobalsDB
+	applyClusterGlobalsDB = func(context.Context, *sql.DB, *sql.DB) error {
+		clusterCalls++
+		return nil
+	}
+	t.Cleanup(func() { applyClusterGlobalsDB = prevCluster })
 	origApply := applySchemasFromSourceFn
 	applySchemasFromSourceFn = func(_ context.Context, src, tgt *sql.DB, schemas []string, includePrivileges bool) error {
 		calls++
@@ -61,6 +68,9 @@ func TestSchemaReplayFallsBackWhenPgDumpMissing(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("catalog replay calls = %d, want 1", calls)
+	}
+	if clusterCalls != 1 {
+		t.Fatalf("cluster object calls = %d, want 1", clusterCalls)
 	}
 	if !gotPriv {
 		t.Fatal("catalog replay should keep IncludePrivileges")
