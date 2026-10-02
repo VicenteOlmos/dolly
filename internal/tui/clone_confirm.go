@@ -1,0 +1,81 @@
+package tui
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/VicenteOlmos/dolly/internal/clonework"
+	"github.com/VicenteOlmos/dolly/internal/connections"
+)
+
+var clonePreflightForConfirm = clonework.PreflightForConfirm
+
+func cloneWorkParams(a *App, schemas []string) clonework.Params {
+	draft := a.clone
+	return clonework.Params{
+		SourceDSN:         a.conn.DSN(),
+		CloneName:         draft.CloneName,
+		TargetDSN:         draft.TargetDSN,
+		Strategy:          draft.Strategy,
+		Schemas:           schemas,
+		IncludePrivileges: draft.IncludePrivileges,
+		Replace:           draft.Replace,
+		ReplaceSet:        draft.ReplaceSet,
+		OnConflict:        draft.OnConflict,
+		TargetDir:         draft.TargetDir,
+		DumpDir:           draft.DumpDir,
+		SkipCreate:        draft.SkipCreate,
+		SkipCreateSet:     true,
+	}
+}
+
+func cloneSchemaSourceLabel() string {
+	if _, err := exec.LookPath("pg_dump"); err == nil {
+		return "pg_dump"
+	}
+	return "catalog replay"
+}
+
+func formatCloneConfirmBody(targetDSN, strategy, schemaSource string, schemas []string, replacePolicy string, warnings []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Target: %s\n\n", connections.RedactMessage(targetDSN))
+	fmt.Fprintf(&b, "Strategy: %s\n", strategy)
+	fmt.Fprintf(&b, "Schema: %s\n", schemaSource)
+	fmt.Fprintf(&b, "Schemas: %s", strings.Join(schemas, ", "))
+	if replacePolicy != "" {
+		fmt.Fprintf(&b, "\n\nThis will %s.", replacePolicy)
+	}
+	if len(warnings) > 0 {
+		b.WriteString("\n\n")
+		for i, w := range warnings {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(w)
+		}
+	}
+	return b.String()
+}
+
+func (a *App) mountCloneStartConfirm(schemas []string) (tea.Model, tea.Cmd) {
+	warnings, err := clonePreflightForConfirm(context.Background(), cloneWorkParams(a, schemas))
+	if err != nil {
+		a.statusMsg = truncateStatus(StyleWarning.Render(redactUserError(err)), a.width)
+		return a, nil
+	}
+
+	strategy := effectiveCloneStrategyForDraft(a.clone, a.cfg)
+	replacePolicy := ""
+	title := "Clone?"
+	if effectiveCloneReplace(a.clone, a.cfg) {
+		title = "Clone with replace?"
+		replacePolicy = "truncate existing tables before clone"
+	}
+	body := formatCloneConfirmBody(a.clone.TargetDSN, strategy, cloneSchemaSourceLabel(), schemas, replacePolicy, warnings)
+	a.mountCloneConfirmModal(title, body, nil)
+	return a, nil
+}

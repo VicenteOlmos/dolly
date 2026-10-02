@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -56,20 +55,7 @@ func (a *App) handleCloneRequested() (tea.Model, tea.Cmd) {
 		return a, cmd
 	}
 
-	if needs, policy := a.cloneNeedsConfirm(); needs {
-		body := fmt.Sprintf("Target: %s\n\nThis will %s.", connections.RedactMessage(a.clone.TargetDSN), policy)
-		a.mountCloneConfirmModal("Clone with replace?", body, nil)
-		return a, nil
-	}
-
-	return a.startCloneExecution(schemas)
-}
-
-func (a *App) cloneNeedsConfirm() (bool, string) {
-	if !effectiveCloneReplace(a.clone, a.cfg) {
-		return false, ""
-	}
-	return true, "truncate existing tables before clone"
+	return a.mountCloneStartConfirm(schemas)
 }
 
 func effectiveCloneReplace(draft CloneDraft, cfg *config.Config) bool {

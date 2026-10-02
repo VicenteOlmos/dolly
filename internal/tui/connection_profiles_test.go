@@ -561,6 +561,7 @@ func TestSaveConnectionsFalseHidesSavedList(t *testing.T) {
 }
 
 func TestClonePickerPersistOnStart(t *testing.T) {
+	stubClonePreflightForConfirm(t)
 	store := newMockConnectionStore()
 	loader := mockSchemaLoader{
 		schemaNames: []string{"app", "billing"},
@@ -579,7 +580,7 @@ func TestClonePickerPersistOnStart(t *testing.T) {
 	app.clone.SchemaPicker.MoveCursor(1)
 	app.clone.SchemaPicker.HandleKey(tea.Key{Code: tea.KeySpace})
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	if app.activeProfile == nil || len(app.activeProfile.Schemas) != 2 {
 		t.Fatalf("profile schemas = %v", app.activeProfile)
