@@ -55,7 +55,7 @@ func (a *App) handleCloneRequested() (tea.Model, tea.Cmd) {
 		return a, cmd
 	}
 
-	return a.mountCloneStartConfirm(schemas)
+	return a.startClonePreflight(schemas)
 }
 
 func effectiveCloneReplace(draft CloneDraft, cfg *config.Config) bool {
@@ -244,6 +244,11 @@ func (a *App) handleCloneAbortKeys(msg tea.Msg) bool {
 	}
 	if _, ok := isCancelKey(msg); !ok {
 		return false
+	}
+
+	if a.clonePreflightPending {
+		a.cancelClonePreflight()
+		return true
 	}
 
 	if a.clone.AnalyzeState.Loading {

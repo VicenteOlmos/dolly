@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -46,8 +47,15 @@ func formatCloneConfirmBody(targetDSN, strategy, schemaSource string, schemas []
 	var b strings.Builder
 	fmt.Fprintf(&b, "Target: %s\n\n", connections.RedactMessage(targetDSN))
 	fmt.Fprintf(&b, "Strategy: %s\n", strategy)
-	fmt.Fprintf(&b, "Schema: %s\n", schemaSource)
-	fmt.Fprintf(&b, "Schemas: %s", strings.Join(schemas, ", "))
+	switch strategy {
+	case "template":
+		b.WriteString("Scope: entire source database")
+	case "physical-backup":
+		b.WriteString("Scope: entire cluster")
+	default:
+		fmt.Fprintf(&b, "Schema: %s\n", schemaSource)
+		fmt.Fprintf(&b, "Schemas: %s", strings.Join(schemas, ", "))
+	}
 	if replacePolicy != "" {
 		fmt.Fprintf(&b, "\n\nThis will %s.", replacePolicy)
 	}
@@ -63,17 +71,63 @@ func formatCloneConfirmBody(targetDSN, strategy, schemaSource string, schemas []
 	return b.String()
 }
 
-func (a *App) mountCloneStartConfirm(schemas []string) (tea.Model, tea.Cmd) {
+type clonePreflightResultMsg struct {
+	gen      int
+	schemas  []string
+	warnings []string
+	err      error
+}
+
+func (a *App) startClonePreflight(schemas []string) (tea.Model, tea.Cmd) {
+	if a.clonePreflightPending {
+		return a, nil
+	}
+	a.clonePreflightGen++
+	gen := a.clonePreflightGen
+	ctx, cancel := context.WithCancel(context.Background())
+	a.clonePreflightCancel = cancel
+	a.clonePreflightPending = true
+	a.statusMsg = "Checking clone… · c/Esc cancel"
+	params := cloneWorkParams(a, schemas)
 	preflight := a.clonePreflight
 	if preflight == nil {
 		preflight = clonework.PreflightForConfirm
 	}
-	warnings, err := preflight(context.Background(), cloneWorkParams(a, schemas))
-	if err != nil {
-		a.statusMsg = truncateStatus(StyleWarning.Render(redactUserError(err)), a.width)
+	copied := append([]string(nil), schemas...)
+	return a, func() tea.Msg {
+		warnings, err := preflight(ctx, params)
+		return clonePreflightResultMsg{gen: gen, schemas: copied, warnings: warnings, err: err}
+	}
+}
+
+func (a *App) handleClonePreflightResult(msg clonePreflightResultMsg) (tea.Model, tea.Cmd) {
+	if msg.gen != a.clonePreflightGen || !a.clonePreflightPending {
 		return a, nil
 	}
+	a.clonePreflightPending = false
+	a.clonePreflightCancel = nil
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			a.statusMsg = truncateStatus(StyleMuted.Render("Clone check cancelled"), a.width)
+			return a, nil
+		}
+		a.statusMsg = truncateStatus(StyleWarning.Render(redactUserError(msg.err)), a.width)
+		return a, nil
+	}
+	return a.mountCloneConfirm(msg.schemas, msg.warnings)
+}
 
+func (a *App) cancelClonePreflight() {
+	if a.clonePreflightCancel != nil {
+		a.clonePreflightCancel()
+		a.clonePreflightCancel = nil
+	}
+	a.clonePreflightPending = false
+	a.clonePreflightGen++
+	a.statusMsg = truncateStatus(StyleMuted.Render("Clone check cancelled"), a.width)
+}
+
+func (a *App) mountCloneConfirm(schemas, warnings []string) (tea.Model, tea.Cmd) {
 	strategy := effectiveCloneStrategyForDraft(a.clone, a.cfg)
 	replacePolicy := ""
 	title := "Clone?"
@@ -83,5 +137,6 @@ func (a *App) mountCloneStartConfirm(schemas []string) (tea.Model, tea.Cmd) {
 	}
 	body := formatCloneConfirmBody(a.clone.TargetDSN, strategy, cloneSchemaSourceLabel(), schemas, replacePolicy, warnings)
 	a.mountCloneConfirmModal(title, body, nil)
+	a.statusMsg = ""
 	return a, nil
 }

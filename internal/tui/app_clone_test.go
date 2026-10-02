@@ -413,6 +413,72 @@ func TestAppCloneReplaceConfirmStartsClone(t *testing.T) {
 	}
 }
 
+func TestCloneConfirmScopeByStrategy(t *testing.T) {
+	schemas := []string{"app"}
+	templateBody := formatCloneConfirmBody("postgres://u:p@h/db", "template", "pg_dump", schemas, "", nil)
+	if strings.Contains(templateBody, "Schemas:") || strings.Contains(templateBody, "Schema:") {
+		t.Fatalf("template confirm presented schema selection:\n%s", templateBody)
+	}
+	if !strings.Contains(templateBody, "Scope: entire source database") {
+		t.Fatalf("template body = %q", templateBody)
+	}
+	backupBody := formatCloneConfirmBody("postgres://u:p@h/db", "physical-backup", "pg_dump", schemas, "", nil)
+	if strings.Contains(backupBody, "Schemas:") || strings.Contains(backupBody, "Schema:") {
+		t.Fatalf("physical-backup confirm presented schema selection:\n%s", backupBody)
+	}
+	if !strings.Contains(backupBody, "Scope: entire cluster") {
+		t.Fatalf("physical-backup body = %q", backupBody)
+	}
+	replayBody := formatCloneConfirmBody("postgres://u:p@h/db", "schema-replay", "catalog replay", schemas, "", nil)
+	if !strings.Contains(replayBody, "Schemas: app") || !strings.Contains(replayBody, "Schema: catalog replay") {
+		t.Fatalf("schema-replay body = %q", replayBody)
+	}
+}
+
+func TestClonePreflightCancelDoesNotStartClone(t *testing.T) {
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	entered := make(chan struct{})
+	app.clonePreflight = func(ctx context.Context, _ clonework.Params) ([]string, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	next, cmd := app.Update(ctrlEnter())
+	app = next.(*App)
+	if cmd == nil {
+		t.Fatal("expected async preflight command")
+	}
+	if app.modalOpen() {
+		t.Fatal("confirm modal opened before preflight returned")
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("preflight did not start")
+	}
+
+	next, _ = app.Update(keyPress("esc", tea.KeyEscape, 0))
+	app = next.(*App)
+	select {
+	case result := <-done:
+		next, _ = app.Update(result)
+		app = next.(*App)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel did not reach the preflight context")
+	}
+	if app.modalOpen() {
+		t.Fatal("cancelled preflight opened the confirm modal")
+	}
+	if runner.lastSchemas != nil {
+		t.Fatal("clone started after cancelled preflight")
+	}
+}
+
 func TestAppCloneNoReplaceRequiresConfirm(t *testing.T) {
 	runner := &schemasRecordingCloneRunner{}
 	app := cloneAppWithSession(t, runner)

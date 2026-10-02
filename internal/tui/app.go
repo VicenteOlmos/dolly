@@ -78,7 +78,10 @@ type App struct {
 	spinnerFrame      int
 	modal             *modalState
 	// clonePreflight overrides the confirm-modal preflight. Nil uses clonework.PreflightForConfirm.
-	clonePreflight cloneConfirmPreflight
+	clonePreflight        cloneConfirmPreflight
+	clonePreflightPending bool
+	clonePreflightCancel  context.CancelFunc
+	clonePreflightGen     int
 }
 
 func NewApp() *App {
@@ -200,7 +203,8 @@ func (a *App) spinnerActive() bool {
 		a.dumpStatus == DumpStatusRunning ||
 		a.restoreRunning ||
 		a.cloneStatus == CloneStatusRunning ||
-		a.clone.AnalyzeState.Loading
+		a.clone.AnalyzeState.Loading ||
+		a.clonePreflightPending
 }
 
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -242,6 +246,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.handleCloneResult(msg)
 	case analyzeResultMsg:
 		return a.handleAnalyzeResult(msg)
+	case clonePreflightResultMsg:
+		return a.handleClonePreflightResult(msg)
 	case spinnerTickMsg:
 		if a.spinnerActive() {
 			a.spinnerFrame = (a.spinnerFrame + 1) % spinnerFrameCount
