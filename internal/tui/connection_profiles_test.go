@@ -561,7 +561,6 @@ func TestSaveConnectionsFalseHidesSavedList(t *testing.T) {
 }
 
 func TestClonePickerPersistOnStart(t *testing.T) {
-	stubClonePreflightForConfirm(t)
 	store := newMockConnectionStore()
 	loader := mockSchemaLoader{
 		schemaNames: []string{"app", "billing"},
@@ -569,6 +568,7 @@ func TestClonePickerPersistOnStart(t *testing.T) {
 	}
 	runner := &schemasRecordingCloneRunner{}
 	app := NewAppWithOptions(loader, mockDumpRunner{}, nil, runner, nil, store, true)
+	stubClonePreflightForConfirm(app)
 	app.screen = ScreenConnection
 	app.conn = ConnectionDraft{Host: "h", Database: "d", User: "u", Password: "p"}
 	enterConnectionFields(app.screens[ScreenConnection].(*connectionScreen))

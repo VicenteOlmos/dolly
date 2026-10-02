@@ -77,6 +77,8 @@ type App struct {
 	sourceSchemaNames []string
 	spinnerFrame      int
 	modal             *modalState
+	// clonePreflight overrides the confirm-modal preflight. Nil uses clonework.PreflightForConfirm.
+	clonePreflight cloneConfirmPreflight
 }
 
 func NewApp() *App {

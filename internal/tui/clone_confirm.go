@@ -12,7 +12,9 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
 
-var clonePreflightForConfirm = clonework.PreflightForConfirm
+// cloneConfirmPreflight loads warnings shown in the clone confirm modal.
+// A nil App field uses clonework.PreflightForConfirm.
+type cloneConfirmPreflight func(context.Context, clonework.Params) ([]string, error)
 
 func cloneWorkParams(a *App, schemas []string) clonework.Params {
 	draft := a.clone
@@ -62,7 +64,11 @@ func formatCloneConfirmBody(targetDSN, strategy, schemaSource string, schemas []
 }
 
 func (a *App) mountCloneStartConfirm(schemas []string) (tea.Model, tea.Cmd) {
-	warnings, err := clonePreflightForConfirm(context.Background(), cloneWorkParams(a, schemas))
+	preflight := a.clonePreflight
+	if preflight == nil {
+		preflight = clonework.PreflightForConfirm
+	}
+	warnings, err := preflight(context.Background(), cloneWorkParams(a, schemas))
 	if err != nil {
 		a.statusMsg = truncateStatus(StyleWarning.Render(redactUserError(err)), a.width)
 		return a, nil

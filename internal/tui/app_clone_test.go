@@ -82,17 +82,14 @@ func cloneAppWithSession(t *testing.T, runner CloneRunner) *App {
 	}
 	app.clone.TargetDSN = "postgres://u:p@h-y/target"
 	app.clone.TargetSource = TargetSourceManual
-	stubClonePreflightForConfirm(t)
+	stubClonePreflightForConfirm(app)
 	return app
 }
 
-func stubClonePreflightForConfirm(t *testing.T) {
-	t.Helper()
-	orig := clonePreflightForConfirm
-	clonePreflightForConfirm = func(_ context.Context, _ clonework.Params) ([]string, error) {
+func stubClonePreflightForConfirm(app *App) {
+	app.clonePreflight = func(context.Context, clonework.Params) ([]string, error) {
 		return nil, nil
 	}
-	t.Cleanup(func() { clonePreflightForConfirm = orig })
 }
 
 func startCloneFromForm(app *App) *App {
