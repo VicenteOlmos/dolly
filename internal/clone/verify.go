@@ -143,15 +143,35 @@ func verifySequences(ctx context.Context, srcDB, tgtDB *sql.DB, scope []string) 
 }
 
 func listSequencesInScope(ctx context.Context, dbConn *sql.DB, scope []string) ([]sequenceState, error) {
-	scopePred, scopeArgs := scopedNamespacePredicate("ps.schemaname", scope)
+	names, err := listSequenceNames(ctx, dbConn, scope)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]sequenceState, 0, len(names))
+	for _, name := range names {
+		seq, err := readSequenceState(ctx, dbConn, name.schema, name.name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, seq)
+	}
+	return out, nil
+}
+
+// listSequenceNames lists in-scope sequences from pg_class. pg_sequences has no
+// is_called column, and its last_value is NULL until the sequence is used.
+func listSequenceNames(ctx context.Context, dbConn *sql.DB, scope []string) ([]sequenceState, error) {
+	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 	query := `
-		SELECT ps.schemaname, ps.sequencename, ps.last_value, ps.is_called
-		FROM pg_sequences ps
-		WHERE ps.schemaname NOT IN ('pg_catalog', 'information_schema')
-		  AND ps.schemaname NOT LIKE 'pg_temp_%'
-		  AND ps.schemaname NOT LIKE 'pg_toast_%'
-		  AND ps.sequencename NOT LIKE 'pg_toast_%'` + scopePred + `
-		ORDER BY ps.schemaname, ps.sequencename`
+		SELECT n.nspname, c.relname
+		FROM pg_class c
+		INNER JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relkind = 'S'
+		  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+		  AND n.nspname NOT LIKE 'pg_temp_%'
+		  AND n.nspname NOT LIKE 'pg_toast_%'
+		  AND c.relname NOT LIKE 'pg_toast_%'` + scopePred + `
+		ORDER BY n.nspname, c.relname`
 	rows, err := queryContextOptional(ctx, dbConn, query, scopeArgs)
 	if err != nil {
 		return nil, err
@@ -161,7 +181,7 @@ func listSequencesInScope(ctx context.Context, dbConn *sql.DB, scope []string) (
 	var out []sequenceState
 	for rows.Next() {
 		var seq sequenceState
-		if err := rows.Scan(&seq.schema, &seq.name, &seq.lastValue, &seq.isCalled); err != nil {
+		if err := rows.Scan(&seq.schema, &seq.name); err != nil {
 			return nil, err
 		}
 		out = append(out, seq)
@@ -170,4 +190,13 @@ func listSequencesInScope(ctx context.Context, dbConn *sql.DB, scope []string) (
 		return nil, err
 	}
 	return out, nil
+}
+
+func readSequenceState(ctx context.Context, dbConn *sql.DB, schema, name string) (sequenceState, error) {
+	query := fmt.Sprintf(`SELECT last_value, is_called FROM %s`, quoteQualifiedTable(schema, name))
+	seq := sequenceState{schema: schema, name: name}
+	if err := dbConn.QueryRowContext(ctx, query).Scan(&seq.lastValue, &seq.isCalled); err != nil {
+		return sequenceState{}, fmt.Errorf("read sequence %s.%s: %w", schema, name, err)
+	}
+	return seq, nil
 }

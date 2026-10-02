@@ -1,7 +1,10 @@
 package clone
 
 import (
+	"context"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestFormatRowCountMismatch(t *testing.T) {
@@ -27,5 +30,47 @@ func TestVerifyGapWarnings(t *testing.T) {
 	}
 	if w[0] != "verify: schema-replay did not copy 2 hypothetical aggregate(s); pg_dump is required for those objects" {
 		t.Fatalf("unexpected hypothetical warning: %q", w[0])
+	}
+}
+
+func TestVerifySequencesReadsRelationState(t *testing.T) {
+	src, srcMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	tgt, tgtMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tgt.Close()
+
+	srcMock.ExpectQuery(`FROM pg_class c`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname"}).AddRow("public", "orders_id_seq"))
+	srcMock.ExpectQuery(`SELECT last_value, is_called FROM "public"\."orders_id_seq"`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(int64(5), true))
+	tgtMock.ExpectQuery(`FROM pg_class c`).
+		WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname"}).AddRow("public", "orders_id_seq"))
+	tgtMock.ExpectQuery(`SELECT last_value, is_called FROM "public"\."orders_id_seq"`).
+		WillReturnRows(sqlmock.NewRows([]string{"last_value", "is_called"}).AddRow(int64(1), false))
+
+	warnings, err := verifySequences(context.Background(), src, tgt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 2 {
+		t.Fatalf("warnings = %#v, want last_value and is_called", warnings)
+	}
+	if warnings[0] != "verify: public.orders_id_seq last_value source=5 target=1" {
+		t.Fatalf("last_value warning = %q", warnings[0])
+	}
+	if warnings[1] != "verify: public.orders_id_seq is_called source=true target=false" {
+		t.Fatalf("is_called warning = %q", warnings[1])
+	}
+	if err := srcMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tgtMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
