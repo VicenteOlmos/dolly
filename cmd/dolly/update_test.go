@@ -428,7 +428,7 @@ func TestRunUpdateContextCancel(t *testing.T) {
 	}
 	tag := "v0.3.2"
 
-	downloadStarted := make(chan struct{})
+	downloadStarted := make(chan struct{}, 1)
 	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		rec := httptestRecorder()
 		switch {

@@ -34,12 +34,6 @@ func verifyGapWarnings(c SchemaReplayGapCounts) []string {
 			c.HypotheticalAggregates,
 		))
 	}
-	if c.UserOperatorClasses > 0 {
-		out = append(out, fmt.Sprintf(
-			"verify: schema-replay did not copy %d user operator class(es); pg_dump is required for those objects",
-			c.UserOperatorClasses,
-		))
-	}
 	return out
 }
 

@@ -57,7 +57,7 @@ type excludeConstraint struct {
 // order), triggers, rules, comments, grants, and RLS.
 //
 // Limitations (prefer pg_dump when it is on PATH):
-//   - Hypothetical aggregates and operator classes are not replayed.
+//   - Hypothetical aggregates are not replayed.
 //   - Functions, triggers, and rules that belong to extensions are skipped.
 func ApplySchemasFromSource(ctx context.Context, srcDB, tgtDB *sql.DB, schemas []string) error {
 	return applySchemas(ctx, srcDB, tgtDB, schemas, true)
@@ -198,7 +198,24 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
+	opFamilies, err := loadOperatorFamilies(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
+	opClasses, looseFamilyMembers, err := loadOperatorClasses(ctx, srcDB, schemas)
+	if err != nil {
+		return err
+	}
 	if err := applyOperators(ctx, tgtDB, operators); err != nil {
+		return err
+	}
+	if err := applyOperatorFamilies(ctx, tgtDB, opFamilies); err != nil {
+		return err
+	}
+	if err := applyOperatorClasses(ctx, tgtDB, opClasses); err != nil {
+		return err
+	}
+	if err := applySQLDefs(ctx, tgtDB, looseFamilyMembers, "operator family member"); err != nil {
 		return err
 	}
 	if err := applyRangeTypes(ctx, tgtDB, ranges, true); err != nil {
