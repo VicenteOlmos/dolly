@@ -1119,7 +1119,7 @@ func TestPreflightSchemaReplayGapWarnings(t *testing.T) {
 	if warnings[0] != "schema-replay will not copy 1 hypothetical aggregate(s); pg_dump is required for those objects" {
 		t.Fatalf("warning[0] = %q", warnings[0])
 	}
-	if warnings[1] != "schema-replay will not copy 2 foreign table(s); pg_dump is required for those objects" {
+	if warnings[1] != "schema-replay will recreate 2 foreign table(s); their foreign servers must already exist on the target" {
 		t.Fatalf("warning[1] = %q", warnings[1])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
