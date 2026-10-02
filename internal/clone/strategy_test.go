@@ -2523,6 +2523,12 @@ func TestSequenceMonotonicSchemaReplayOnce(t *testing.T) {
 	}
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
+	origVerify := runSchemaReplayVerify
+	runSchemaReplayVerify = func(context.Context, Options, *sql.DB, *sql.DB, bool) ([]string, error) {
+		return nil, nil
+	}
+	defer func() { runSchemaReplayVerify = origVerify }()
+
 	mockRunner := &mockCommandRunner{}
 	strat := &SchemaReplayStrategy{Runner: mockRunner}
 

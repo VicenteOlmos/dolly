@@ -125,7 +125,9 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		Total:   totalSteps,
 		Elapsed: time.Since(startedAt),
 	})
+	usedPgDump := true
 	if _, lookErr := schemaToolLookPath("pg_dump"); lookErr != nil {
+		usedPgDump = false
 		fmt.Fprintf(os.Stderr, "warning: pg_dump not on PATH; replaying schema from the catalog\n")
 		if err := replaySchemaFromCatalog(ctx, opts, targetDSN); err != nil {
 			return fmt.Errorf("replay schema: %w", err)
@@ -196,6 +198,16 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		return restoreFunc(ctx, tgtDB, dumpDir, opts.RestoreOpts...)
 	}); err != nil {
 		return err
+	}
+
+	if opts.Verify {
+		warnings, err := runSchemaReplayVerify(ctx, opts, srcDB, tgtDB, usedPgDump)
+		if err != nil {
+			return fmt.Errorf("verify clone: %w", err)
+		}
+		if opts.VerifyWarnings != nil {
+			*opts.VerifyWarnings = warnings
+		}
 	}
 
 	return nil

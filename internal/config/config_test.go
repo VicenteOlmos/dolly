@@ -52,6 +52,9 @@ func TestLoadConfigReturnsDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.Clone.SkipCreate {
 		t.Fatal("expected SkipCreate=false")
 	}
+	if !cfg.Clone.Verify {
+		t.Fatal("expected Clone.Verify=true")
+	}
 	if cfg.Clone.Strategy != "schema-replay" {
 		t.Fatalf("expected Strategy=schema-replay, got %q", cfg.Clone.Strategy)
 	}
