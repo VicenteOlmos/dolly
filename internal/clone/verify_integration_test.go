@@ -71,7 +71,7 @@ func TestSchemaReplayVerifyUsageOnlySequence(t *testing.T) {
 	defer srcAdmin.Close()
 	if _, err := srcAdmin.ExecContext(ctx, `
 		CREATE SCHEMA app;
-		CREATE TABLE app.orders (id serial PRIMARY KEY, n int);
+		CREATE TABLE app.orders (id serial, n int);
 		INSERT INTO app.orders (n) VALUES (1);
 	`); err != nil {
 		t.Fatal(err)
