@@ -342,8 +342,10 @@ func formatCreateForeignDataWrapper(w foreignDataWrapperDef) string {
 func formatForeignServers(servers []foreignServerDef) []string {
 	out := make([]string, 0, len(servers))
 	for _, srv := range servers {
-		body := formatCreateForeignServer(srv) + "\nALTER SERVER " + quoteIdentifier(srv.name) + " OWNER TO " + quoteIdentifier(srv.owner)
-		out = append(out, wrapDuplicateObject(body))
+		out = append(out, wrapDuplicateObject(
+			formatCreateForeignServer(srv),
+			"ALTER SERVER "+quoteIdentifier(srv.name)+" OWNER TO "+quoteIdentifier(srv.owner),
+		))
 	}
 	return out
 }
@@ -383,10 +385,32 @@ func formatCreateUserMapping(m userMappingDef) string {
 	return stmt
 }
 
-func wrapDuplicateObject(body string) string {
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		lines[i] = "  " + line + ";"
+// wrapDuplicateObject runs statements once and ignores duplicate_object.
+// Each argument is one statement. Newlines inside literals stay inside that
+// statement. The dollar tag is chosen so it does not occur in the body.
+func wrapDuplicateObject(statements ...string) string {
+	var b strings.Builder
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		for strings.HasSuffix(stmt, ";") {
+			stmt = strings.TrimSpace(strings.TrimSuffix(stmt, ";"))
+		}
+		b.WriteString("  ")
+		b.WriteString(stmt)
+		b.WriteString(";\n")
 	}
-	return "DO $dolly$\nBEGIN\n" + strings.Join(lines, "\n") + "\nEXCEPTION WHEN duplicate_object THEN NULL;\nEND\n$dolly$"
+	body := b.String()
+	tag := dollarQuoteTag(body)
+	return "DO " + tag + "\nBEGIN\n" + body + "EXCEPTION WHEN duplicate_object THEN NULL;\nEND\n" + tag
+}
+
+func dollarQuoteTag(body string) string {
+	tag := "$dolly$"
+	for n := 0; strings.Contains(body, tag); n++ {
+		tag = fmt.Sprintf("$dolly%d$", n)
+	}
+	return tag
 }

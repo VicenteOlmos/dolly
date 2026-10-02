@@ -36,6 +36,12 @@ func TestFormatForeignServerStatements(t *testing.T) {
 	if !strings.Contains(wrapped, "EXCEPTION WHEN duplicate_object THEN NULL;") {
 		t.Fatalf("wrapped = %s", wrapped)
 	}
+	newline := wrapDuplicateObject(formatCreateUserMapping(userMappingDef{
+		server: "app_srv", options: map[string]string{"password": "first\nsecond"},
+	}))
+	if strings.Contains(newline, "first;") || !strings.Contains(newline, "first\nsecond") {
+		t.Fatalf("mapping newline was split:\n%s", newline)
+	}
 }
 
 func TestApplyForeignServersSkipsExtensionWrapper(t *testing.T) {

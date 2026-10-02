@@ -63,11 +63,19 @@ type tablespaceSpec struct {
 }
 
 func applyClusterGlobals(ctx context.Context, src, tgt *sql.DB) error {
+	srcMajor, err := scanServerMajor(ctx, src)
+	if err != nil {
+		return fmt.Errorf("source version: %w", err)
+	}
+	tgtMajor, err := scanServerMajor(ctx, tgt)
+	if err != nil {
+		return fmt.Errorf("target version: %w", err)
+	}
 	roles, err := loadUserRoles(ctx, src)
 	if err != nil {
 		return err
 	}
-	grants, err := loadRoleGrants(ctx, src)
+	grants, err := loadRoleGrants(ctx, src, srcMajor)
 	if err != nil {
 		return err
 	}
@@ -75,14 +83,28 @@ func applyClusterGlobals(ctx context.Context, src, tgt *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	created := map[string]struct{}{}
 	for _, role := range roles {
-		if _, err := tgt.ExecContext(ctx, formatEnsureRole(role)); err != nil {
-			return fmt.Errorf("create role %s: %w", role.name, err)
+		ok, err := ensureRole(ctx, tgt, role)
+		if err != nil {
+			return err
+		}
+		if ok {
+			created[role.name] = struct{}{}
 		}
 	}
 	for _, grant := range grants {
-		stmt := formatGrantRole(grant)
-		if _, err := tgt.ExecContext(ctx, stmt); err != nil {
+		if _, ok := created[grant.member]; !ok {
+			continue
+		}
+		exists, err := roleMembershipExists(ctx, tgt, grant.parent, grant.member)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := tgt.ExecContext(ctx, formatGrantRole(grant, tgtMajor)); err != nil {
 			return fmt.Errorf("grant role %s to %s: %w", grant.parent, grant.member, err)
 		}
 	}
@@ -92,6 +114,38 @@ func applyClusterGlobals(ctx context.Context, src, tgt *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// ensureRole creates role when the target has no role of that name.
+// An existing role is left unchanged and does not require CREATEROLE.
+func ensureRole(ctx context.Context, tgt *sql.DB, role roleSpec) (bool, error) {
+	var exists bool
+	if err := tgt.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, role.name).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check role %s: %w", role.name, err)
+	}
+	if exists {
+		return false, nil
+	}
+	if _, err := tgt.ExecContext(ctx, formatEnsureRole(role)); err != nil {
+		return false, fmt.Errorf("create role %s: %w", role.name, err)
+	}
+	return true, nil
+}
+
+func roleMembershipExists(ctx context.Context, tgt *sql.DB, parent, member string) (bool, error) {
+	var exists bool
+	err := tgt.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_auth_members m
+			JOIN pg_roles granted ON granted.oid = m.roleid
+			JOIN pg_roles member ON member.oid = m.member
+			WHERE granted.rolname = $1 AND member.rolname = $2
+		)`, parent, member).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check membership %s to %s: %w", parent, member, err)
+	}
+	return exists, nil
 }
 
 func loadUserRoles(ctx context.Context, q *sql.DB) ([]roleSpec, error) {
@@ -163,14 +217,25 @@ func loadRolePasswords(ctx context.Context, q *sql.DB) (map[string]sql.NullStrin
 	return out, nil
 }
 
-func loadRoleGrants(ctx context.Context, q *sql.DB) ([]roleGrant, error) {
-	const query = `
+func loadRoleGrants(ctx context.Context, q *sql.DB, major int) ([]roleGrant, error) {
+	// inherit_option and set_option arrived in PostgreSQL 16. Earlier majors
+	// store only admin_option; role-level INHERIT stays on pg_roles.rolinherit.
+	query := `
+		SELECT granted.rolname, member.rolname, m.admin_option
+		FROM pg_auth_members m
+		JOIN pg_roles granted ON granted.oid = m.roleid
+		JOIN pg_roles member ON member.oid = m.member
+		WHERE member.oid >= 16384
+		ORDER BY granted.rolname, member.rolname`
+	if major >= 16 {
+		query = `
 		SELECT granted.rolname, member.rolname, m.admin_option, m.inherit_option, m.set_option
 		FROM pg_auth_members m
 		JOIN pg_roles granted ON granted.oid = m.roleid
 		JOIN pg_roles member ON member.oid = m.member
 		WHERE member.oid >= 16384
 		ORDER BY granted.rolname, member.rolname`
+	}
 	rows, err := q.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list role grants: %w", err)
@@ -179,7 +244,16 @@ func loadRoleGrants(ctx context.Context, q *sql.DB) ([]roleGrant, error) {
 	var out []roleGrant
 	for rows.Next() {
 		var grant roleGrant
-		if err := rows.Scan(&grant.parent, &grant.member, &grant.admin, &grant.inherit, &grant.set); err != nil {
+		var err error
+		if major >= 16 {
+			err = rows.Scan(&grant.parent, &grant.member, &grant.admin, &grant.inherit, &grant.set)
+		} else {
+			err = rows.Scan(&grant.parent, &grant.member, &grant.admin)
+			// PostgreSQL 16 GRANT defaults. Pre-16 memberships have no separate flags.
+			grant.inherit = true
+			grant.set = true
+		}
+		if err != nil {
 			return nil, fmt.Errorf("scan role grant: %w", err)
 		}
 		out = append(out, grant)
@@ -289,18 +363,30 @@ func formatEnsureRole(role roleSpec) string {
 		attrs = append(attrs, "VALID UNTIL "+quoteLiteral(role.validUntil.String))
 	}
 	name := quoteIdentifier(role.name)
-	body := "CREATE ROLE " + name + "\nALTER ROLE " + name + " WITH " + strings.Join(attrs, " ")
-	if role.comment.Valid && role.comment.String != "" {
-		body += "\nCOMMENT ON ROLE " + name + " IS " + quoteLiteral(role.comment.String)
+	stmts := []string{
+		"CREATE ROLE " + name,
+		"ALTER ROLE " + name + " WITH " + strings.Join(attrs, " "),
 	}
-	return wrapDuplicateObject(body)
+	if role.comment.Valid && role.comment.String != "" {
+		stmts = append(stmts, "COMMENT ON ROLE "+name+" IS "+quoteLiteral(role.comment.String))
+	}
+	return wrapDuplicateObject(stmts...)
 }
 
-func formatGrantRole(grant roleGrant) string {
+func formatGrantRole(grant roleGrant, major int) string {
+	parent := quoteIdentifier(grant.parent)
+	member := quoteIdentifier(grant.member)
+	if major < 16 {
+		stmt := fmt.Sprintf("GRANT %s TO %s", parent, member)
+		if grant.admin {
+			stmt += " WITH ADMIN OPTION"
+		}
+		return stmt
+	}
 	return fmt.Sprintf(
 		"GRANT %s TO %s WITH ADMIN %s, INHERIT %s, SET %s",
-		quoteIdentifier(grant.parent),
-		quoteIdentifier(grant.member),
+		parent,
+		member,
 		boolWord(grant.admin),
 		boolWord(grant.inherit),
 		boolWord(grant.set),
