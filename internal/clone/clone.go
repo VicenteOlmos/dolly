@@ -54,6 +54,10 @@ type Options struct {
 	RowTransform dump.RowTransform
 	// PreflightWarnings receives schema-replay gap warnings after a successful preflight when non-nil.
 	PreflightWarnings *[]string
+	// Verify runs post-clone row and sequence checks for schema-replay (default true when set from CLI/config).
+	Verify bool
+	// VerifyWarnings receives schema-replay verify warnings after a successful clone when non-nil.
+	VerifyWarnings *[]string
 	// SkipAnalyze skips the post-restore ANALYZE on the target (schema-replay only). Default runs ANALYZE.
 	SkipAnalyze bool
 }

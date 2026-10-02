@@ -156,6 +156,7 @@ func buildCloneOptions(p Params) (clone.Options, string, error) {
 		PermissionCache:   permCache,
 		MaxOpenConns:      maxConns,
 		IncludePrivileges: p.IncludePrivileges,
+		Verify:            cfg.Clone.Verify,
 		SkipAnalyze:       !cfg.Clone.Analyze,
 	}
 	return opts, strategy, nil

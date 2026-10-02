@@ -52,6 +52,9 @@ func TestLoadConfigReturnsDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.Clone.SkipCreate {
 		t.Fatal("expected SkipCreate=false")
 	}
+	if !cfg.Clone.Verify {
+		t.Fatal("expected Clone.Verify=true")
+	}
 	if !cfg.Clone.Analyze {
 		t.Fatal("expected Clone.Analyze=true")
 	}
@@ -103,6 +106,9 @@ func TestLoadConfig_overlay(t *testing.T) {
 	}
 	if cfg.Connections.Scope != "project" {
 		t.Fatalf("connections.scope = %q, want project (default)", cfg.Connections.Scope)
+	}
+	if !cfg.Clone.Verify {
+		t.Fatal("omitted clone.verify should stay true")
 	}
 	if !cfg.Clone.Analyze {
 		t.Fatal("omitted clone.analyze should stay true")
@@ -310,9 +316,9 @@ func TestSaveConfig(t *testing.T) {
 		path := filepath.Join(dir, "config.json")
 
 		orig := DefaultConfig()
-		orig.DB.StatementTimeout = "5min" // template default — match what gets round-tripped
-		orig.Clone.Schemas = []string{}   // match JSON "schemas": [] after template-based save
-		orig.Dump.Schemas = []string{}         // match JSON "dump.schemas": [] after template-based save
+		orig.DB.StatementTimeout = "5min"     // template default — match what gets round-tripped
+		orig.Clone.Schemas = []string{}       // match JSON "schemas": [] after template-based save
+		orig.Dump.Schemas = []string{}        // match JSON "dump.schemas": [] after template-based save
 		orig.Dump.ExcludeSchemas = []string{} // match JSON "dump.exclude_schemas": [] after template-based save
 		orig.Clone.Strategy = "template"
 		orig.Env.Path = ".env.custom"

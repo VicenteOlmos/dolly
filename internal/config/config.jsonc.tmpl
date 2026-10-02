@@ -39,6 +39,9 @@
     // Skip CREATE DATABASE; assume the target DB already exists.
     "skip_create": false,
 
+    // After schema-replay, compare row counts and sequences between source and target.
+    "verify": true,
+
     // schema-replay: run ANALYZE on the target after data restore (default true).
     "analyze": true,
 
