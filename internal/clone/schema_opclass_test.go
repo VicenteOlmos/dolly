@@ -29,12 +29,12 @@ func TestFormatOperatorClassObjects(t *testing.T) {
 		familyName:   "custom_ops",
 		storageType:  "text",
 		operators: []operatorClassOperator{{
-			strategy:  1,
-			opSchema:  "pg_catalog",
-			opName:    "<",
-			leftType:  "integer",
-			rightType: "integer",
-			purpose:   "o",
+			strategy:      1,
+			opSchema:      "pg_catalog",
+			opName:        "<",
+			leftType:      "integer",
+			rightType:     "integer",
+			purpose:       "o",
 			sortFamSchema: "pg_catalog",
 			sortFamName:   "integer_ops",
 		}},
@@ -64,6 +64,11 @@ func TestFormatOperatorClassObjects(t *testing.T) {
 	if searchOp != `OPERATOR 1 "app".!!(integer, integer) FOR SEARCH` {
 		t.Fatalf("search operator: %q", searchOp)
 	}
+	add := formatAlterOperatorFamilyAdd("app", "shared", "btree", searchOp)
+	wantAdd := `ALTER OPERATOR FAMILY "app"."shared" USING "btree" ADD OPERATOR 1 "app".!!(integer, integer) FOR SEARCH`
+	if add != wantAdd {
+		t.Fatalf("alter family: %q", add)
+	}
 }
 
 func TestLoadOperatorClassesCatalog(t *testing.T) {
@@ -85,7 +90,15 @@ func TestLoadOperatorClassesCatalog(t *testing.T) {
 		"oid", "support", "fn_nspname", "proname", "fn_args",
 	}).AddRow(42, 1, "app", "custom_cmp", "integer, integer"))
 
-	classes, err := loadOperatorClasses(context.Background(), src, []string{"app"})
+	mock.ExpectQuery(`list loose operator family operators|FROM pg_amop amop`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "opfname", "amname", "strategy", "op_nspname", "oprname", "left_type", "right_type",
+		"purpose", "sort_nspname", "sort_opfname",
+	}))
+	mock.ExpectQuery(`FROM pg_amproc amproc`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "opfname", "amname", "support", "fn_nspname", "proname", "fn_args",
+	}))
+
+	classes, _, err := loadOperatorClasses(context.Background(), src, []string{"app"})
 	if err != nil {
 		t.Fatal(err)
 	}

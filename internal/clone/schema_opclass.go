@@ -13,14 +13,14 @@ type operatorFamilyDef struct {
 }
 
 type operatorClassOperator struct {
-	strategy       int
-	opSchema       string
-	opName         string
-	leftType       string
-	rightType      string
-	purpose        string
-	sortFamSchema  string
-	sortFamName    string
+	strategy      int
+	opSchema      string
+	opName        string
+	leftType      string
+	rightType     string
+	purpose       string
+	sortFamSchema string
+	sortFamName   string
 }
 
 type operatorClassFunction struct {
@@ -80,7 +80,7 @@ func loadOperatorFamilies(ctx context.Context, q *sql.DB, schemas []string) ([]o
 	return out, rows.Err()
 }
 
-func loadOperatorClasses(ctx context.Context, q *sql.DB, schemas []string) ([]operatorClassDef, error) {
+func loadOperatorClasses(ctx context.Context, q *sql.DB, schemas []string) ([]operatorClassDef, []string, error) {
 	inClause, args := schemaINClause(schemas)
 	inTypeSQL := fmt.Sprintf(sqlCatalogOrQualifiedType, "in_ns", "opc.opcintype", "in_ns", "in_t")
 	keyTypeSQL := fmt.Sprintf(`
@@ -113,7 +113,7 @@ CASE WHEN opc.opckeytype = 0 THEN ''
 		ORDER BY n.nspname, opc.opcname`, inTypeSQL, keyTypeSQL, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list operator classes: %w", err)
+		return nil, nil, fmt.Errorf("list operator classes: %w", err)
 	}
 	defer rows.Close()
 
@@ -131,23 +131,27 @@ CASE WHEN opc.opckeytype = 0 THEN ''
 			&c.familySchema, &c.familyName,
 			&c.storageType,
 		); err != nil {
-			return nil, fmt.Errorf("scan operator class: %w", err)
+			return nil, nil, fmt.Errorf("scan operator class: %w", err)
 		}
 		byOID[oid] = &c
 		oids = append(oids, oid)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list operator classes: %w", err)
+		return nil, nil, fmt.Errorf("list operator classes: %w", err)
 	}
 
 	if err := mergeOperatorClassOperators(ctx, q, schemas, byOID); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := mergeOperatorClassFunctions(ctx, q, schemas, byOID); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	loose, err := loadLooseOperatorFamilyMembers(ctx, q, schemas)
+	if err != nil {
+		return nil, nil, err
 	}
 	if len(oids) == 0 {
-		return nil, nil
+		return nil, loose, nil
 	}
 
 	for _, oid := range oids {
@@ -157,7 +161,7 @@ CASE WHEN opc.opckeytype = 0 THEN ''
 		}
 		out = append(out, *c)
 	}
-	return out, nil
+	return out, loose, nil
 }
 
 func mergeOperatorClassOperators(ctx context.Context, q *sql.DB, schemas []string, byOID map[uint32]*operatorClassDef) error {
@@ -193,6 +197,14 @@ func mergeOperatorClassOperators(ctx context.Context, q *sql.DB, schemas []strin
 		    WHERE d.classid = 'pg_opclass'::regclass
 		      AND d.objid = opc.oid
 		      AND d.deptype = 'e'
+		  )
+		  AND EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    WHERE d.classid = 'pg_amop'::regclass
+		      AND d.objid = amop.oid
+		      AND d.refclassid = 'pg_opclass'::regclass
+		      AND d.refobjid = opc.oid
+		      AND d.deptype = 'i'
 		  )
 		ORDER BY opc.oid, amop.amopstrategy`, leftTypeSQL, rightTypeSQL, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -244,6 +256,14 @@ func mergeOperatorClassFunctions(ctx context.Context, q *sql.DB, schemas []strin
 		    WHERE d.classid = 'pg_opclass'::regclass
 		      AND d.objid = opc.oid
 		      AND d.deptype = 'e'
+		  )
+		  AND EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    WHERE d.classid = 'pg_amproc'::regclass
+		      AND d.objid = amproc.oid
+		      AND d.refclassid = 'pg_opclass'::regclass
+		      AND d.refobjid = opc.oid
+		      AND d.deptype = 'i'
 		  )
 		ORDER BY opc.oid, amproc.amprocnum`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -306,4 +326,157 @@ func operatorClassDDLItems(c operatorClassDef) []string {
 		parts = append(parts, "STORAGE "+c.storageType)
 	}
 	return parts
+}
+
+func formatAlterOperatorFamilyAdd(schema, name, method, item string) string {
+	return fmt.Sprintf(
+		"ALTER OPERATOR FAMILY %s USING %s ADD %s",
+		quoteQualifiedTable(schema, name),
+		quoteIdentifier(method),
+		item,
+	)
+}
+
+// loadLooseOperatorFamilyMembers returns ALTER OPERATOR FAMILY statements for
+// family members that are not owned by an in-scope operator class. Class-owned
+// members are emitted only on that class.
+func loadLooseOperatorFamilyMembers(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
+	ops, err := loadLooseOperatorFamilyOperators(ctx, q, schemas)
+	if err != nil {
+		return nil, err
+	}
+	fns, err := loadLooseOperatorFamilyFunctions(ctx, q, schemas)
+	if err != nil {
+		return nil, err
+	}
+	return append(ops, fns...), nil
+}
+
+func loadLooseOperatorFamilyOperators(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
+	inClause, args := schemaINClause(schemas)
+	leftTypeSQL := fmt.Sprintf(sqlCatalogOrQualifiedType, "lt_ns", "amop.amoplefttype", "lt_ns", "lt_t")
+	rightTypeSQL := fmt.Sprintf(sqlCatalogOrQualifiedType, "rt_ns", "amop.amoprighttype", "rt_ns", "rt_t")
+	query := fmt.Sprintf(`
+		SELECT fam_ns.nspname, fam.opfname, am.amname,
+		       amop.amopstrategy,
+		       opn.nspname, o.oprname,
+		       %s,
+		       %s,
+		       amop.amoppurpose::text,
+		       COALESCE(sort_ns.nspname, ''),
+		       COALESCE(sort_f.opfname, '')
+		FROM pg_amop amop
+		INNER JOIN pg_opfamily fam ON fam.oid = amop.amopfamily
+		INNER JOIN pg_namespace fam_ns ON fam_ns.oid = fam.opfnamespace
+		INNER JOIN pg_am am ON am.oid = fam.opfmethod
+		INNER JOIN pg_operator o ON o.oid = amop.amopopr
+		INNER JOIN pg_namespace opn ON opn.oid = o.oprnamespace
+		INNER JOIN pg_type lt_t ON lt_t.oid = amop.amoplefttype
+		INNER JOIN pg_namespace lt_ns ON lt_ns.oid = lt_t.typnamespace
+		INNER JOIN pg_type rt_t ON rt_t.oid = amop.amoprighttype
+		INNER JOIN pg_namespace rt_ns ON rt_ns.oid = rt_t.typnamespace
+		LEFT JOIN pg_opfamily sort_f ON sort_f.oid = amop.amopsortfamily
+		LEFT JOIN pg_namespace sort_ns ON sort_ns.oid = sort_f.opfnamespace
+		WHERE fam_ns.nspname IN (%s)
+		  AND fam_ns.nspname <> 'pg_catalog'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend fd
+		    WHERE fd.classid = 'pg_opfamily'::regclass
+		      AND fd.objid = fam.oid
+		      AND fd.deptype = 'e'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    INNER JOIN pg_opclass own ON own.oid = d.refobjid
+		    INNER JOIN pg_namespace own_ns ON own_ns.oid = own.opcnamespace
+		    WHERE d.classid = 'pg_amop'::regclass
+		      AND d.objid = amop.oid
+		      AND d.refclassid = 'pg_opclass'::regclass
+		      AND d.deptype = 'i'
+		      AND own_ns.nspname IN (%s)
+		  )
+		ORDER BY fam_ns.nspname, fam.opfname, amop.amopstrategy`, leftTypeSQL, rightTypeSQL, inClause, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list loose operator family operators: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var schema, name, method string
+		var op operatorClassOperator
+		if err := rows.Scan(
+			&schema, &name, &method,
+			&op.strategy,
+			&op.opSchema, &op.opName,
+			&op.leftType, &op.rightType,
+			&op.purpose,
+			&op.sortFamSchema, &op.sortFamName,
+		); err != nil {
+			return nil, fmt.Errorf("scan loose operator family operator: %w", err)
+		}
+		out = append(out, formatAlterOperatorFamilyAdd(schema, name, method, formatOperatorClassOperator(op)))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func loadLooseOperatorFamilyFunctions(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
+	inClause, args := schemaINClause(schemas)
+	query := fmt.Sprintf(`
+		SELECT fam_ns.nspname, fam.opfname, am.amname,
+		       amproc.amprocnum,
+		       fn_ns.nspname, fn.proname,
+		       pg_catalog.pg_get_function_identity_arguments(fn.oid)
+		FROM pg_amproc amproc
+		INNER JOIN pg_opfamily fam ON fam.oid = amproc.amprocfamily
+		INNER JOIN pg_namespace fam_ns ON fam_ns.oid = fam.opfnamespace
+		INNER JOIN pg_am am ON am.oid = fam.opfmethod
+		INNER JOIN pg_proc fn ON fn.oid = amproc.amproc
+		INNER JOIN pg_namespace fn_ns ON fn_ns.oid = fn.pronamespace
+		WHERE fam_ns.nspname IN (%s)
+		  AND fam_ns.nspname <> 'pg_catalog'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend fd
+		    WHERE fd.classid = 'pg_opfamily'::regclass
+		      AND fd.objid = fam.oid
+		      AND fd.deptype = 'e'
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1 FROM pg_depend d
+		    INNER JOIN pg_opclass own ON own.oid = d.refobjid
+		    INNER JOIN pg_namespace own_ns ON own_ns.oid = own.opcnamespace
+		    WHERE d.classid = 'pg_amproc'::regclass
+		      AND d.objid = amproc.oid
+		      AND d.refclassid = 'pg_opclass'::regclass
+		      AND d.deptype = 'i'
+		      AND own_ns.nspname IN (%s)
+		  )
+		ORDER BY fam_ns.nspname, fam.opfname, amproc.amprocnum`, inClause, inClause)
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list loose operator family functions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var schema, name, method string
+		var fn operatorClassFunction
+		if err := rows.Scan(
+			&schema, &name, &method,
+			&fn.supportNum,
+			&fn.fnSchema, &fn.fnName, &fn.fnArgs,
+		); err != nil {
+			return nil, fmt.Errorf("scan loose operator family function: %w", err)
+		}
+		out = append(out, formatAlterOperatorFamilyAdd(schema, name, method, formatOperatorClassFunction(fn)))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

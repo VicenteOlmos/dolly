@@ -202,7 +202,7 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
-	opClasses, err := loadOperatorClasses(ctx, srcDB, schemas)
+	opClasses, looseFamilyMembers, err := loadOperatorClasses(ctx, srcDB, schemas)
 	if err != nil {
 		return err
 	}
@@ -213,6 +213,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 		return err
 	}
 	if err := applyOperatorClasses(ctx, tgtDB, opClasses); err != nil {
+		return err
+	}
+	if err := applySQLDefs(ctx, tgtDB, looseFamilyMembers, "operator family member"); err != nil {
 		return err
 	}
 	if err := applyRangeTypes(ctx, tgtDB, ranges, true); err != nil {

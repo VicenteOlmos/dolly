@@ -201,6 +201,13 @@ func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
 		}))
 	srcMock.ExpectQuery(`pg_amproc amproc`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "support", "fn_nspname", "proname", "fn_args"}))
+	srcMock.ExpectQuery(`FROM pg_amop amop`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "opfname", "amname", "strategy", "op_nspname", "oprname", "left_type", "right_type",
+		"purpose", "sort_nspname", "sort_opfname",
+	}))
+	srcMock.ExpectQuery(`FROM pg_amproc amproc`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "opfname", "amname", "support", "fn_nspname", "proname", "fn_args",
+	}))
 	srcMock.ExpectQuery(`FROM pg_cast`).WillReturnRows(
 		sqlmock.NewRows([]string{
 			"src_schema", "src_name", "tgt_schema", "tgt_name",
@@ -644,6 +651,13 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 		}))
 	mock.ExpectQuery(`pg_amproc amproc`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "support", "fn_nspname", "proname", "fn_args"}))
+	mock.ExpectQuery(`FROM pg_amop amop`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "opfname", "amname", "strategy", "op_nspname", "oprname", "left_type", "right_type",
+		"purpose", "sort_nspname", "sort_opfname",
+	}))
+	mock.ExpectQuery(`FROM pg_amproc amproc`).WillReturnRows(sqlmock.NewRows([]string{
+		"nspname", "opfname", "amname", "support", "fn_nspname", "proname", "fn_args",
+	}))
 	mock.ExpectQuery(`FROM pg_cast`).WillReturnRows(sqlmock.NewRows([]string{
 		"src_schema", "src_name", "tgt_schema", "tgt_name",
 		"castmethod", "castcontext", "fn_schema", "fn_name", "fn_args",
