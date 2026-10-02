@@ -143,6 +143,7 @@ func (a *App) handleCloneResult(msg cloneResultMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.cloneStatus = CloneStatusComplete
+		a.cloneVerify = cloneVerifyResult{}
 		safeErr := redactUserError(msg.err)
 		a.cloneError = safeErr
 		a.statusMsg = truncateStatus(StyleWarning.Render("Clone failed: "+safeErr), a.width)
@@ -153,15 +154,17 @@ func (a *App) handleCloneResult(msg cloneResultMsg) (tea.Model, tea.Cmd) {
 	a.cloneError = ""
 	switch {
 	case len(msg.verifyWarnings) > 0:
-		for _, w := range msg.verifyWarnings {
-			appendCloneLog(&a.cloneLog, w)
+		a.cloneVerify = cloneVerifyResult{
+			Ran:      true,
+			Tables:   msg.verifyTables,
+			Warnings: append([]string(nil), msg.verifyWarnings...),
 		}
 		a.statusMsg = truncateStatus(StyleWarning.Render("Clone complete · "+formatVerifyWarningCount(len(msg.verifyWarnings))), a.width)
 	case msg.verifyRan:
-		line := verifiedTablesLine(msg.verifyTables)
-		appendCloneLog(&a.cloneLog, line)
-		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete · "+line), a.width)
+		a.cloneVerify = cloneVerifyResult{Ran: true, Tables: msg.verifyTables}
+		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete · "+verifiedTablesLine(msg.verifyTables)), a.width)
 	default:
+		a.cloneVerify = cloneVerifyResult{}
 		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete"), a.width)
 	}
 	appendCloneLog(&a.cloneLog, "clone complete")
@@ -209,6 +212,7 @@ func (a *App) clearCloneResult() {
 		a.cloneStatus = CloneStatusIdle
 	}
 	a.cloneError = ""
+	a.cloneVerify = cloneVerifyResult{}
 }
 
 func (a *App) handleCloneResultKeys(msg tea.Msg) (bool, tea.Cmd) {
@@ -234,12 +238,12 @@ func (a *App) handleCloneResultKeys(msg tea.Msg) (bool, tea.Cmd) {
 		return true, func() tea.Msg { return cloneRequestedMsg{} }
 	case "j", "down":
 		if cs, ok := a.screens[ScreenClone].(*cloneScreen); ok {
-			cs.scrollLog(-1)
+			cs.scrollVerify(1)
 		}
 		return true, nil
 	case "k", "up":
 		if cs, ok := a.screens[ScreenClone].(*cloneScreen); ok {
-			cs.scrollLog(1)
+			cs.scrollVerify(-1)
 		}
 		return true, nil
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -142,9 +143,8 @@ func TestAppCloneShowsVerifyWarnings(t *testing.T) {
 	if !strings.Contains(status, "Clone complete") || !strings.Contains(status, "1 verify warning") {
 		t.Fatalf("statusMsg = %q", status)
 	}
-	log := strings.Join(app.cloneLog, "\n")
-	if !strings.Contains(log, "verify: public.orders row count source=2 target=1") {
-		t.Fatalf("cloneLog = %q", log)
+	if len(app.cloneVerify.Warnings) != 1 || app.cloneVerify.Warnings[0] != "verify: public.orders row count source=2 target=1" {
+		t.Fatalf("cloneVerify = %+v", app.cloneVerify)
 	}
 	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
 	if !strings.Contains(view, "verify: public.orders row count source=2 target=1") {
@@ -166,6 +166,71 @@ func TestAppCloneShowsVerifiedTables(t *testing.T) {
 	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
 	if !strings.Contains(view, "verified 4 tables") {
 		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestCloneVerifyResultStaysOnCurrentRun(t *testing.T) {
+	app := cloneAppWithSession(t, mockCloneRunner{
+		verifyWarnings: []string{"verify: public.orders row count source=2 target=1"},
+		verifyTables:   1,
+		verifyRan:      true,
+	})
+	app = startCloneFromForm(app)
+	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if !strings.Contains(view, "verify: public.orders row count source=2 target=1") {
+		t.Fatalf("view = %q, want the row warning", view)
+	}
+
+	app.cloneRunner = mockCloneRunner{verifyRan: true, verifyTables: 4}
+	app = drainUpdate(app, keyPress("esc", tea.KeyEscape, 0))
+	app = startCloneFromForm(app)
+	view = stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if strings.Contains(view, "public.orders") {
+		t.Fatalf("view = %q, previous warning leaked", view)
+	}
+	if !strings.Contains(view, "verified 4 tables") {
+		t.Fatalf("view = %q, want verified 4 tables", view)
+	}
+
+	app.cloneRunner = mockCloneRunner{}
+	app = drainUpdate(app, keyPress("esc", tea.KeyEscape, 0))
+	app = startCloneFromForm(app)
+	view = stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if strings.Contains(view, "verified") || strings.Contains(view, "verify:") {
+		t.Fatalf("view = %q, skipped verify must not keep a previous result", view)
+	}
+}
+
+func TestCloneVerifyWarningsSurviveLogCap(t *testing.T) {
+	warnings := make([]string, 51)
+	for i := range warnings {
+		warnings[i] = fmt.Sprintf("verify: public.t%d row count source=1 target=0", i)
+	}
+	app := cloneAppWithSession(t, mockCloneRunner{verifyWarnings: warnings, verifyTables: len(warnings), verifyRan: true})
+	app = startCloneFromForm(app)
+
+	if len(app.cloneVerify.Warnings) != 51 {
+		t.Fatalf("stored warnings = %d, want 51", len(app.cloneVerify.Warnings))
+	}
+	if app.cloneVerify.Warnings[0] != warnings[0] || app.cloneVerify.Warnings[50] != warnings[50] {
+		t.Fatal("first or last warning was dropped")
+	}
+	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if !strings.Contains(view, "verify: public.t0 ") {
+		t.Fatalf("view = %q, want the first warning", view)
+	}
+	if strings.Contains(view, "verify: public.t50 ") {
+		t.Fatalf("view = %q, last warning should start off screen", view)
+	}
+	for i := 0; i < 40; i++ {
+		app = drainUpdate(app, keyPress("j", 'j', 0))
+	}
+	view = stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if !strings.Contains(view, "verify: public.t50 ") {
+		t.Fatalf("view = %q, want the last warning after scrolling", view)
+	}
+	if strings.Contains(view, "verify: public.t0 ") {
+		t.Fatalf("view = %q, first warning should scroll off", view)
 	}
 }
 
