@@ -52,6 +52,9 @@ func TestLoadConfigReturnsDefaultsWhenFileMissing(t *testing.T) {
 	if cfg.Clone.SkipCreate {
 		t.Fatal("expected SkipCreate=false")
 	}
+	if !cfg.Clone.Analyze {
+		t.Fatal("expected Clone.Analyze=true")
+	}
 	if cfg.Clone.Strategy != "schema-replay" {
 		t.Fatalf("expected Strategy=schema-replay, got %q", cfg.Clone.Strategy)
 	}
@@ -100,6 +103,9 @@ func TestLoadConfig_overlay(t *testing.T) {
 	}
 	if cfg.Connections.Scope != "project" {
 		t.Fatalf("connections.scope = %q, want project (default)", cfg.Connections.Scope)
+	}
+	if !cfg.Clone.Analyze {
+		t.Fatal("omitted clone.analyze should stay true")
 	}
 }
 
