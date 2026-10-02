@@ -234,6 +234,12 @@ func splitFunctionIdentityArguments(args string) []string {
 }
 
 func formatOrderedAggregateSignature(args string, numDirect int) string {
+	// pg_get_function_identity_arguments already inserts ORDER BY for
+	// ordered-set and hypothetical aggregates. Inserting it again yields
+	// "ORDER BY integer ORDER BY integer", which PostgreSQL rejects.
+	if strings.Contains(args, " ORDER BY ") || strings.HasPrefix(args, "ORDER BY ") {
+		return args
+	}
 	types := splitFunctionIdentityArguments(args)
 	if numDirect <= 0 || numDirect >= len(types) {
 		return "ORDER BY " + args

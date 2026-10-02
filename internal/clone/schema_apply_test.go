@@ -1171,6 +1171,26 @@ func TestFormatAggregateHypothetical(t *testing.T) {
 	}
 }
 
+func TestFormatAggregateKeepsCatalogOrderBy(t *testing.T) {
+	got := formatAggregate(aggregateSpec{
+		schema: "app", name: "my_hypo", args: "integer ORDER BY integer",
+		aggkind: "h", aggNumDirect: 1, stype: "integer", sfuncSchema: "app", sfunc: "hypo_step",
+		parallel: "u", initVal: sql.NullString{String: "0", Valid: true},
+	})
+	want := `CREATE AGGREGATE "app"."my_hypo"(integer ORDER BY integer) (SFUNC = "app"."hypo_step", STYPE = integer, INITCOND = '0', PARALLEL = UNSAFE, HYPOTHETICAL)`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+	mode := formatAggregate(aggregateSpec{
+		schema: "app", name: "my_mode", args: "ORDER BY integer",
+		aggkind: "o", aggNumDirect: 0, stype: "integer", sfuncSchema: "app", sfunc: "mode_step",
+		parallel: "u",
+	})
+	if !strings.Contains(mode, `"app"."my_mode"(ORDER BY integer)`) || strings.Count(mode, "ORDER BY") != 1 {
+		t.Fatalf("mode = %s", mode)
+	}
+}
+
 func TestFormatAggregateOrderedSet(t *testing.T) {
 	got := formatAggregate(aggregateSpec{
 		schema: "public", name: "percentile_cont", args: "double precision, double precision",
