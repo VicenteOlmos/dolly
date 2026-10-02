@@ -2,9 +2,11 @@ package clone
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestFormatRowCountMismatch(t *testing.T) {
@@ -66,6 +68,43 @@ func TestVerifySequencesReadsRelationState(t *testing.T) {
 	}
 	if warnings[1] != "verify: public.orders_id_seq is_called source=true target=false" {
 		t.Fatalf("is_called warning = %q", warnings[1])
+	}
+	if err := srcMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tgtMock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifySequencesUsageOnlyDoesNotFail(t *testing.T) {
+	src, srcMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	tgt, tgtMock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tgt.Close()
+
+	denied := &pgconn.PgError{Code: "42501", Message: "permission denied for sequence orders_id_seq"}
+	for _, mock := range []sqlmock.Sqlmock{srcMock, tgtMock} {
+		mock.ExpectQuery(`FROM pg_class c`).
+			WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname"}).AddRow("app", "orders_id_seq"))
+		mock.ExpectQuery(`SELECT last_value, is_called FROM`).
+			WillReturnError(denied)
+		mock.ExpectQuery(`FROM pg_sequences`).
+			WillReturnRows(sqlmock.NewRows([]string{"last_value"}).AddRow(nil))
+	}
+
+	warnings, err := verifySequences(context.Background(), src, tgt, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "verify: app.orders_id_seq is_called unavailable without sequence SELECT") {
+		t.Fatalf("warnings = %#v", warnings)
 	}
 	if err := srcMock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

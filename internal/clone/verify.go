@@ -3,7 +3,10 @@ package clone
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/VicenteOlmos/dolly/internal/db"
 )
@@ -101,9 +104,15 @@ func countTableRows(ctx context.Context, dbConn *sql.DB, schema, table string) (
 }
 
 type sequenceState struct {
-	schema, name string
-	lastValue    int64
-	isCalled     bool
+	schema, name   string
+	lastValue      int64
+	lastValueKnown bool
+	isCalled       bool
+	isCalledKnown  bool
+}
+
+func formatSequenceStateUnavailable(schema, seq, field string) string {
+	return fmt.Sprintf("verify: %s.%s %s unavailable without sequence SELECT", schema, seq, field)
 }
 
 func verifySequences(ctx context.Context, srcDB, tgtDB *sql.DB, scope []string) ([]string, error) {
@@ -126,17 +135,27 @@ func verifySequences(ctx context.Context, srcDB, tgtDB *sql.DB, scope []string) 
 		key := src.schema + "\x00" + src.name
 		tgt, ok := tgtByKey[key]
 		if !ok {
-			warnings = append(warnings, formatSequenceLastValueMismatch(src.schema, src.name, src.lastValue, 0))
-			if src.isCalled {
+			if src.lastValueKnown {
+				warnings = append(warnings, formatSequenceLastValueMismatch(src.schema, src.name, src.lastValue, 0))
+			} else {
+				warnings = append(warnings, formatSequenceStateUnavailable(src.schema, src.name, "last_value"))
+			}
+			if src.isCalledKnown && src.isCalled {
 				warnings = append(warnings, formatSequenceIsCalledMismatch(src.schema, src.name, src.isCalled, false))
 			}
 			continue
 		}
-		if src.lastValue != tgt.lastValue {
+		switch {
+		case src.lastValueKnown && tgt.lastValueKnown && src.lastValue != tgt.lastValue:
 			warnings = append(warnings, formatSequenceLastValueMismatch(src.schema, src.name, src.lastValue, tgt.lastValue))
+		case !src.lastValueKnown || !tgt.lastValueKnown:
+			warnings = append(warnings, formatSequenceStateUnavailable(src.schema, src.name, "last_value"))
 		}
-		if src.isCalled != tgt.isCalled {
+		switch {
+		case src.isCalledKnown && tgt.isCalledKnown && src.isCalled != tgt.isCalled:
 			warnings = append(warnings, formatSequenceIsCalledMismatch(src.schema, src.name, src.isCalled, tgt.isCalled))
+		case !src.isCalledKnown || !tgt.isCalledKnown:
+			warnings = append(warnings, formatSequenceStateUnavailable(src.schema, src.name, "is_called"))
 		}
 	}
 	return warnings, nil
@@ -151,7 +170,18 @@ func listSequencesInScope(ctx context.Context, dbConn *sql.DB, scope []string) (
 	for _, name := range names {
 		seq, err := readSequenceState(ctx, dbConn, name.schema, name.name)
 		if err != nil {
-			return nil, err
+			if !isInsufficientPrivilege(err) {
+				return nil, err
+			}
+			seq = sequenceState{schema: name.schema, name: name.name}
+			last, viewErr := readSequenceViewLastValue(ctx, dbConn, name.schema, name.name)
+			if viewErr != nil && !isInsufficientPrivilege(viewErr) && !errors.Is(viewErr, sql.ErrNoRows) {
+				return nil, viewErr
+			}
+			if viewErr == nil && last.Valid {
+				seq.lastValue = last.Int64
+				seq.lastValueKnown = true
+			}
 		}
 		out = append(out, seq)
 	}
@@ -194,9 +224,26 @@ func listSequenceNames(ctx context.Context, dbConn *sql.DB, scope []string) ([]s
 
 func readSequenceState(ctx context.Context, dbConn *sql.DB, schema, name string) (sequenceState, error) {
 	query := fmt.Sprintf(`SELECT last_value, is_called FROM %s`, quoteQualifiedTable(schema, name))
-	seq := sequenceState{schema: schema, name: name}
+	seq := sequenceState{schema: schema, name: name, lastValueKnown: true, isCalledKnown: true}
 	if err := dbConn.QueryRowContext(ctx, query).Scan(&seq.lastValue, &seq.isCalled); err != nil {
-		return sequenceState{}, fmt.Errorf("read sequence %s.%s: %w", schema, name, err)
+		return sequenceState{}, err
 	}
 	return seq, nil
+}
+
+func readSequenceViewLastValue(ctx context.Context, dbConn *sql.DB, schema, name string) (sql.NullInt64, error) {
+	var last sql.NullInt64
+	err := dbConn.QueryRowContext(ctx, `
+		SELECT last_value
+		FROM pg_sequences
+		WHERE schemaname = $1 AND sequencename = $2`, schema, name).Scan(&last)
+	if err != nil {
+		return sql.NullInt64{}, err
+	}
+	return last, nil
+}
+
+func isInsufficientPrivilege(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42501"
 }
