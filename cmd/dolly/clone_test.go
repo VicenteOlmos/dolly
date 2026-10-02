@@ -1480,7 +1480,7 @@ func TestRunCloneJSONOutput(t *testing.T) {
 }
 
 func TestRunClonePreflightWarningsJSONAndStderr(t *testing.T) {
-	const warn = "schema-replay will not copy 1 foreign table(s); pg_dump is required for those objects"
+	const warn = "schema-replay will recreate 1 foreign table(s); their foreign servers must already exist on the target"
 	origRun := cloneRun
 	cloneRun = func(ctx context.Context, opts clone.Options) error {
 		if opts.PreflightWarnings != nil {
