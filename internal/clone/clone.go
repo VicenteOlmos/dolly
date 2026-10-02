@@ -18,7 +18,7 @@ import (
 
 // ProgressEvent reports step-granularity progress during a clone operation.
 type ProgressEvent struct {
-	Phase   string        // e.g. "creating_target", "replaying_schema", "dumping", "restoring", "copying_table", "restoring_sequences", "running_pg_basebackup", "creating_from_template"
+	Phase   string        // e.g. "creating_target", "replaying_schema", "dumping", "restoring", "analyzing", "copying_table", "restoring_sequences", "running_pg_basebackup", "creating_from_template"
 	Step    string        // human-readable label for the current step
 	Table   string        // table name for table-grained phases
 	Current int           // 1-based step index
@@ -54,6 +54,8 @@ type Options struct {
 	RowTransform dump.RowTransform
 	// PreflightWarnings receives schema-replay gap warnings after a successful preflight when non-nil.
 	PreflightWarnings *[]string
+	// SkipAnalyze skips the post-restore ANALYZE on the target (schema-replay only). Default runs ANALYZE.
+	SkipAnalyze bool
 }
 
 func schemaOnlyDumpArgs(cleanDSN string, schemas []string, includePrivileges bool) []string {

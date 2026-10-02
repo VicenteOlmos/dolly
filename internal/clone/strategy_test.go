@@ -29,6 +29,7 @@ func init() {
 		}
 		return nil
 	}
+	analyzeTargetFunc = func(context.Context, *sql.DB) error { return nil }
 	schemaToolLookPath = func(file string) (string, error) {
 		return "/usr/bin/" + file, nil
 	}
@@ -2170,8 +2171,8 @@ func TestSchemaReplayStrategyProgressEventOrdering(t *testing.T) {
 	if events[0].Current != 1 {
 		t.Fatalf("event[0] Current = %d, want 1", events[0].Current)
 	}
-	if events[0].Total != 4 {
-		t.Fatalf("event[0] Total = %d, want 4", events[0].Total)
+	if events[0].Total != 5 {
+		t.Fatalf("event[0] Total = %d, want 5", events[0].Total)
 	}
 	testutil.AssertElapsedPositive(t, events[0].Elapsed, "event[0]")
 }
@@ -2483,6 +2484,144 @@ func TestSchemaReplayStrategyNoDropWhenSkipCreate(t *testing.T) {
 	}
 	if len(dropCalls) != 0 {
 		t.Fatalf("expected 0 dropDatabase calls with SkipCreate=true, got %d", len(dropCalls))
+	}
+}
+
+func TestSchemaReplayAnalyzeTargetAfterRestore(t *testing.T) {
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		db, _, err := sqlmock.New()
+		if err != nil {
+			return nil, err
+		}
+		return db, nil
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	origDump := dumpFunc
+	dumpFunc = func(context.Context, *sql.DB, string, ...dump.Option) error { return nil }
+	defer func() { dumpFunc = origDump }()
+
+	origRestore := restoreFunc
+	restoreFunc = func(context.Context, *sql.DB, string, ...restore.Option) error { return nil }
+	defer func() { restoreFunc = origRestore }()
+
+	var analyzeCalls int
+	origAnalyze := analyzeTargetFunc
+	analyzeTargetFunc = func(context.Context, *sql.DB) error {
+		analyzeCalls++
+		return nil
+	}
+	defer func() { analyzeTargetFunc = origAnalyze }()
+
+	var events []ProgressEvent
+	err := (&SchemaReplayStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), Options{
+		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
+		CloneName:  "db_clone",
+		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"public"})},
+		ProgressEvent: func(ev ProgressEvent) {
+			events = append(events, ev)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if analyzeCalls != 1 {
+		t.Fatalf("analyzeTargetFunc calls = %d, want 1", analyzeCalls)
+	}
+	var sawAnalyzing bool
+	for _, ev := range events {
+		if ev.Phase == "analyzing" && ev.Step == "analyzing target" {
+			sawAnalyzing = true
+			if ev.Current != 4 || ev.Total != 5 {
+				t.Fatalf("analyzing event progress = %d/%d, want 4/5", ev.Current, ev.Total)
+			}
+		}
+	}
+	if !sawAnalyzing {
+		t.Fatal("expected analyzing progress event")
+	}
+}
+
+func TestSchemaReplaySkipAnalyze(t *testing.T) {
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		db, _, err := sqlmock.New()
+		if err != nil {
+			return nil, err
+		}
+		return db, nil
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	origDump := dumpFunc
+	dumpFunc = func(context.Context, *sql.DB, string, ...dump.Option) error { return nil }
+	defer func() { dumpFunc = origDump }()
+
+	origRestore := restoreFunc
+	restoreFunc = func(context.Context, *sql.DB, string, ...restore.Option) error { return nil }
+	defer func() { restoreFunc = origRestore }()
+
+	var analyzeCalls int
+	origAnalyze := analyzeTargetFunc
+	analyzeTargetFunc = func(context.Context, *sql.DB) error {
+		analyzeCalls++
+		return nil
+	}
+	defer func() { analyzeTargetFunc = origAnalyze }()
+
+	err := (&SchemaReplayStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), Options{
+		SourceDSN:   "postgres://u:p@h-a:5432/db_src",
+		CloneName:   "db_clone",
+		SkipCreate:  true,
+		SkipAnalyze: true,
+		DumpOpts:    []dump.Option{dump.WithSchemas([]string{"public"})},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if analyzeCalls != 0 {
+		t.Fatalf("analyzeTargetFunc calls = %d, want 0 when SkipAnalyze", analyzeCalls)
+	}
+}
+
+func TestSchemaReplayAnalyzeTargetError(t *testing.T) {
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(dsn string) (*sql.DB, error) {
+		db, _, err := sqlmock.New()
+		if err != nil {
+			return nil, err
+		}
+		return db, nil
+	}
+	defer func() { sqlOpenDB = origOpenDB }()
+
+	origDump := dumpFunc
+	dumpFunc = func(context.Context, *sql.DB, string, ...dump.Option) error { return nil }
+	defer func() { dumpFunc = origDump }()
+
+	origRestore := restoreFunc
+	restoreFunc = func(context.Context, *sql.DB, string, ...restore.Option) error { return nil }
+	defer func() { restoreFunc = origRestore }()
+
+	origAnalyze := analyzeTargetFunc
+	analyzeTargetFunc = func(context.Context, *sql.DB) error {
+		return errors.New("stats collector busy")
+	}
+	defer func() { analyzeTargetFunc = origAnalyze }()
+
+	err := (&SchemaReplayStrategy{Runner: &mockCommandRunner{}}).Execute(context.Background(), Options{
+		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
+		CloneName:  "db_clone",
+		SkipCreate: true,
+		DumpOpts:   []dump.Option{dump.WithSchemas([]string{"public"})},
+	})
+	if err == nil {
+		t.Fatal("expected error from ANALYZE")
+	}
+	if !contains(err.Error(), "analyze target:") || !contains(err.Error(), "stats collector busy") {
+		t.Fatalf("error = %v, want analyze target wrapper", err)
 	}
 }
 

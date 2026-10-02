@@ -166,6 +166,7 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 		PermissionCache:   permCache,
 		MaxOpenConns:      maxConns,
 		IncludePrivileges: p.IncludePrivileges,
+		SkipAnalyze:       !cfg.Clone.Analyze,
 	}
 
 	return runInProcess(ctx, opts, onProgress)
