@@ -493,6 +493,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 
 	var preflightWarnings []string
 	var verifyWarnings []string
+	verifyTables := -1
 	opts := clone.Options{
 		SourceDSN:         sourceDSN,
 		CloneName:         cloneName,
@@ -511,6 +512,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		PreflightWarnings: &preflightWarnings,
 		Verify:            verify,
 		VerifyWarnings:    &verifyWarnings,
+		VerifyTables:      &verifyTables,
 		ProgressEvent: func(ev clone.ProgressEvent) {
 			if flags.JSON {
 				return
@@ -527,6 +529,9 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 	}
 	for _, w := range verifyWarnings {
 		fmt.Fprintln(os.Stderr, w)
+	}
+	if verifyTables >= 0 && len(verifyWarnings) == 0 {
+		fmt.Fprintln(os.Stderr, clone.FormatVerifiedTables(verifyTables))
 	}
 	fmt.Fprintln(os.Stderr, "clone complete")
 
@@ -553,6 +558,9 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 			"schemas":            sch,
 			"preflight_warnings": pw,
 			"verify_warnings":    vw,
+		}
+		if verifyTables >= 0 {
+			result["verify_tables"] = verifyTables
 		}
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {

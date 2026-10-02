@@ -3,9 +3,11 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/clonework"
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
@@ -149,9 +151,32 @@ func (a *App) handleCloneResult(msg cloneResultMsg) (tea.Model, tea.Cmd) {
 	}
 	a.cloneStatus = CloneStatusComplete
 	a.cloneError = ""
-	a.statusMsg = truncateStatus(StyleBase.Render("Clone complete"), a.width)
+	switch {
+	case len(msg.verifyWarnings) > 0:
+		for _, w := range msg.verifyWarnings {
+			appendCloneLog(&a.cloneLog, w)
+		}
+		a.statusMsg = truncateStatus(StyleWarning.Render("Clone complete · "+formatVerifyWarningCount(len(msg.verifyWarnings))), a.width)
+	case msg.verifyRan:
+		line := verifiedTablesLine(msg.verifyTables)
+		appendCloneLog(&a.cloneLog, line)
+		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete · "+line), a.width)
+	default:
+		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete"), a.width)
+	}
 	appendCloneLog(&a.cloneLog, "clone complete")
 	return a, nil
+}
+
+func formatVerifyWarningCount(n int) string {
+	if n == 1 {
+		return "1 verify warning"
+	}
+	return fmt.Sprintf("%d verify warnings", n)
+}
+
+func verifiedTablesLine(n int) string {
+	return clonework.VerifiedTablesLine(n)
 }
 
 func (a *App) handleAnalyzeResult(msg analyzeResultMsg) (tea.Model, tea.Cmd) {

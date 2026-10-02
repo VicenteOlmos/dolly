@@ -763,6 +763,23 @@ func (c *cloneScreen) fieldLine(label, value string, index, width int) string {
 	return StyleMuted.Render(label) + " " + value
 }
 
+func cloneVerifyResultLines(log []string, height int) []string {
+	var out []string
+	for _, line := range log {
+		if strings.HasPrefix(line, "verify:") || strings.HasPrefix(line, "verified ") {
+			out = append(out, line)
+		}
+	}
+	maxLines := height - 6
+	if maxLines < 1 {
+		return nil
+	}
+	if len(out) > maxLines {
+		return out[:maxLines]
+	}
+	return out
+}
+
 func (c *cloneScreen) viewComplete(width, height int) string {
 	var lines []string
 	lines = append(lines, StyleHeader.Render("Clone"))
@@ -773,6 +790,14 @@ func (c *cloneScreen) viewComplete(width, height int) string {
 		lines = append(lines, StyleWarning.Render("Error: "+errLine))
 	} else {
 		lines = append(lines, StyleAccent.Render("✓ Clone complete"))
+		for _, line := range cloneVerifyResultLines(*c.cloneLog, height) {
+			rendered := truncateRunes(line, max(0, width-4))
+			if strings.HasPrefix(line, "verify:") {
+				lines = append(lines, StyleWarning.Render(rendered))
+			} else {
+				lines = append(lines, StyleBase.Render(rendered))
+			}
+		}
 	}
 	lines = append(lines, "")
 	lines = append(lines, StyleMuted.Render("Enter run again · Esc dismiss"))

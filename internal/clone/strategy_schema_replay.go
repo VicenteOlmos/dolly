@@ -201,12 +201,15 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 	}
 
 	if opts.Verify {
-		warnings, err := runSchemaReplayVerify(ctx, opts, srcDB, tgtDB, usedPgDump)
+		warnings, tables, err := runSchemaReplayVerify(ctx, opts, srcDB, tgtDB, usedPgDump)
 		if err != nil {
 			return fmt.Errorf("verify clone: %w", err)
 		}
 		if opts.VerifyWarnings != nil {
 			*opts.VerifyWarnings = warnings
+		}
+		if opts.VerifyTables != nil {
+			*opts.VerifyTables = tables
 		}
 	}
 	if !opts.SkipAnalyze {

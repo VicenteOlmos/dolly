@@ -29,6 +29,11 @@ type Params struct {
 	DumpDir           string
 	SkipCreate        bool
 	SkipCreateSet     bool
+	// VerifyWarnings receives schema-replay verify warnings when non-nil.
+	VerifyWarnings *[]string
+	// VerifyTables receives the compared table count when schema-replay verification runs.
+	// Callers that need to detect a skipped check should initialize it to -1.
+	VerifyTables *int
 }
 
 // Run executes clone through the controlled clone runner using selected schemas.
@@ -44,7 +49,14 @@ func Run(ctx context.Context, p Params, onProgress func(clone.ProgressEvent)) er
 	if cfg.Sanitization.Enabled && (strategy == "template" || strategy == "physical-backup") {
 		return fmt.Errorf("sanitization cannot rewrite %s clones; use schema-replay or logical-stream, or disable sanitization", strategy)
 	}
+	opts.VerifyWarnings = p.VerifyWarnings
+	opts.VerifyTables = p.VerifyTables
 	return runInProcess(ctx, opts, onProgress)
+}
+
+// VerifiedTablesLine is the clean schema-replay verification summary.
+func VerifiedTablesLine(n int) string {
+	return clone.FormatVerifiedTables(n)
 }
 
 var cloneRun = clone.Run

@@ -9,6 +9,18 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+func TestFormatVerifiedTables(t *testing.T) {
+	if got := FormatVerifiedTables(0); got != "verified 0 tables" {
+		t.Fatalf("got %q", got)
+	}
+	if got := FormatVerifiedTables(1); got != "verified 1 table" {
+		t.Fatalf("got %q", got)
+	}
+	if got := FormatVerifiedTables(12); got != "verified 12 tables" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestFormatRowCountMismatch(t *testing.T) {
 	got := formatRowCountMismatch("public", "orders", 10, 8)
 	want := "verify: public.orders row count source=10 target=8"

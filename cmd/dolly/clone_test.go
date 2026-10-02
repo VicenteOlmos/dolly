@@ -694,6 +694,95 @@ func TestRunCloneVerifyDefault(t *testing.T) {
 	}
 }
 
+func TestRunClonePrintsVerifiedTables(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		if opts.VerifyTables != nil {
+			*opts.VerifyTables = 4
+		}
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		cfg := config.DefaultConfig()
+		cfg.Sanitization.Enabled = true
+		return cfg, nil
+	}
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
+
+	stderr := captureStderr(func() {
+		if err := runClone([]string{"-ff"}); err != nil {
+			t.Fatalf("runClone: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "verified 4 tables") {
+		t.Fatalf("stderr = %q, want verified 4 tables", stderr)
+	}
+}
+
+func TestRunCloneVerifyWarningsSuppressCleanLine(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		if opts.VerifyWarnings != nil {
+			*opts.VerifyWarnings = []string{"verify: public.orders row count source=2 target=1"}
+		}
+		if opts.VerifyTables != nil {
+			*opts.VerifyTables = 4
+		}
+		return nil
+	}
+	t.Cleanup(func() { cloneRun = origRun })
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		cfg := config.DefaultConfig()
+		cfg.Sanitization.Enabled = true
+		return cfg, nil
+	}
+	t.Cleanup(func() { cloneLoadConfig = origLoadConfig })
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	t.Cleanup(func() { cloneIsTerminal = origIsTerminal })
+
+	stdout := captureStdout(func() {
+		stderr := captureStderr(func() {
+			if err := runClone([]string{"-ff", "--json"}); err != nil {
+				t.Fatalf("runClone: %v", err)
+			}
+		})
+		if !strings.Contains(stderr, "verify: public.orders row count source=2 target=1") {
+			t.Fatalf("stderr = %q, want row warning", stderr)
+		}
+		if strings.Contains(stderr, "verified 4 tables") {
+			t.Fatalf("stderr = %q, clean verify line should stay hidden when warnings exist", stderr)
+		}
+	})
+	var result struct {
+		VerifyTables   *int     `json:"verify_tables"`
+		VerifyWarnings []string `json:"verify_warnings"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, stdout)
+	}
+	if result.VerifyTables == nil || *result.VerifyTables != 4 {
+		t.Fatalf("verify_tables = %v, want 4", result.VerifyTables)
+	}
+	if len(result.VerifyWarnings) != 1 {
+		t.Fatalf("verify_warnings = %#v", result.VerifyWarnings)
+	}
+}
+
 func TestRunCloneNoVerify(t *testing.T) {
 	stubCloneListSchemaNames(t, nil, nil)
 

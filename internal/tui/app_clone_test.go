@@ -16,9 +16,12 @@ import (
 )
 
 type mockCloneRunner struct {
-	err      error
-	lines    []string
-	blockCtx bool
+	err            error
+	lines          []string
+	blockCtx       bool
+	verifyWarnings []string
+	verifyTables   int
+	verifyRan      bool
 }
 
 type schemasRecordingCloneRunner struct {
@@ -26,28 +29,32 @@ type schemasRecordingCloneRunner struct {
 	lastDraft   CloneDraft
 }
 
-func (r *schemasRecordingCloneRunner) Run(_ context.Context, draft CloneDraft, schemas []string, _ func(CloneProgressEvent)) error {
+func (r *schemasRecordingCloneRunner) Run(_ context.Context, draft CloneDraft, schemas []string, _ func(CloneProgressEvent)) (CloneResult, error) {
 	r.lastSchemas = append([]string(nil), schemas...)
 	r.lastDraft = draft
-	return nil
+	return CloneResult{}, nil
 }
 
-func (m mockCloneRunner) Run(ctx context.Context, _ CloneDraft, _ []string, onProgress func(CloneProgressEvent)) error {
+func (m mockCloneRunner) Run(ctx context.Context, _ CloneDraft, _ []string, onProgress func(CloneProgressEvent)) (CloneResult, error) {
 	for _, line := range m.lines {
 		if onProgress != nil {
 			onProgress(CloneProgressEvent{Phase: "test", Step: line, Current: 1, Total: 1})
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return CloneResult{}, ctx.Err()
 		default:
 		}
 	}
 	if m.blockCtx {
 		<-ctx.Done()
-		return ctx.Err()
+		return CloneResult{}, ctx.Err()
 	}
-	return m.err
+	return CloneResult{
+		VerifyWarnings: m.verifyWarnings,
+		VerifyTables:   m.verifyTables,
+		VerifyRan:      m.verifyRan,
+	}, m.err
 }
 
 func cloneApp(t *testing.T, runner CloneRunner) *App {
@@ -119,6 +126,46 @@ func TestClonePrivilegesReachRunner(t *testing.T) {
 	app = startCloneFromForm(app)
 	if !runner.lastDraft.IncludePrivileges {
 		t.Fatal("clone runner did not receive IncludePrivileges")
+	}
+}
+
+func TestAppCloneShowsVerifyWarnings(t *testing.T) {
+	runner := mockCloneRunner{
+		verifyWarnings: []string{"verify: public.orders row count source=2 target=1"},
+		verifyTables:   3,
+		verifyRan:      true,
+	}
+	app := cloneAppWithSession(t, runner)
+	app = startCloneFromForm(app)
+
+	status := stripANSIForGolden(app.statusMsg)
+	if !strings.Contains(status, "Clone complete") || !strings.Contains(status, "1 verify warning") {
+		t.Fatalf("statusMsg = %q", status)
+	}
+	log := strings.Join(app.cloneLog, "\n")
+	if !strings.Contains(log, "verify: public.orders row count source=2 target=1") {
+		t.Fatalf("cloneLog = %q", log)
+	}
+	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if !strings.Contains(view, "verify: public.orders row count source=2 target=1") {
+		t.Fatalf("view = %q", view)
+	}
+	if app.cloneError != "" {
+		t.Fatalf("cloneError = %q, warnings must not fail the clone", app.cloneError)
+	}
+}
+
+func TestAppCloneShowsVerifiedTables(t *testing.T) {
+	app := cloneAppWithSession(t, mockCloneRunner{verifyRan: true, verifyTables: 4})
+	app = startCloneFromForm(app)
+
+	status := stripANSIForGolden(app.statusMsg)
+	if !strings.Contains(status, "verified 4 tables") {
+		t.Fatalf("statusMsg = %q", status)
+	}
+	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
+	if !strings.Contains(view, "verified 4 tables") {
+		t.Fatalf("view = %q", view)
 	}
 }
 
@@ -738,7 +785,7 @@ func TestProductionCloneRunnerPassesReplaceAndOnConflict(t *testing.T) {
 		OnConflict: "skip",
 	}
 	runner := productionCloneRunner{}
-	if err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
+	if _, err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !gotReplaceSet || !gotReplace || gotOnConflict != "skip" {
@@ -761,7 +808,7 @@ func TestProductionCloneRunnerLeavesUnsetStrategyForConfig(t *testing.T) {
 		CloneName: "db_dolly_1",
 		TargetDSN: "postgres://u:p@h/target",
 	}
-	if err := (productionCloneRunner{}).Run(context.Background(), draft, nil, nil); err != nil {
+	if _, err := (productionCloneRunner{}).Run(context.Background(), draft, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if gotStrategy != "" || gotOnConflict != "" {

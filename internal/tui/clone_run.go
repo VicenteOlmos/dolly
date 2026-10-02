@@ -33,7 +33,17 @@ type cloneProgressMsg struct {
 }
 
 type cloneResultMsg struct {
-	err error
+	err            error
+	verifyWarnings []string
+	verifyTables   int
+	verifyRan      bool
+}
+
+// CloneResult is the successful outcome of a TUI clone, including schema-replay verification.
+type CloneResult struct {
+	VerifyWarnings []string
+	VerifyTables   int
+	VerifyRan      bool
 }
 
 type analyzeRequestedMsg struct{}
@@ -83,12 +93,12 @@ func startAnalyzeCmd(sqlDB *sql.DB, sourceDB, nameTpl string, schemas []string) 
 
 // CloneRunner runs clone against the connected source session.
 type CloneRunner interface {
-	Run(ctx context.Context, draft CloneDraft, schemas []string, onProgress func(CloneProgressEvent)) error
+	Run(ctx context.Context, draft CloneDraft, schemas []string, onProgress func(CloneProgressEvent)) (CloneResult, error)
 }
 
 type productionCloneRunner struct{}
 
-func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas []string, onProgress func(CloneProgressEvent)) error {
+func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas []string, onProgress func(CloneProgressEvent)) (CloneResult, error) {
 	// Adapter: convert local CloneProgressEvent to clonework.ProgressEvent (which is clone.ProgressEvent).
 	var wrapped func(clonework.ProgressEvent)
 	if onProgress != nil {
@@ -103,7 +113,9 @@ func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas 
 			})
 		}
 	}
-	return cloneworkRun(ctx, clonework.Params{
+	var warnings []string
+	tables := -1
+	err := cloneworkRun(ctx, clonework.Params{
 		SourceDSN:         draft.SourceDSN,
 		CloneName:         draft.CloneName,
 		TargetDSN:         draft.TargetDSN,
@@ -117,7 +129,14 @@ func (productionCloneRunner) Run(ctx context.Context, draft CloneDraft, schemas 
 		DumpDir:           draft.DumpDir,
 		SkipCreate:        draft.SkipCreate,
 		SkipCreateSet:     true,
+		VerifyWarnings:    &warnings,
+		VerifyTables:      &tables,
 	}, wrapped)
+	return CloneResult{
+		VerifyWarnings: warnings,
+		VerifyTables:   tables,
+		VerifyRan:      tables >= 0,
+	}, err
 }
 
 func waitCloneCmd(ch <-chan tea.Msg) tea.Cmd {
@@ -139,8 +158,13 @@ func startCloneCmd(runner CloneRunner, ctx context.Context, draft CloneDraft, sc
 			line := formatCloneProgress(ev)
 			sendProgress(ctx, ch, cloneProgressMsg{line: line, ev: ev})
 		}
-		err := runner.Run(ctx, draft, schemas, onProgress)
-		deliverResult(ctx, ch, cloneResultMsg{err: err})
+		result, err := runner.Run(ctx, draft, schemas, onProgress)
+		deliverResult(ctx, ch, cloneResultMsg{
+			err:            err,
+			verifyWarnings: result.VerifyWarnings,
+			verifyTables:   result.VerifyTables,
+			verifyRan:      result.VerifyRan,
+		})
 	}()
 	return waitCloneCmd(ch), ch, cancel
 }

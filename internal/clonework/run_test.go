@@ -14,6 +14,34 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/restore"
 )
 
+func TestRunForwardsVerifyReport(t *testing.T) {
+	orig := runInProcess
+	t.Cleanup(func() { runInProcess = orig })
+	runInProcess = func(_ context.Context, opts clone.Options, _ func(clone.ProgressEvent)) error {
+		if opts.VerifyWarnings == nil || opts.VerifyTables == nil {
+			t.Fatal("verify report pointers were not forwarded")
+		}
+		*opts.VerifyWarnings = []string{"verify: public.t row count source=1 target=0"}
+		*opts.VerifyTables = 2
+		return nil
+	}
+	var warnings []string
+	tables := -1
+	err := Run(context.Background(), Params{
+		SourceDSN:      "postgres://u:p@h/src",
+		TargetDSN:      "postgres://u:p@h/target",
+		Schemas:        []string{"public"},
+		VerifyWarnings: &warnings,
+		VerifyTables:   &tables,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tables != 2 || len(warnings) != 1 {
+		t.Fatalf("tables=%d warnings=%#v", tables, warnings)
+	}
+}
+
 func TestRunRequiresSchemas(t *testing.T) {
 	err := Run(context.Background(), Params{SourceDSN: "postgres://u:p@h/db"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "schema") {
