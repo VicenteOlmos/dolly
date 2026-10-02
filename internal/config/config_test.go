@@ -104,6 +104,9 @@ func TestLoadConfig_overlay(t *testing.T) {
 	if cfg.Connections.Scope != "project" {
 		t.Fatalf("connections.scope = %q, want project (default)", cfg.Connections.Scope)
 	}
+	if !cfg.Clone.Analyze {
+		t.Fatal("omitted clone.analyze should stay true")
+	}
 }
 
 func TestLoadConfig_commentsAndTrailingCommas(t *testing.T) {
