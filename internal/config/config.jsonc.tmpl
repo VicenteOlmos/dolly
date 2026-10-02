@@ -42,6 +42,9 @@
     // After schema-replay, compare row counts and sequences between source and target.
     "verify": true,
 
+    // schema-replay: run ANALYZE on the target after data restore (default true).
+    "analyze": true,
+
     // Target data directory for physical-backup (pg_basebackup -D). Fast-forward only.
     "target_dir": "",
 

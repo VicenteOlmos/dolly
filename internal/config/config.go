@@ -34,6 +34,7 @@ type Config struct {
 		Replace           bool     `json:"replace"`
 		SkipCreate        bool     `json:"skip_create"`
 		Verify            bool     `json:"verify"`
+		Analyze           bool     `json:"analyze"`
 		Strategy          string   `json:"strategy"`
 		Schemas           []string `json:"schemas"`
 		Preflight         struct {
@@ -128,6 +129,7 @@ func DefaultConfig() *Config {
 	cfg.Clone.NameTemplate = "{db}_dolly_{n}"
 	cfg.Clone.RestoreOnConflict = "error"
 	cfg.Clone.Verify = true
+	cfg.Clone.Analyze = true
 	cfg.Clone.Strategy = "schema-replay"
 	cfg.Clone.Preflight.CachePermissionsPath = ".dolly/permissions-cache.yaml"
 	cfg.Clone.Preflight.CachePermissionsTTL = "24h"

@@ -725,6 +725,68 @@ func TestRunCloneNoVerify(t *testing.T) {
 	}
 }
 
+func TestRunCloneNoAnalyzeFlag(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	defer func() { cloneRun = origRun }()
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		return config.DefaultConfig(), nil
+	}
+	defer func() { cloneLoadConfig = origLoadConfig }()
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	defer func() { cloneIsTerminal = origIsTerminal }()
+
+	err := runClone([]string{"-ff", "--no-analyze"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !capturedOpts.SkipAnalyze {
+		t.Fatal("SkipAnalyze should be true when --no-analyze is set")
+	}
+}
+
+func TestRunCloneAnalyzeFromConfig(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	defer func() { cloneRun = origRun }()
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		cfg := config.DefaultConfig()
+		cfg.Clone.Analyze = false
+		return cfg, nil
+	}
+	defer func() { cloneLoadConfig = origLoadConfig }()
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	defer func() { cloneIsTerminal = origIsTerminal }()
+
+	err := runClone([]string{"-ff"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !capturedOpts.SkipAnalyze {
+		t.Fatal("SkipAnalyze should be true when clone.analyze is false")
+	}
+}
+
 func TestRunCloneRestoreOptionsWired(t *testing.T) {
 	stubCloneListSchemaNames(t, nil, nil)
 

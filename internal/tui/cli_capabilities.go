@@ -137,9 +137,10 @@ func CLICatalog() []CLICommand {
 				{Name: "yes", Description: "confirm destructive operations (required with -ff when clone.replace=true)"},
 				{Name: "with-privileges", Description: "schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)"},
 				{Name: "no-verify", Description: "skip post-clone row and sequence verification (schema-replay; overrides clone.verify config)"},
+				{Name: "no-analyze", Description: "schema-replay: skip post-restore ANALYZE on the target (overrides clone.analyze config)"},
 				{Name: "json", Description: "emit machine-readable JSON result to stdout"},
 			},
-			ConfigNote: "Reads config.jsonc for env.*, clone.target_url, clone.target_dir, clone.name_template, clone.schemas, clone.replace, clone.restore_on_conflict, clone.verify, and related keys.",
+			ConfigNote: "Reads config.jsonc for env.*, clone.target_url, clone.target_dir, clone.name_template, clone.schemas, clone.replace, clone.restore_on_conflict, clone.verify, clone.analyze, and related keys.",
 			Examples: []string{
 				"dolly clone",
 				"dolly clone -ff",
