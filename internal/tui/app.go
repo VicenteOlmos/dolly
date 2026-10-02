@@ -65,6 +65,7 @@ type App struct {
 	cloneStatus       CloneStatus
 	cloneError        string
 	cloneLog          []string
+	cloneVerify       cloneVerifyResult
 	cloneCancel       context.CancelFunc
 	cloneCh           <-chan tea.Msg
 	dumpProgress      *DumpProgressEvent
@@ -157,7 +158,7 @@ func NewAppWithOptions(loader SchemaLoader, runner DumpRunner, restoreRunner Res
 	}, func() bool {
 		return app.cfg != nil && app.cfg.Dump.RequireSafeKey
 	}, func() *config.Config { return app.cfg })
-	app.screens[ScreenClone] = newCloneScreen(&app.clone, app.hasSession, &app.cloneStatus, &app.cloneLog, &app.cloneError, &app.spinnerFrame, store, saveConnections, func() *config.Config { return app.cfg }, func() string { return app.conn.DSN() }, &app.cloneProgress)
+	app.screens[ScreenClone] = newCloneScreen(&app.clone, app.hasSession, &app.cloneStatus, &app.cloneLog, &app.cloneError, &app.spinnerFrame, store, saveConnections, func() *config.Config { return app.cfg }, func() string { return app.conn.DSN() }, &app.cloneProgress, &app.cloneVerify)
 	app.screens[ScreenConfig] = newConfigScreen(func() *config.Config { return app.cfg }, func() string { return app.cfgPath })
 	return app
 }

@@ -147,7 +147,7 @@ type barrierCloneRunner struct {
 	err     error
 }
 
-func (r barrierCloneRunner) Run(ctx context.Context, _ CloneDraft, _ []string, onProgress func(CloneProgressEvent)) error {
+func (r barrierCloneRunner) Run(ctx context.Context, _ CloneDraft, _ []string, onProgress func(CloneProgressEvent)) (CloneResult, error) {
 	for i := 0; i < workerChannelCap; i++ {
 		if onProgress != nil {
 			onProgress(CloneProgressEvent{Phase: "x", Step: fmt.Sprintf("step-%d", i)})
@@ -163,7 +163,7 @@ func (r barrierCloneRunner) Run(ctx context.Context, _ CloneDraft, _ []string, o
 		err = ctx.Err()
 	}
 	close(r.barrier.runReturned)
-	return err
+	return CloneResult{}, err
 }
 
 func TestDeliverResultSendProgress(t *testing.T) {

@@ -37,6 +37,7 @@ type cloneScreen struct {
 	cloneLog        *[]string
 	cloneError      *string
 	cloneProgress   **CloneProgressEvent
+	cloneVerify     *cloneVerifyResult
 	hasSession      func() bool
 	nav             SectionNav
 	formField       int
@@ -61,6 +62,7 @@ func newCloneScreen(
 	getCfg func() *config.Config,
 	getConnDSN func() string,
 	cloneProgress **CloneProgressEvent,
+	cloneVerify *cloneVerifyResult,
 ) ScreenModel {
 	return &cloneScreen{
 		draft:           draft,
@@ -69,6 +71,7 @@ func newCloneScreen(
 		cloneLog:        cloneLog,
 		cloneError:      cloneError,
 		cloneProgress:   cloneProgress,
+		cloneVerify:     cloneVerify,
 		spinnerFrame:    spinnerFrame,
 		store:           store,
 		saveConnections: saveConnections,
@@ -88,6 +91,20 @@ func (c *cloneScreen) complete() bool {
 
 func (c *cloneScreen) resetLogScroll() {
 	c.logTailOffset = 0
+}
+
+func (c *cloneScreen) scrollVerify(delta int) {
+	if c.cloneVerify == nil {
+		return
+	}
+	lines := c.cloneVerify.lines()
+	c.cloneVerify.scroll += delta
+	if c.cloneVerify.scroll < 0 {
+		c.cloneVerify.scroll = 0
+	}
+	if c.cloneVerify.scroll > len(lines) {
+		c.cloneVerify.scroll = len(lines)
+	}
 }
 
 func (c *cloneScreen) scrollLog(delta int) {
@@ -763,6 +780,44 @@ func (c *cloneScreen) fieldLine(label, value string, index, width int) string {
 	return StyleMuted.Render(label) + " " + value
 }
 
+type cloneVerifyResult struct {
+	Ran      bool
+	Tables   int
+	Warnings []string
+	scroll   int
+}
+
+func (r *cloneVerifyResult) lines() []string {
+	if r == nil {
+		return nil
+	}
+	if len(r.Warnings) > 0 {
+		return r.Warnings
+	}
+	if r.Ran {
+		return []string{verifiedTablesLine(r.Tables)}
+	}
+	return nil
+}
+
+func visibleVerifyLines(lines []string, offset, height int) []string {
+	maxLines := height - 6
+	if maxLines < 1 || len(lines) == 0 {
+		return nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(lines) {
+		offset = len(lines)
+	}
+	end := offset + maxLines
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return lines[offset:end]
+}
+
 func (c *cloneScreen) viewComplete(width, height int) string {
 	var lines []string
 	lines = append(lines, StyleHeader.Render("Clone"))
@@ -773,6 +828,21 @@ func (c *cloneScreen) viewComplete(width, height int) string {
 		lines = append(lines, StyleWarning.Render("Error: "+errLine))
 	} else {
 		lines = append(lines, StyleAccent.Render("✓ Clone complete"))
+		var verifyLines []string
+		if c.cloneVerify != nil {
+			verifyLines = visibleVerifyLines(c.cloneVerify.lines(), c.cloneVerify.scroll, height)
+		}
+		for _, line := range verifyLines {
+			rendered := truncateRunes(line, max(0, width-4))
+			if strings.HasPrefix(line, "verify:") {
+				lines = append(lines, StyleWarning.Render(rendered))
+			} else {
+				lines = append(lines, StyleBase.Render(rendered))
+			}
+		}
+		if c.cloneVerify != nil && len(c.cloneVerify.lines()) > len(verifyLines) && len(verifyLines) > 0 {
+			lines = append(lines, StyleMuted.Render("↑/↓ scroll verify"))
+		}
 	}
 	lines = append(lines, "")
 	lines = append(lines, StyleMuted.Render("Enter run again · Esc dismiss"))

@@ -7,6 +7,29 @@ import (
 	"github.com/VicenteOlmos/dolly/internal/clonework"
 )
 
+func TestProductionCloneRunnerReturnsVerifyReport(t *testing.T) {
+	orig := cloneworkRun
+	t.Cleanup(func() { cloneworkRun = orig })
+	cloneworkRun = func(_ context.Context, p clonework.Params, _ func(clonework.ProgressEvent)) error {
+		if p.VerifyWarnings == nil || p.VerifyTables == nil {
+			t.Fatal("verify report pointers were not passed")
+		}
+		*p.VerifyTables = 4
+		*p.VerifyWarnings = []string{"verify: public.orders row count source=2 target=1"}
+		return nil
+	}
+	result, err := (productionCloneRunner{}).Run(context.Background(), CloneDraft{
+		SourceDSN: "postgres://u:p@h/src",
+		CloneName: "src_dolly_1",
+	}, []string{"public"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.VerifyRan || result.VerifyTables != 4 || len(result.VerifyWarnings) != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestProductionCloneRunnerPassesTargetDir(t *testing.T) {
 	orig := cloneworkRun
 	defer func() { cloneworkRun = orig }()
@@ -23,7 +46,7 @@ func TestProductionCloneRunnerPassesTargetDir(t *testing.T) {
 		TargetDir: "/data/pgclone",
 	}
 	runner := productionCloneRunner{}
-	if err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
+	if _, err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got.TargetDir != "/data/pgclone" {
@@ -47,7 +70,7 @@ func TestProductionCloneRunnerPassesDumpDir(t *testing.T) {
 		DumpDir:   "/data/dumps",
 	}
 	runner := productionCloneRunner{}
-	if err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
+	if _, err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got.DumpDir != "/data/dumps" {
@@ -67,7 +90,7 @@ func TestProductionCloneRunnerSetsSkipCreateFromDraft(t *testing.T) {
 
 	draft := CloneDraft{SourceDSN: "postgres://u:p@h/src", CloneName: "src_kloned_1", SkipCreate: true}
 	runner := productionCloneRunner{}
-	if err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
+	if _, err := runner.Run(context.Background(), draft, []string{"public"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !got.SkipCreateSet {

@@ -26,6 +26,14 @@ func formatSequenceIsCalledMismatch(schema, seq string, sourceCalled, targetCall
 	return fmt.Sprintf("verify: %s.%s is_called source=%t target=%t", schema, seq, sourceCalled, targetCalled)
 }
 
+// FormatVerifiedTables reports a schema-replay check whose compared tables matched.
+func FormatVerifiedTables(n int) string {
+	if n == 1 {
+		return "verified 1 table"
+	}
+	return fmt.Sprintf("verified %d tables", n)
+}
+
 func verifyGapWarnings(c SchemaReplayGapCounts) []string {
 	var out []string
 	if c.HypotheticalAggregates > 0 {
@@ -39,12 +47,12 @@ func verifyGapWarnings(c SchemaReplayGapCounts) []string {
 
 // SchemaReplayVerify compares row counts and sequence state between source and target
 // after a successful schema-replay data restore. Mismatches are returned as warnings only.
-func SchemaReplayVerify(ctx context.Context, opts Options, srcDB, tgtDB *sql.DB, usedPgDump bool) ([]string, error) {
+func SchemaReplayVerify(ctx context.Context, opts Options, srcDB, tgtDB *sql.DB, usedPgDump bool) ([]string, int, error) {
 	schemas := SchemasFromOptions(opts)
 	if len(schemas) == 0 {
 		names, err := listSchemaNamesFunc(ctx, srcDB)
 		if err != nil {
-			return nil, fmt.Errorf("verify list schemas: %w", err)
+			return nil, 0, fmt.Errorf("verify list schemas: %w", err)
 		}
 		schemas = names
 	}
@@ -54,25 +62,25 @@ func SchemaReplayVerify(ctx context.Context, opts Options, srcDB, tgtDB *sql.DB,
 	if !usedPgDump {
 		counts, err := scanSchemaReplayGapCounts(ctx, srcDB, scope)
 		if err != nil {
-			return nil, fmt.Errorf("verify schema gaps: %w", err)
+			return nil, 0, fmt.Errorf("verify schema gaps: %w", err)
 		}
 		warnings = append(warnings, verifyGapWarnings(counts)...)
 	}
 
 	tables, err := db.LoadPostgresSchemas(ctx, srcDB, schemas)
 	if err != nil {
-		return nil, fmt.Errorf("verify load tables: %w", err)
+		return nil, 0, fmt.Errorf("verify load tables: %w", err)
 	}
 	tables = db.WithoutPartitionParents(tables)
 
 	for _, table := range tables {
 		srcCount, err := countTableRows(ctx, srcDB, table.Schema, table.Name)
 		if err != nil {
-			return nil, fmt.Errorf("verify source %s.%s: %w", table.Schema, table.Name, err)
+			return nil, 0, fmt.Errorf("verify source %s.%s: %w", table.Schema, table.Name, err)
 		}
 		tgtCount, err := countTableRows(ctx, tgtDB, table.Schema, table.Name)
 		if err != nil {
-			return nil, fmt.Errorf("verify target %s.%s: %w", table.Schema, table.Name, err)
+			return nil, 0, fmt.Errorf("verify target %s.%s: %w", table.Schema, table.Name, err)
 		}
 		if srcCount != tgtCount {
 			warnings = append(warnings, formatRowCountMismatch(table.Schema, table.Name, srcCount, tgtCount))
@@ -81,11 +89,11 @@ func SchemaReplayVerify(ctx context.Context, opts Options, srcDB, tgtDB *sql.DB,
 
 	seqWarnings, err := verifySequences(ctx, srcDB, tgtDB, scope)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	warnings = append(warnings, seqWarnings...)
 
-	return warnings, nil
+	return warnings, len(tables), nil
 }
 
 func countTableRows(ctx context.Context, dbConn *sql.DB, schema, table string) (int64, error) {

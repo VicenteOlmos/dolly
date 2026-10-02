@@ -44,7 +44,7 @@ func TestCloneScreenMasksManualTargetDSN(t *testing.T) {
 	draft := &CloneDraft{TargetSource: TargetSourceManual, TargetDSN: "postgres://user:secret@db.example/app?token=hidden"}
 	status, cloneErr, spinner := CloneStatusIdle, "", 0
 	log := []string{}
-	cs := newCloneScreen(draft, func() bool { return true }, &status, &log, &cloneErr, &spinner, nil, false, config.DefaultConfig, nil, nil).(*cloneScreen)
+	cs := newCloneScreen(draft, func() bool { return true }, &status, &log, &cloneErr, &spinner, nil, false, config.DefaultConfig, nil, nil, nil).(*cloneScreen)
 	cs.nav.EnterInside(cloneSectionForm)
 	cs.formField = 1
 	for _, focused := range []bool{false, true} {

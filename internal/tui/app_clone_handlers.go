@@ -3,9 +3,11 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/VicenteOlmos/dolly/internal/clonework"
 	"github.com/VicenteOlmos/dolly/internal/config"
 	"github.com/VicenteOlmos/dolly/internal/connections"
 )
@@ -141,6 +143,7 @@ func (a *App) handleCloneResult(msg cloneResultMsg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.cloneStatus = CloneStatusComplete
+		a.cloneVerify = cloneVerifyResult{}
 		safeErr := redactUserError(msg.err)
 		a.cloneError = safeErr
 		a.statusMsg = truncateStatus(StyleWarning.Render("Clone failed: "+safeErr), a.width)
@@ -149,9 +152,34 @@ func (a *App) handleCloneResult(msg cloneResultMsg) (tea.Model, tea.Cmd) {
 	}
 	a.cloneStatus = CloneStatusComplete
 	a.cloneError = ""
-	a.statusMsg = truncateStatus(StyleBase.Render("Clone complete"), a.width)
+	switch {
+	case len(msg.verifyWarnings) > 0:
+		a.cloneVerify = cloneVerifyResult{
+			Ran:      true,
+			Tables:   msg.verifyTables,
+			Warnings: append([]string(nil), msg.verifyWarnings...),
+		}
+		a.statusMsg = truncateStatus(StyleWarning.Render("Clone complete · "+formatVerifyWarningCount(len(msg.verifyWarnings))), a.width)
+	case msg.verifyRan:
+		a.cloneVerify = cloneVerifyResult{Ran: true, Tables: msg.verifyTables}
+		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete · "+verifiedTablesLine(msg.verifyTables)), a.width)
+	default:
+		a.cloneVerify = cloneVerifyResult{}
+		a.statusMsg = truncateStatus(StyleBase.Render("Clone complete"), a.width)
+	}
 	appendCloneLog(&a.cloneLog, "clone complete")
 	return a, nil
+}
+
+func formatVerifyWarningCount(n int) string {
+	if n == 1 {
+		return "1 verify warning"
+	}
+	return fmt.Sprintf("%d verify warnings", n)
+}
+
+func verifiedTablesLine(n int) string {
+	return clonework.VerifiedTablesLine(n)
 }
 
 func (a *App) handleAnalyzeResult(msg analyzeResultMsg) (tea.Model, tea.Cmd) {
@@ -184,6 +212,7 @@ func (a *App) clearCloneResult() {
 		a.cloneStatus = CloneStatusIdle
 	}
 	a.cloneError = ""
+	a.cloneVerify = cloneVerifyResult{}
 }
 
 func (a *App) handleCloneResultKeys(msg tea.Msg) (bool, tea.Cmd) {
@@ -209,12 +238,12 @@ func (a *App) handleCloneResultKeys(msg tea.Msg) (bool, tea.Cmd) {
 		return true, func() tea.Msg { return cloneRequestedMsg{} }
 	case "j", "down":
 		if cs, ok := a.screens[ScreenClone].(*cloneScreen); ok {
-			cs.scrollLog(-1)
+			cs.scrollVerify(1)
 		}
 		return true, nil
 	case "k", "up":
 		if cs, ok := a.screens[ScreenClone].(*cloneScreen); ok {
-			cs.scrollLog(1)
+			cs.scrollVerify(-1)
 		}
 		return true, nil
 	}
