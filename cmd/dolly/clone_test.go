@@ -665,6 +665,66 @@ func TestRunCloneSkipCreate(t *testing.T) {
 	}
 }
 
+func TestRunCloneVerifyDefault(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	defer func() { cloneRun = origRun }()
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		return config.DefaultConfig(), nil
+	}
+	defer func() { cloneLoadConfig = origLoadConfig }()
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	defer func() { cloneIsTerminal = origIsTerminal }()
+
+	if err := runClone([]string{"-ff"}); err != nil {
+		t.Fatalf("runClone: %v", err)
+	}
+	if !capturedOpts.Verify {
+		t.Fatal("Verify should default to true")
+	}
+}
+
+func TestRunCloneNoVerify(t *testing.T) {
+	stubCloneListSchemaNames(t, nil, nil)
+
+	var capturedOpts clone.Options
+	origRun := cloneRun
+	cloneRun = func(ctx context.Context, opts clone.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+	defer func() { cloneRun = origRun }()
+
+	origLoadConfig := cloneLoadConfig
+	cloneLoadConfig = func(path string) (*config.Config, error) {
+		cfg := config.DefaultConfig()
+		cfg.Clone.Verify = true
+		return cfg, nil
+	}
+	defer func() { cloneLoadConfig = origLoadConfig }()
+
+	origIsTerminal := cloneIsTerminal
+	cloneIsTerminal = func() bool { return false }
+	defer func() { cloneIsTerminal = origIsTerminal }()
+
+	if err := runClone([]string{"-ff", "--no-verify"}); err != nil {
+		t.Fatalf("runClone: %v", err)
+	}
+	if capturedOpts.Verify {
+		t.Fatal("Verify should be false with --no-verify")
+	}
+}
+
 func TestRunCloneNoAnalyzeFlag(t *testing.T) {
 	stubCloneListSchemaNames(t, nil, nil)
 
