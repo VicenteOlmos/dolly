@@ -340,6 +340,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 				return err
 			}
 		}
+		if err := applyRelationTablespaces(ctx, srcDB, tgtDB, schemas, "r", "p"); err != nil {
+			return err
+		}
 	} // end if len(sorted) > 0
 
 	foreignTables, err := loadForeignTables(ctx, srcDB, schemas)
@@ -428,6 +431,11 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	}
 	if err := applyViews(ctx, tgtDB, views); err != nil {
 		return err
+	}
+	if viewsIncludeMaterialized(views) {
+		if err := applyRelationTablespaces(ctx, srcDB, tgtDB, schemas, "m"); err != nil {
+			return err
+		}
 	}
 	if err := applyStatistics(ctx, tgtDB, stats); err != nil {
 		return err

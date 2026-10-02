@@ -124,6 +124,8 @@ func expectForeignTableCatalog(srcMock sqlmock.Sqlmock) {
 }
 
 func expectPostTableCatalog(srcMock sqlmock.Sqlmock) {
+	srcMock.ExpectQuery(`reltablespace <> 0`).WillReturnRows(
+		sqlmock.NewRows([]string{"nspname", "relname", "relkind", "spcname"}))
 	expectForeignTableCatalog(srcMock)
 	srcMock.ExpectQuery(`relreplident`).WillReturnRows(
 		sqlmock.NewRows([]string{"nspname", "relname", "relreplident", "indexname"}))
@@ -674,6 +676,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`pg_get_statisticsobjdef`).WillReturnRows(sqlmock.NewRows([]string{"def"}).AddRow(`CREATE STATISTICS app.mv_stats ON id, value FROM app.mv`))
 	mock.ExpectQuery(`pg_get_viewdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "def", "materialized", "populated", "options"}).AddRow("app", "mv", "SELECT 1 AS id, 2 AS value", true, true, "fillfactor=70"))
 	mock.ExpectQuery(`pg_rewrite`).WillReturnRows(sqlmock.NewRows([]string{"schema", "view", "ref_schema", "ref_view"}))
+	mock.ExpectQuery(`reltablespace <> 0`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "relkind", "spcname"}))
 	mock.ExpectQuery(`pg_get_triggerdef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`pg_get_ruledef`).WillReturnRows(sqlmock.NewRows([]string{"schema", "table", "name", "mode", "def"}))
 	mock.ExpectQuery(`FROM pg_description`).WillReturnRows(sqlmock.NewRows([]string{"kind", "schema", "object", "column", "description"}).

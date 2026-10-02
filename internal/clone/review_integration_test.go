@@ -159,6 +159,36 @@ func TestCatalogReplayFunctionDefaultsIndexesAndModesPG16(t *testing.T) {
 	}
 }
 
+func TestEnsureRoleSQLPG16(t *testing.T) {
+	ctx := context.Background()
+	src, _, _, _ := reviewDBPair(t)
+	name := "dolly_it_role_361b"
+	member := "dolly_it_member_361b"
+	drop := func() {
+		_, _ = src.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(member))
+		_, _ = src.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+quoteIdentifier(name))
+	}
+	drop()
+	t.Cleanup(drop)
+	stmt := formatEnsureRole(roleSpec{name: name, inherit: true, login: true, connLimit: -1})
+	if _, err := src.ExecContext(ctx, stmt); err != nil {
+		if isInsufficientPrivilege(err) {
+			t.Skip(err.Error())
+		}
+		t.Fatal(err)
+	}
+	if _, err := src.ExecContext(ctx, stmt); err != nil {
+		t.Fatalf("existing role should be left in place: %v", err)
+	}
+	memberSQL := formatEnsureRole(roleSpec{name: member, inherit: true, connLimit: -1})
+	if _, err := src.ExecContext(ctx, memberSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.ExecContext(ctx, formatGrantRole(roleGrant{parent: name, member: member, inherit: true, set: true})); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCatalogReplayHypotheticalAggregatePG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, _, _ := reviewDBPair(t)

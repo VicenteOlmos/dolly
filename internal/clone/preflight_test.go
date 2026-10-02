@@ -176,15 +176,13 @@ func expectTargetRestoreQueries(mock sqlmock.Sqlmock) {
 }
 
 type preflightSchemaReplayExpect struct {
-	sourceDB       string
-	cloneName      string
-	skipCreate     bool
-	crossInst      bool
-	sourceVer      int
-	targetVer      int
-	gapHyp         int
-	gapFT          int
-	skipGapQueries bool
+	sourceDB            string
+	cloneName           string
+	skipCreate          bool
+	crossInst           bool
+	sourceVer           int
+	targetVer           int
+	skipClusterWarnings bool
 }
 
 func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaReplayExpect) {
@@ -228,12 +226,19 @@ func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaRepla
 		mock.ExpectQuery(`SHOW server_version_num`).
 			WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.targetVer))
 	}
-	if !opts.skipGapQueries {
-		expectSchemaReplayGapQueries(mock, opts.gapHyp, opts.gapFT)
+	if !opts.skipClusterWarnings {
+		expectClusterPreflightQueries(mock)
 	}
 }
 
-func expectSchemaReplayGapQueries(sqlmock.Sqlmock, ...int) {}
+func expectClusterPreflightQueries(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`spcname NOT IN`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`pg_roles WHERE oid >= 16384`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`FROM pg_foreign_server`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+}
 
 func replicationTargetDir(t *testing.T) string {
 	t.Helper()
@@ -262,7 +267,7 @@ func TestPreflightMatrix(t *testing.T) {
 			strategy: &SchemaReplayStrategy{},
 			setup: func(m sqlmock.Sqlmock) {
 				expectPreflightSchemaReplay(m, preflightSchemaReplayExpect{
-					sourceDB: "db_src", cloneName: cloneName, skipCreate: true, skipGapQueries: true,
+					sourceDB: "db_src", cloneName: cloneName, skipCreate: true,
 				})
 			},
 			lookPath:  func(string) (string, error) { return "/usr/bin/x", nil },
@@ -311,7 +316,7 @@ func TestPreflightMatrix(t *testing.T) {
 			setup: func(m sqlmock.Sqlmock) {
 				expectPreflightSchemaReplay(m, preflightSchemaReplayExpect{
 					sourceDB: "db_src", cloneName: cloneName, skipCreate: true, crossInst: true,
-					sourceVer: 160000, targetVer: 150002, skipGapQueries: true,
+					sourceVer: 160000, targetVer: 150002, skipClusterWarnings: true,
 				})
 			},
 			lookPath: func(string) (string, error) { return "/usr/bin/x", nil },
@@ -325,7 +330,7 @@ func TestPreflightMatrix(t *testing.T) {
 			setup: func(m sqlmock.Sqlmock) {
 				expectPreflightSchemaReplay(m, preflightSchemaReplayExpect{
 					sourceDB: "db_src", cloneName: cloneName, skipCreate: true, sourceVer: 150002,
-					skipGapQueries: true,
+					skipClusterWarnings: true,
 				})
 			},
 			lookPath:  func(string) (string, error) { return "/usr/bin/pg_dump", nil },
@@ -859,6 +864,7 @@ func TestPreflightMatrix(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows([]string{"nspname"}))
 				m.ExpectQuery(`SHOW server_version_num`).
 					WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(150002))
+				expectClusterPreflightQueries(m)
 			},
 			lookPath:  func(string) (string, error) { return "/usr/bin/x", nil },
 			pgDumpVer: func() (string, error) { return "pg_dump (PostgreSQL) 15.0", nil },
@@ -905,6 +911,7 @@ func TestPreflightMatrix(t *testing.T) {
 					WillReturnRows(sqlmock.NewRows([]string{"nspname"}))
 				m.ExpectQuery(`SHOW server_version_num`).
 					WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(150002))
+				expectClusterPreflightQueries(m)
 			},
 			lookPath:  func(string) (string, error) { return "/usr/bin/x", nil },
 			pgDumpVer: func() (string, error) { return "pg_dump (PostgreSQL) 15.0", nil },
@@ -1092,7 +1099,7 @@ func TestPreflightSchemaReplayGapWarnings(t *testing.T) {
 	defer func() { schemaToolLookPath = origSchemaLook }()
 
 	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
-		sourceDB: "db_src", cloneName: cloneName, skipCreate: true, gapHyp: 1, gapFT: 2,
+		sourceDB: "db_src", cloneName: cloneName, skipCreate: true,
 	})
 
 	warnings, err := Preflight(context.Background(), Options{
@@ -1133,7 +1140,7 @@ func TestPreflightSchemaReplaySkipsGapWarningsWhenPgDumpOnPath(t *testing.T) {
 	defer func() { schemaToolLookPath = origSchemaLook }()
 
 	expectPreflightSchemaReplay(mock, preflightSchemaReplayExpect{
-		sourceDB: "db_src", cloneName: cloneName, skipCreate: true, skipGapQueries: true,
+		sourceDB: "db_src", cloneName: cloneName, skipCreate: true,
 	})
 
 	warnings, err := Preflight(context.Background(), Options{

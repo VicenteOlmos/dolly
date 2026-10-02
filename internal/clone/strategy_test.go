@@ -33,6 +33,8 @@ func init() {
 	schemaToolLookPath = func(file string) (string, error) {
 		return "/usr/bin/" + file, nil
 	}
+	applyClusterGlobalsFn = func(context.Context, string, string) error { return nil }
+	applyClusterGlobalsDB = func(context.Context, *sql.DB, *sql.DB) error { return nil }
 }
 
 // mockCommandRunner records calls for verification.
@@ -215,6 +217,33 @@ func TestResolveWiresCommandRunner(t *testing.T) {
 	}
 	if s, ok := strat.(*ReplicationStrategy); !ok || s.Runner != mockRunner {
 		t.Fatal("replication did not receive CommandRunner")
+	}
+}
+
+func TestSchemaReplayCreatesClusterObjectsBeforePgDump(t *testing.T) {
+	var order []string
+	prev := applyClusterGlobalsFn
+	applyClusterGlobalsFn = func(context.Context, string, string) error {
+		order = append(order, "cluster")
+		return nil
+	}
+	t.Cleanup(func() { applyClusterGlobalsFn = prev })
+
+	origOpenDB := sqlOpenDB
+	sqlOpenDB = func(string) (*sql.DB, error) { return nil, fmt.Errorf("mock db") }
+	t.Cleanup(func() { sqlOpenDB = origOpenDB })
+
+	mockRunner := &mockCommandRunner{pipeFn: func() { order = append(order, "pipe") }}
+	err := (&SchemaReplayStrategy{Runner: mockRunner}).Execute(context.Background(), Options{
+		SourceDSN:  "postgres://u:p@h-a:5432/db_src",
+		CloneName:  "db_clone",
+		SkipCreate: true,
+	})
+	if err == nil {
+		t.Fatal("expected error from mock db open")
+	}
+	if len(order) < 2 || order[0] != "cluster" || order[1] != "pipe" {
+		t.Fatalf("order = %v, want cluster then pipe", order)
 	}
 }
 
