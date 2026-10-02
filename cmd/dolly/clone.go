@@ -42,6 +42,8 @@ type cloneFlags struct {
 	Yes               bool
 	JSON              bool
 	IncludePrivileges bool
+	NoAnalyze         bool
+	NoAnalyzeSet      bool
 }
 
 func cloneFlagSet(flags *cloneFlags, schemasRaw *string) *flag.FlagSet {
@@ -57,6 +59,7 @@ func cloneFlagSet(flags *cloneFlags, schemasRaw *string) *flag.FlagSet {
 	fs.BoolVar(&flags.SkipCreate, "skip-create", false, "skip creating the target database (overrides clone.skip_create config)")
 	fs.BoolVar(&flags.Yes, "yes", false, "confirm destructive operations (required with -ff when clone.replace=true)")
 	fs.BoolVar(&flags.IncludePrivileges, "with-privileges", false, "schema-replay and logical-stream: keep owners and ACLs (roles must already exist on the target)")
+	fs.BoolVar(&flags.NoAnalyze, "no-analyze", false, "schema-replay: skip post-restore ANALYZE on the target (overrides clone.analyze config)")
 	fs.BoolVar(&flags.JSON, "json", false, "emit machine-readable JSON result to stdout (success only; errors still exit non-zero)")
 	if schemasRaw != nil {
 		fs.StringVar(schemasRaw, "schemas", "", "comma-separated source schema names")
@@ -88,6 +91,8 @@ func parseCloneFlags(args []string) (cloneFlags, error) {
 			flags.SkipCreateSet = true
 		case "dump-dir":
 			flags.DumpDirSet = true
+		case "no-analyze":
+			flags.NoAnalyzeSet = true
 		}
 	})
 	flags.Schemas = parseCommaSeparatedSchemas(schemasRaw)
@@ -472,6 +477,11 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		fmt.Fprintf(os.Stderr, "warning: skip_create may leave partial state on the existing target database if the clone fails\n")
 	}
 
+	skipAnalyze := !cfg.Clone.Analyze
+	if flags.NoAnalyzeSet {
+		skipAnalyze = flags.NoAnalyze
+	}
+
 	var preflightWarnings []string
 	opts := clone.Options{
 		SourceDSN:         sourceDSN,
@@ -486,6 +496,7 @@ func runCloneExecute(ctx context.Context, flags cloneFlags, cfg *config.Config, 
 		PermissionCache:   permCache,
 		MaxOpenConns:      maxConns,
 		IncludePrivileges: flags.IncludePrivileges,
+		SkipAnalyze:       skipAnalyze,
 		RowTransform:      dump.InspectRowTransform(dump.SanitizationOptions(cfg.Sanitization.Enabled && strategy == "logical-stream")...),
 		PreflightWarnings: &preflightWarnings,
 		ProgressEvent: func(ev clone.ProgressEvent) {

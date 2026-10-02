@@ -42,7 +42,7 @@ func (s *SchemaReplayStrategy) Execute(ctx context.Context, opts Options) error 
 	}
 
 	startedAt := time.Now()
-	totalSteps := 4
+	totalSteps := schemaReplayTotalSteps(opts)
 
 	targetDSN := opts.TargetDSN
 	var err error
@@ -198,7 +198,34 @@ func (s *SchemaReplayStrategy) postCreate(ctx context.Context, opts Options, tar
 		return err
 	}
 
+	if !opts.SkipAnalyze {
+		step++
+		reportProgressEvent(opts, ProgressEvent{
+			Phase:   "analyzing",
+			Step:    "analyzing target",
+			Current: step,
+			Total:   totalSteps,
+			Elapsed: time.Since(startedAt),
+		})
+		if err := analyzeTargetFunc(ctx, tgtDB); err != nil {
+			return fmt.Errorf("analyze target: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func schemaReplayTotalSteps(opts Options) int {
+	if opts.SkipAnalyze {
+		return 4
+	}
+	return 5
+}
+
+// analyzeTargetFunc runs ANALYZE on the clone target after schema-replay data load.
+var analyzeTargetFunc = func(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "ANALYZE")
+	return err
 }
 
 func replaySchemaFromCatalog(ctx context.Context, opts Options, targetDSN string) error {
