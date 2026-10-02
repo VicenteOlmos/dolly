@@ -2663,8 +2663,8 @@ func TestSequenceMonotonicSchemaReplayOnce(t *testing.T) {
 	defer func() { restoreSequencesFunc = origRestoreSeq }()
 
 	origVerify := runSchemaReplayVerify
-	runSchemaReplayVerify = func(context.Context, Options, *sql.DB, *sql.DB, bool) ([]string, error) {
-		return nil, nil
+	runSchemaReplayVerify = func(context.Context, Options, *sql.DB, *sql.DB, bool) ([]string, int, error) {
+		return nil, 0, nil
 	}
 	defer func() { runSchemaReplayVerify = origVerify }()
 
