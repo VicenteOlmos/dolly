@@ -435,6 +435,9 @@ func TestAppCloneNoReplaceRequiresConfirm(t *testing.T) {
 	if runner.lastSchemas != nil {
 		t.Fatalf("clone runner called before confirm: schemas = %v", runner.lastSchemas)
 	}
+	if !strings.Contains(app.modal.body, "Strategy: schema-replay") || !strings.Contains(app.modal.body, "Schemas: app, public") {
+		t.Fatalf("confirm body = %q, want strategy and schemas", app.modal.body)
+	}
 }
 
 func TestAppCloneFormReplaceRequiresConfirmWhenConfigFalse(t *testing.T) {
