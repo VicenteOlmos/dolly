@@ -82,6 +82,21 @@ func cloneAppWithSession(t *testing.T, runner CloneRunner) *App {
 	}
 	app.clone.TargetDSN = "postgres://u:p@h-y/target"
 	app.clone.TargetSource = TargetSourceManual
+	stubClonePreflightForConfirm(app)
+	return app
+}
+
+func stubClonePreflightForConfirm(app *App) {
+	app.clonePreflight = func(context.Context, clonework.Params) ([]string, error) {
+		return nil, nil
+	}
+}
+
+func startCloneFromForm(app *App) *App {
+	app = drainUpdate(app, ctrlEnter())
+	if app.modalOpen() && app.modal.kind == modalCloneConfirm {
+		app = drainUpdate(app, keyPress("y", 'y', 0))
+	}
 	return app
 }
 
@@ -101,7 +116,7 @@ func TestClonePrivilegesReachRunner(t *testing.T) {
 	if !app.clone.IncludePrivileges {
 		t.Fatal("space did not enable privileges")
 	}
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 	if !runner.lastDraft.IncludePrivileges {
 		t.Fatal("clone runner did not receive IncludePrivileges")
 	}
@@ -111,7 +126,7 @@ func TestAppCloneSuccess(t *testing.T) {
 	runner := mockCloneRunner{lines: []string{"strategy: template", "schemas: public, app"}}
 	app := cloneAppWithSession(t, runner)
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	if app.cloneStatus != CloneStatusComplete {
 		t.Fatalf("cloneStatus = %v, want complete", app.cloneStatus)
@@ -131,7 +146,7 @@ func TestAppClonePassesPickerSchemas(t *testing.T) {
 	runner := &schemasRecordingCloneRunner{}
 	app := cloneAppWithSession(t, runner)
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	if len(runner.lastSchemas) != 2 || runner.lastSchemas[0] != "app" || runner.lastSchemas[1] != "public" {
 		t.Fatalf("clone runner schemas = %v, want [app public]", runner.lastSchemas)
@@ -145,7 +160,7 @@ func TestAppCloneError(t *testing.T) {
 	runner := mockCloneRunner{err: errors.New("permission denied")}
 	app := cloneAppWithSession(t, runner)
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	if app.cloneStatus != CloneStatusComplete {
 		t.Fatalf("cloneStatus = %v, want complete", app.cloneStatus)
@@ -162,7 +177,7 @@ func TestAppCloneErrorRedactsEmbeddedDSN(t *testing.T) {
 	runner := mockCloneRunner{err: errors.New("failed postgres://u:secret@host/db?password=querysecret")}
 	app := cloneAppWithSession(t, runner)
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 	view := stripANSIForGolden(app.screens[ScreenClone].View(80, 24))
 
 	for _, got := range []string{app.cloneError, stripANSIForGolden(app.statusMsg), strings.Join(app.cloneLog, "\n"), view} {
@@ -231,6 +246,10 @@ func TestAppCloneSchemaReplayAllowsEmptyTargetDir(t *testing.T) {
 	app.clone.AnalyzeEnabled = false
 
 	app = drainUpdate(app, cloneRequestedMsg{})
+	if !app.modalOpen() || app.modal.kind != modalCloneConfirm {
+		t.Fatal("expected clone confirm before start")
+	}
+	app = drainUpdate(app, keyPress("y", 'y', 0))
 
 	if len(runner.lastSchemas) == 0 {
 		t.Fatalf("clone did not start; status=%v msg=%q", app.cloneStatus, stripANSIForGolden(app.statusMsg))
@@ -292,11 +311,15 @@ func TestCloneAnalyzeGatesClone(t *testing.T) {
 	}
 
 	app = drainUpdate(app, keyPress("", tea.KeyEnter, 0))
+	if !app.modalOpen() || app.modal.kind != modalCloneConfirm {
+		t.Fatal("expected clone confirm modal after analyze")
+	}
+	app = drainUpdate(app, keyPress("y", 'y', 0))
 	if app.cloneStatus != CloneStatusComplete {
-		t.Fatalf("cloneStatus = %v, want complete after Enter on analyze modal", app.cloneStatus)
+		t.Fatalf("cloneStatus = %v, want complete after confirm", app.cloneStatus)
 	}
 	if app.modalOpen() {
-		t.Fatal("expected modal dismissed after Enter")
+		t.Fatal("expected modal dismissed after confirm")
 	}
 }
 
@@ -312,6 +335,18 @@ func TestAppCloneReplaceRequiresConfirm(t *testing.T) {
 	}
 	if app.modal.kind != modalCloneConfirm {
 		t.Fatalf("modal kind = %v, want modalCloneConfirm", app.modal.kind)
+	}
+	if app.modal.title != "Clone with replace?" {
+		t.Fatalf("modal title = %q, want Clone with replace?", app.modal.title)
+	}
+	if !strings.Contains(app.modal.body, "Strategy: schema-replay") {
+		t.Fatalf("confirm body missing strategy:\n%s", app.modal.body)
+	}
+	if !strings.Contains(app.modal.body, "Schemas: app, public") {
+		t.Fatalf("confirm body missing schemas:\n%s", app.modal.body)
+	}
+	if !strings.Contains(app.modal.body, "truncate existing tables before clone") {
+		t.Fatalf("confirm body missing replace policy:\n%s", app.modal.body)
 	}
 	if app.cloneStatus != CloneStatusIdle {
 		t.Fatalf("cloneStatus = %v, want idle before confirm", app.cloneStatus)
@@ -378,21 +413,93 @@ func TestAppCloneReplaceConfirmStartsClone(t *testing.T) {
 	}
 }
 
-func TestAppCloneNoReplaceSkipsConfirm(t *testing.T) {
+func TestCloneConfirmScopeByStrategy(t *testing.T) {
+	schemas := []string{"app"}
+	templateBody := formatCloneConfirmBody("postgres://u:p@h/db", "template", "pg_dump", schemas, "", nil)
+	if strings.Contains(templateBody, "Schemas:") || strings.Contains(templateBody, "Schema:") {
+		t.Fatalf("template confirm presented schema selection:\n%s", templateBody)
+	}
+	if !strings.Contains(templateBody, "Scope: entire source database") {
+		t.Fatalf("template body = %q", templateBody)
+	}
+	backupBody := formatCloneConfirmBody("postgres://u:p@h/db", "physical-backup", "pg_dump", schemas, "", nil)
+	if strings.Contains(backupBody, "Schemas:") || strings.Contains(backupBody, "Schema:") {
+		t.Fatalf("physical-backup confirm presented schema selection:\n%s", backupBody)
+	}
+	if !strings.Contains(backupBody, "Scope: entire cluster") {
+		t.Fatalf("physical-backup body = %q", backupBody)
+	}
+	replayBody := formatCloneConfirmBody("postgres://u:p@h/db", "schema-replay", "catalog replay", schemas, "", nil)
+	if !strings.Contains(replayBody, "Schemas: app") || !strings.Contains(replayBody, "Schema: catalog replay") {
+		t.Fatalf("schema-replay body = %q", replayBody)
+	}
+}
+
+func TestClonePreflightCancelDoesNotStartClone(t *testing.T) {
+	runner := &schemasRecordingCloneRunner{}
+	app := cloneAppWithSession(t, runner)
+	entered := make(chan struct{})
+	app.clonePreflight = func(ctx context.Context, _ clonework.Params) ([]string, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	next, cmd := app.Update(ctrlEnter())
+	app = next.(*App)
+	if cmd == nil {
+		t.Fatal("expected async preflight command")
+	}
+	if app.modalOpen() {
+		t.Fatal("confirm modal opened before preflight returned")
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("preflight did not start")
+	}
+
+	next, _ = app.Update(keyPress("esc", tea.KeyEscape, 0))
+	app = next.(*App)
+	select {
+	case result := <-done:
+		next, _ = app.Update(result)
+		app = next.(*App)
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancel did not reach the preflight context")
+	}
+	if app.modalOpen() {
+		t.Fatal("cancelled preflight opened the confirm modal")
+	}
+	if runner.lastSchemas != nil {
+		t.Fatal("clone started after cancelled preflight")
+	}
+}
+
+func TestAppCloneNoReplaceRequiresConfirm(t *testing.T) {
 	runner := &schemasRecordingCloneRunner{}
 	app := cloneAppWithSession(t, runner)
 	app.cfg.Clone.Replace = false
 
 	app = drainUpdate(app, ctrlEnter())
 
-	if app.modalOpen() {
-		t.Fatal("expected no confirm modal when replace is false")
+	if !app.modalOpen() || app.modal.kind != modalCloneConfirm {
+		t.Fatal("expected clone confirm modal when replace is false")
 	}
-	if app.cloneStatus != CloneStatusComplete {
-		t.Fatalf("cloneStatus = %v, want complete", app.cloneStatus)
+	if app.modal.title != "Clone?" {
+		t.Fatalf("modal title = %q, want Clone?", app.modal.title)
 	}
-	if len(runner.lastSchemas) != 2 {
-		t.Fatalf("clone runner schemas = %v, want 2 schemas", runner.lastSchemas)
+	if app.cloneStatus != CloneStatusIdle {
+		t.Fatalf("cloneStatus = %v, want idle before confirm", app.cloneStatus)
+	}
+	if runner.lastSchemas != nil {
+		t.Fatalf("clone runner called before confirm: schemas = %v", runner.lastSchemas)
+	}
+	if !strings.Contains(app.modal.body, "Strategy: schema-replay") || !strings.Contains(app.modal.body, "Schemas: app, public") {
+		t.Fatalf("confirm body = %q, want strategy and schemas", app.modal.body)
 	}
 }
 
@@ -413,7 +520,7 @@ func TestAppCloneFormReplaceRequiresConfirmWhenConfigFalse(t *testing.T) {
 	}
 }
 
-func TestAppCloneFormReplaceOffSkipsConfirmWhenConfigFalse(t *testing.T) {
+func TestAppCloneFormReplaceOffStillConfirmsWhenConfigTrue(t *testing.T) {
 	runner := &schemasRecordingCloneRunner{}
 	app := cloneAppWithSession(t, runner)
 	app.cfg.Clone.Replace = true
@@ -422,11 +529,14 @@ func TestAppCloneFormReplaceOffSkipsConfirmWhenConfigFalse(t *testing.T) {
 
 	app = drainUpdate(app, ctrlEnter())
 
-	if app.modalOpen() {
-		t.Fatal("expected no confirm when form replace is off")
+	if !app.modalOpen() || app.modal.kind != modalCloneConfirm {
+		t.Fatal("expected clone confirm modal even when form replace is off")
 	}
-	if app.cloneStatus != CloneStatusComplete {
-		t.Fatalf("cloneStatus = %v, want complete", app.cloneStatus)
+	if app.modal.title != "Clone?" {
+		t.Fatalf("modal title = %q, want Clone?", app.modal.title)
+	}
+	if runner.lastSchemas != nil {
+		t.Fatal("clone started before confirm")
 	}
 }
 
@@ -533,7 +643,7 @@ func TestAppCloneLogicalStreamSanitizedOmitsWarning(t *testing.T) {
 	app := cloneAppWithSession(t, runner)
 	app.cfg.Sanitization.Enabled = true
 	app.clone.Strategy = "logical-stream"
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 	log := strings.Join(app.cloneLog, "\n")
 	if strings.Contains(log, "warning: clone will copy unsanitized data") {
 		t.Fatalf("logical-stream redacts when sanitization is on:\n%s", log)
@@ -556,7 +666,7 @@ func TestAppCloneSanitizedBlocksTemplateAndPhysicalBackup(t *testing.T) {
 				app.clone.TargetDir = "/tmp/pgdata"
 			}
 
-			app = drainUpdate(app, ctrlEnter())
+			app = startCloneFromForm(app)
 
 			if runner.lastSchemas != nil {
 				t.Fatal("clone runner should not start when sanitization blocks strategy")
@@ -579,7 +689,7 @@ func TestAppCloneSchemaReplayNoUnsanitizedWarning(t *testing.T) {
 	app.cfg.Sanitization.Enabled = true
 	app.clone.Strategy = "schema-replay"
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	log := strings.Join(app.cloneLog, "\n")
 	if strings.Contains(log, "warning: clone will copy unsanitized data") {
@@ -597,7 +707,7 @@ func TestAppCloneStrategyCycleRefreshesTargetBeforeStart(t *testing.T) {
 	cs.formField = 2
 	cs.cycleStrategy(1) // schema-replay -> template
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	want := app.conn.DSN()
 	if runner.lastDraft.TargetDSN != want {

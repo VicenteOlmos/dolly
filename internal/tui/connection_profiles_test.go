@@ -568,6 +568,7 @@ func TestClonePickerPersistOnStart(t *testing.T) {
 	}
 	runner := &schemasRecordingCloneRunner{}
 	app := NewAppWithOptions(loader, mockDumpRunner{}, nil, runner, nil, store, true)
+	stubClonePreflightForConfirm(app)
 	app.screen = ScreenConnection
 	app.conn = ConnectionDraft{Host: "h", Database: "d", User: "u", Password: "p"}
 	enterConnectionFields(app.screens[ScreenConnection].(*connectionScreen))
@@ -579,7 +580,7 @@ func TestClonePickerPersistOnStart(t *testing.T) {
 	app.clone.SchemaPicker.MoveCursor(1)
 	app.clone.SchemaPicker.HandleKey(tea.Key{Code: tea.KeySpace})
 
-	app = drainUpdate(app, ctrlEnter())
+	app = startCloneFromForm(app)
 
 	if app.activeProfile == nil || len(app.activeProfile.Schemas) != 2 {
 		t.Fatalf("profile schemas = %v", app.activeProfile)
