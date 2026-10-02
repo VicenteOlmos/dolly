@@ -708,6 +708,65 @@ func isSimpleSQLIdentifier(name string) bool {
 	return true
 }
 
+// formatCreateOperatorFamily emits CREATE OPERATOR FAMILY for user-defined families.
+func formatCreateOperatorFamily(f operatorFamilyDef) string {
+	return fmt.Sprintf(
+		"CREATE OPERATOR FAMILY %s USING %s",
+		quoteQualifiedTable(f.schema, f.name),
+		quoteIdentifier(f.method),
+	)
+}
+
+// formatCreateOperatorClass emits CREATE OPERATOR CLASS with operators, support
+// functions, and optional STORAGE. Returns false when the AS list would be empty.
+func formatCreateOperatorClass(c operatorClassDef) (string, bool) {
+	parts := operatorClassDDLItems(c)
+	if len(parts) == 0 {
+		return "", false
+	}
+	defaultKw := ""
+	if c.defaultClass {
+		defaultKw = " DEFAULT"
+	}
+	return fmt.Sprintf(
+		"CREATE OPERATOR CLASS %s%s FOR TYPE %s USING %s FAMILY %s AS %s",
+		quoteQualifiedTable(c.schema, c.name),
+		defaultKw,
+		c.inputType,
+		quoteIdentifier(c.method),
+		quoteQualifiedTable(c.familySchema, c.familyName),
+		strings.Join(parts, ", "),
+	), true
+}
+
+func formatOperatorClassOperator(op operatorClassOperator) string {
+	ref := formatOperatorCommentRef(op.opSchema, op.opName)
+	stmt := fmt.Sprintf(
+		"OPERATOR %d %s(%s, %s)",
+		op.strategy,
+		ref,
+		op.leftType,
+		op.rightType,
+	)
+	switch op.purpose {
+	case "s":
+		stmt += " FOR SEARCH"
+	case "o":
+		if op.sortFamSchema != "" && op.sortFamName != "" {
+			stmt += " FOR ORDER BY " + quoteQualifiedTable(op.sortFamSchema, op.sortFamName)
+		}
+	}
+	return stmt
+}
+
+func formatOperatorClassFunction(fn operatorClassFunction) string {
+	return fmt.Sprintf(
+		"FUNCTION %d %s",
+		fn.supportNum,
+		formatCastFunction(fn.fnSchema, fn.fnName, fn.fnArgs),
+	)
+}
+
 // formatSecurityLabel emits SECURITY LABEL FOR provider ON TABLE/COLUMN.
 func formatSecurityLabel(provider, kind, schema, object, column, label string) string {
 	var target string

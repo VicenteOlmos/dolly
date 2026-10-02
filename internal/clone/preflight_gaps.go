@@ -9,7 +9,6 @@ import (
 // SchemaReplayGapCounts tallies source objects that catalog replay does not copy.
 type SchemaReplayGapCounts struct {
 	HypotheticalAggregates int
-	UserOperatorClasses    int
 	ForeignTables          int
 }
 
@@ -20,12 +19,6 @@ func SchemaReplayGapWarnings(c SchemaReplayGapCounts) []string {
 		out = append(out, fmt.Sprintf(
 			"schema-replay will not copy %d hypothetical aggregate(s); pg_dump is required for those objects",
 			c.HypotheticalAggregates,
-		))
-	}
-	if c.UserOperatorClasses > 0 {
-		out = append(out, fmt.Sprintf(
-			"schema-replay will not copy %d user operator class(es); pg_dump is required for those objects",
-			c.UserOperatorClasses,
 		))
 	}
 	if c.ForeignTables > 0 {
@@ -49,14 +42,6 @@ func scanSchemaReplayGapCounts(ctx context.Context, dbConn *sql.DB, scope []stri
 		WHERE a.aggkind = 'h'
 		`+userSchemaFilter+scopePred, scopeArgs, &out.HypotheticalAggregates); err != nil {
 		return SchemaReplayGapCounts{}, fmt.Errorf("count hypothetical aggregates: %w", err)
-	}
-	if err := scanGapCount(ctx, dbConn, `
-		SELECT COUNT(*)::bigint
-		FROM pg_opclass opc
-		INNER JOIN pg_namespace n ON n.oid = opc.opcnamespace
-		WHERE n.nspname <> 'pg_catalog'
-		`+userSchemaFilter+scopePred, scopeArgs, &out.UserOperatorClasses); err != nil {
-		return SchemaReplayGapCounts{}, fmt.Errorf("count user operator classes: %w", err)
 	}
 	if err := scanGapCount(ctx, dbConn, `
 		SELECT COUNT(*)::bigint

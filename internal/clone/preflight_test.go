@@ -183,7 +183,6 @@ type preflightSchemaReplayExpect struct {
 	sourceVer  int
 	targetVer  int
 	gapHyp         int
-	gapOpc         int
 	gapFT          int
 	skipGapQueries bool
 }
@@ -230,25 +229,20 @@ func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaRepla
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.targetVer))
 	}
 	if !opts.skipGapQueries {
-		expectSchemaReplayGapQueries(mock, opts.gapHyp, opts.gapOpc, opts.gapFT)
+		expectSchemaReplayGapQueries(mock, opts.gapHyp, opts.gapFT)
 	}
 }
 
 func expectSchemaReplayGapQueries(mock sqlmock.Sqlmock, counts ...int) {
-	hyp, opc, ft := 0, 0, 0
+	hyp, ft := 0, 0
 	if len(counts) > 0 {
 		hyp = counts[0]
 	}
 	if len(counts) > 1 {
-		opc = counts[1]
-	}
-	if len(counts) > 2 {
-		ft = counts[2]
+		ft = counts[1]
 	}
 	mock.ExpectQuery(`pg_aggregate`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(hyp))
-	mock.ExpectQuery(`pg_opclass`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(opc))
 	mock.ExpectQuery(`relkind = 'f'`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(ft))
 }
