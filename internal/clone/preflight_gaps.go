@@ -6,21 +6,14 @@ import (
 	"fmt"
 )
 
-// SchemaReplayGapCounts tallies source objects that catalog replay does not copy.
+// SchemaReplayGapCounts tallies source objects that catalog replay still cannot finish alone.
 type SchemaReplayGapCounts struct {
-	HypotheticalAggregates int
-	ForeignTables          int
+	ForeignTables int
 }
 
 // SchemaReplayGapWarnings formats non-zero gap counts as preflight warning lines.
 func SchemaReplayGapWarnings(c SchemaReplayGapCounts) []string {
 	var out []string
-	if c.HypotheticalAggregates > 0 {
-		out = append(out, fmt.Sprintf(
-			"schema-replay will not copy %d hypothetical aggregate(s); pg_dump is required for those objects",
-			c.HypotheticalAggregates,
-		))
-	}
 	if c.ForeignTables > 0 {
 		out = append(out, fmt.Sprintf(
 			"schema-replay will recreate %d foreign table(s); their foreign servers must already exist on the target",
@@ -34,15 +27,6 @@ func scanSchemaReplayGapCounts(ctx context.Context, dbConn *sql.DB, scope []stri
 	var out SchemaReplayGapCounts
 	scopePred, scopeArgs := scopedNamespacePredicate("n.nspname", scope)
 
-	if err := scanGapCount(ctx, dbConn, `
-		SELECT COUNT(*)::bigint
-		FROM pg_aggregate a
-		INNER JOIN pg_proc p ON p.oid = a.aggfnoid
-		INNER JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE a.aggkind = 'h'
-		`+userSchemaFilter+scopePred, scopeArgs, &out.HypotheticalAggregates); err != nil {
-		return SchemaReplayGapCounts{}, fmt.Errorf("count hypothetical aggregates: %w", err)
-	}
 	if err := scanGapCount(ctx, dbConn, `
 		SELECT COUNT(*)::bigint
 		FROM pg_class c

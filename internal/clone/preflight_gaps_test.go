@@ -9,18 +9,12 @@ func TestSchemaReplayGapWarningsZeroCounts(t *testing.T) {
 }
 
 func TestSchemaReplayGapWarningsNonZero(t *testing.T) {
-	w := SchemaReplayGapWarnings(SchemaReplayGapCounts{
-		HypotheticalAggregates: 2,
-		ForeignTables:          3,
-	})
-	if len(w) != 2 {
+	w := SchemaReplayGapWarnings(SchemaReplayGapCounts{ForeignTables: 3})
+	if len(w) != 1 {
 		t.Fatalf("got %d warnings: %v", len(w), w)
 	}
-	if w[0] != "schema-replay will not copy 2 hypothetical aggregate(s); pg_dump is required for those objects" {
-		t.Fatalf("hypothetical: %q", w[0])
-	}
-	if w[1] != "schema-replay will recreate 3 foreign table(s); their foreign servers must already exist on the target" {
-		t.Fatalf("foreign table: %q", w[1])
+	if w[0] != "schema-replay will recreate 3 foreign table(s); their foreign servers must already exist on the target" {
+		t.Fatalf("foreign table: %q", w[0])
 	}
 }
 

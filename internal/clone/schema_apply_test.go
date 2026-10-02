@@ -179,8 +179,7 @@ func expectClassicInheritCatalog(srcMock sqlmock.Sqlmock) {
 }
 
 func expectRoutineCatalog(srcMock sqlmock.Sqlmock) {
-	srcMock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(sqlmock.NewRows([]string{"name", "aggkind"}))
-	srcMock.ExpectQuery(`a\.aggkind IN \('n', 'o'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
+	srcMock.ExpectQuery(`a\.aggkind IN \('n', 'o', 'h'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	srcMock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(
 		sqlmock.NewRows([]string{"oid", "name", "pg_get_functiondef"}))
 	srcMock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(
@@ -631,8 +630,7 @@ func TestApplySchemasOrdersDomainChecksAndViewStatistics(t *testing.T) {
 	mock.ExpectQuery(`FROM pg_sequences`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "increment", "min", "max", "start", "cache", "cycle"}))
 	mock.ExpectQuery(`pg_sequence`).WillReturnRows(sqlmock.NewRows([]string{"nspname", "relname", "format_type"}))
 	mock.ExpectQuery(`dep\.deptype IN`).WillReturnRows(sqlmock.NewRows([]string{"schema", "name", "table_schema", "table_name", "column", "identity"}))
-	mock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(sqlmock.NewRows([]string{"name", "kind"}))
-	mock.ExpectQuery(`a\.aggkind IN \('n', 'o'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
+	mock.ExpectQuery(`a\.aggkind IN \('n', 'o', 'h'\)`).WillReturnRows(sqlmock.NewRows([]string{"def"}))
 	mock.ExpectQuery(`pg_get_functiondef`).WillReturnRows(sqlmock.NewRows([]string{"oid", "name", "def"}).AddRow(1, "app.valid_value(integer)", "CREATE FUNCTION app.valid_value(integer) RETURNS boolean LANGUAGE sql AS 'SELECT true'"))
 	mock.ExpectQuery(`JOIN pg_proc ref`).WillReturnRows(sqlmock.NewRows([]string{"oid", "ref"}))
 	mock.ExpectQuery(`FROM pg_operator`).WillReturnRows(
@@ -1158,17 +1156,15 @@ func TestLoadRulesSkipsExtensionOwned(t *testing.T) {
 	}
 }
 
-func TestLoadAggregatesRejectsHypothetical(t *testing.T) {
-	conn, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	mock.ExpectQuery(`a\.aggkind = 'h'`).WillReturnRows(
-		sqlmock.NewRows([]string{"name", "aggkind"}).AddRow(`"public"."rank"(integer)`, "h"))
-	_, err = loadAggregates(context.Background(), conn, []string{"public"})
-	if err == nil || !strings.Contains(err.Error(), "hypothetical aggregate") {
-		t.Fatalf("err = %v", err)
+func TestFormatAggregateHypothetical(t *testing.T) {
+	got := formatAggregate(aggregateSpec{
+		schema: "public", name: "my_rank", args: "integer, integer",
+		aggkind: "h", aggNumDirect: 1, stype: "integer", sfuncSchema: "public", sfunc: "hypo_step",
+		parallel: "s", initVal: sql.NullString{String: "0", Valid: true},
+	})
+	want := `CREATE AGGREGATE "public"."my_rank"(integer ORDER BY integer) (SFUNC = "public"."hypo_step", STYPE = integer, INITCOND = '0', PARALLEL = SAFE, HYPOTHETICAL)`
+	if got != want {
+		t.Fatalf("got %s", got)
 	}
 }
 

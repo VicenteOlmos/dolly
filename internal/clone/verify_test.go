@@ -37,16 +37,6 @@ func TestFormatSequenceLastValueMismatch(t *testing.T) {
 	}
 }
 
-func TestVerifyGapWarnings(t *testing.T) {
-	w := verifyGapWarnings(SchemaReplayGapCounts{HypotheticalAggregates: 2})
-	if len(w) != 1 {
-		t.Fatalf("warnings = %d, want 1", len(w))
-	}
-	if w[0] != "verify: schema-replay did not copy 2 hypothetical aggregate(s); pg_dump is required for those objects" {
-		t.Fatalf("unexpected hypothetical warning: %q", w[0])
-	}
-}
-
 func TestVerifySequencesReadsRelationState(t *testing.T) {
 	src, srcMock, err := sqlmock.New()
 	if err != nil {

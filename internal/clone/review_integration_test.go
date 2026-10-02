@@ -159,6 +159,32 @@ func TestCatalogReplayFunctionDefaultsIndexesAndModesPG16(t *testing.T) {
 	}
 }
 
+func TestCatalogReplayHypotheticalAggregatePG16(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	if _, err := src.ExecContext(ctx, `CREATE SCHEMA app;
+		CREATE FUNCTION app.hypo_step(integer, integer, integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT COALESCE($1, 0) + $2 + $3 $$;
+		CREATE AGGREGATE app.my_hypo(integer ORDER BY integer) (
+			SFUNC = app.hypo_step, STYPE = integer, INITCOND = '0', HYPOTHETICAL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var kind string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT a.aggkind::text
+		FROM pg_aggregate a
+		JOIN pg_proc p ON p.oid = a.aggfnoid
+		JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = 'app' AND p.proname = 'my_hypo'`).Scan(&kind); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "h" {
+		t.Fatalf("aggkind = %q, want h", kind)
+	}
+}
+
 func TestCatalogReplayNormalAggregatePG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, _, _ := reviewDBPair(t)

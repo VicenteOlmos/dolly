@@ -176,12 +176,12 @@ func expectTargetRestoreQueries(mock sqlmock.Sqlmock) {
 }
 
 type preflightSchemaReplayExpect struct {
-	sourceDB   string
-	cloneName  string
-	skipCreate bool
-	crossInst  bool
-	sourceVer  int
-	targetVer  int
+	sourceDB       string
+	cloneName      string
+	skipCreate     bool
+	crossInst      bool
+	sourceVer      int
+	targetVer      int
 	gapHyp         int
 	gapFT          int
 	skipGapQueries bool
@@ -225,8 +225,8 @@ func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaRepla
 	mock.ExpectQuery(`SHOW server_version_num`).
 		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.sourceVer))
 	if opts.crossInst {
-	mock.ExpectQuery(`SHOW server_version_num`).
-		WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.targetVer))
+		mock.ExpectQuery(`SHOW server_version_num`).
+			WillReturnRows(sqlmock.NewRows([]string{"server_version_num"}).AddRow(opts.targetVer))
 	}
 	if !opts.skipGapQueries {
 		expectSchemaReplayGapQueries(mock, opts.gapHyp, opts.gapFT)
@@ -234,15 +234,10 @@ func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaRepla
 }
 
 func expectSchemaReplayGapQueries(mock sqlmock.Sqlmock, counts ...int) {
-	hyp, ft := 0, 0
+	ft := 0
 	if len(counts) > 0 {
-		hyp = counts[0]
+		ft = counts[len(counts)-1]
 	}
-	if len(counts) > 1 {
-		ft = counts[1]
-	}
-	mock.ExpectQuery(`pg_aggregate`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(hyp))
 	mock.ExpectQuery(`relkind = 'f'`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(ft))
 }
@@ -1113,14 +1108,11 @@ func TestPreflightSchemaReplayGapWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warnings) != 2 {
-		t.Fatalf("expected 2 warnings, got %v", warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %v", warnings)
 	}
-	if warnings[0] != "schema-replay will not copy 1 hypothetical aggregate(s); pg_dump is required for those objects" {
+	if warnings[0] != "schema-replay will recreate 2 foreign table(s); their foreign servers must already exist on the target" {
 		t.Fatalf("warning[0] = %q", warnings[0])
-	}
-	if warnings[1] != "schema-replay will recreate 2 foreign table(s); their foreign servers must already exist on the target" {
-		t.Fatalf("warning[1] = %q", warnings[1])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

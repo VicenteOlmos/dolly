@@ -63,24 +63,6 @@ func loadRoutines(ctx context.Context, q *sql.DB, schemas []string) ([]routineRo
 
 func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string, error) {
 	inClause, args := schemaINClause(schemas)
-	unsupported := fmt.Sprintf(`
-		SELECT format('%%I.%%I(%%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), a.aggkind
-		FROM pg_aggregate a
-		JOIN pg_proc p ON p.oid = a.aggfnoid
-		JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE n.nspname IN (%s) AND a.aggkind = 'h'
-		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
-		ORDER BY n.nspname, p.proname
-		LIMIT 1`, inClause)
-	var name, kind string
-	switch err := q.QueryRowContext(ctx, unsupported, args...).Scan(&name, &kind); err {
-	case nil:
-		return nil, fmt.Errorf("catalog schema replay does not support hypothetical aggregate %s; install pg_dump to clone this schema", name)
-	case sql.ErrNoRows:
-	default:
-		return nil, fmt.Errorf("list aggregates: %w", err)
-	}
-
 	query := fmt.Sprintf(`
 		SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), a.aggkind, a.aggnumdirectargs, p.proparallel,
 		       format_type(a.aggtranstype, NULL),
@@ -115,7 +97,7 @@ func loadAggregates(ctx context.Context, q *sql.DB, schemas []string) ([]string,
 		LEFT JOIN pg_namespace invn ON invn.oid = invp.pronamespace
 		LEFT JOIN pg_proc mfp ON a.aggmfinalfn <> 0 AND mfp.oid = a.aggmfinalfn
 		LEFT JOIN pg_namespace mfn ON mfn.oid = mfp.pronamespace
-		WHERE n.nspname IN (%s) AND a.aggkind IN ('n', 'o')
+		WHERE n.nspname IN (%s) AND a.aggkind IN ('n', 'o', 'h')
 		  AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
 		ORDER BY n.nspname, p.proname, p.oid`, inClause)
 	rows, err := q.QueryContext(ctx, query, args...)
@@ -218,8 +200,11 @@ func formatAggregate(a aggregateSpec) string {
 		clauses = append(clauses, "PARALLEL = UNSAFE")
 	}
 	sig := a.args
-	if a.aggkind == "o" {
+	if a.aggkind == "o" || a.aggkind == "h" {
 		sig = formatOrderedAggregateSignature(a.args, a.aggNumDirect)
+	}
+	if a.aggkind == "h" {
+		clauses = append(clauses, "HYPOTHETICAL")
 	}
 	return fmt.Sprintf("CREATE AGGREGATE %s(%s) (%s)", quoteQualifiedTable(a.schema, a.name), sig, strings.Join(clauses, ", "))
 }
