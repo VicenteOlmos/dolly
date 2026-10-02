@@ -346,6 +346,9 @@ func applySchemas(ctx context.Context, srcDB *sql.DB, tgtDB execer, schemas []st
 	if err != nil {
 		return err
 	}
+	if err := applyForeignServers(ctx, srcDB, tgtDB, foreignTables); err != nil {
+		return err
+	}
 	if err := applyForeignTables(ctx, tgtDB, foreignTables); err != nil {
 		return err
 	}

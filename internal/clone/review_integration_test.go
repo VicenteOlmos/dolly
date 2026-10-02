@@ -185,6 +185,55 @@ func TestCatalogReplayHypotheticalAggregatePG16(t *testing.T) {
 	}
 }
 
+func TestCatalogReplayForeignServerPG16(t *testing.T) {
+	ctx := context.Background()
+	src, tgt, _, _ := reviewDBPair(t)
+	if _, err := src.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS postgres_fdw`); err != nil {
+		t.Skipf("postgres_fdw is not available: %v", err)
+	}
+	if _, err := src.ExecContext(ctx, `
+		CREATE SCHEMA app;
+		CREATE SERVER app_srv FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host '127.0.0.1', dbname 'postgres', port '5432');
+		CREATE USER MAPPING FOR PUBLIC SERVER app_srv OPTIONS (user 'dolly');
+		CREATE FOREIGN TABLE app.remote (id integer NOT NULL) SERVER app_srv OPTIONS (schema_name 'public', table_name 'remote')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := applySchemas(ctx, src, tgt, []string{"app"}, false); err != nil {
+		t.Fatal(err)
+	}
+	var srv, fdw string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT srv.srvname, fdw.fdwname
+		FROM pg_foreign_server srv
+		JOIN pg_foreign_data_wrapper fdw ON fdw.oid = srv.srvfdw
+		WHERE srv.srvname = 'app_srv'`).Scan(&srv, &fdw); err != nil {
+		t.Fatal(err)
+	}
+	if srv != "app_srv" || fdw != "postgres_fdw" {
+		t.Fatalf("server = %s fdw = %s", srv, fdw)
+	}
+	var mapping string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT CASE WHEN m.umuser = 0 THEN 'PUBLIC' ELSE m.usename END
+		FROM pg_user_mappings m
+		WHERE m.srvname = 'app_srv'`).Scan(&mapping); err != nil {
+		t.Fatal(err)
+	}
+	if mapping != "PUBLIC" {
+		t.Fatalf("mapping user = %q, want PUBLIC", mapping)
+	}
+	var rel string
+	if err := tgt.QueryRowContext(ctx, `
+		SELECT c.relname FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'app' AND c.relname = 'remote' AND c.relkind = 'f'`).Scan(&rel); err != nil {
+		t.Fatal(err)
+	}
+	if rel != "remote" {
+		t.Fatalf("foreign table = %q", rel)
+	}
+}
+
 func TestCatalogReplayNormalAggregatePG16(t *testing.T) {
 	ctx := context.Background()
 	src, tgt, _, _ := reviewDBPair(t)

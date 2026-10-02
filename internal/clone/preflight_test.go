@@ -233,14 +233,7 @@ func expectPreflightSchemaReplay(mock sqlmock.Sqlmock, opts preflightSchemaRepla
 	}
 }
 
-func expectSchemaReplayGapQueries(mock sqlmock.Sqlmock, counts ...int) {
-	ft := 0
-	if len(counts) > 0 {
-		ft = counts[len(counts)-1]
-	}
-	mock.ExpectQuery(`relkind = 'f'`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(ft))
-}
+func expectSchemaReplayGapQueries(sqlmock.Sqlmock, ...int) {}
 
 func replicationTargetDir(t *testing.T) string {
 	t.Helper()
@@ -1108,11 +1101,8 @@ func TestPreflightSchemaReplayGapWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %v", warnings)
-	}
-	if warnings[0] != "schema-replay will recreate 2 foreign table(s); their foreign servers must already exist on the target" {
-		t.Fatalf("warning[0] = %q", warnings[0])
+	if len(warnings) != 0 {
+		t.Fatalf("expected no gap warnings, got %v", warnings)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
