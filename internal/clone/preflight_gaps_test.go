@@ -23,14 +23,14 @@ func TestSchemaReplayGapWarningsNonZero(t *testing.T) {
 	if w[1] != "schema-replay will not copy 1 user operator class(es); pg_dump is required for those objects" {
 		t.Fatalf("opclass: %q", w[1])
 	}
-	if w[2] != "schema-replay will not copy 3 foreign table(s); pg_dump is required for those objects" {
+	if w[2] != "schema-replay will recreate 3 foreign table(s); their foreign servers must already exist on the target" {
 		t.Fatalf("foreign table: %q", w[2])
 	}
 }
 
 func TestSchemaReplayGapWarningsPartial(t *testing.T) {
 	w := SchemaReplayGapWarnings(SchemaReplayGapCounts{ForeignTables: 1})
-	if len(w) != 1 || w[0] != "schema-replay will not copy 1 foreign table(s); pg_dump is required for those objects" {
+	if len(w) != 1 || w[0] != "schema-replay will recreate 1 foreign table(s); their foreign servers must already exist on the target" {
 		t.Fatalf("got %v", w)
 	}
 }

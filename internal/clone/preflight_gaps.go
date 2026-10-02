@@ -30,7 +30,7 @@ func SchemaReplayGapWarnings(c SchemaReplayGapCounts) []string {
 	}
 	if c.ForeignTables > 0 {
 		out = append(out, fmt.Sprintf(
-			"schema-replay will not copy %d foreign table(s); pg_dump is required for those objects",
+			"schema-replay will recreate %d foreign table(s); their foreign servers must already exist on the target",
 			c.ForeignTables,
 		))
 	}
